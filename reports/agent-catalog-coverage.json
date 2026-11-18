@@ -1,0 +1,199 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-agent-catalog-coverage",
+  "source": {
+    "repository": "OREUM-IT/jeju-tour",
+    "commit": "b0602a175c1d08959b7187da2b29ac450b52e0ba",
+    "placesContentSha256": "e3c47e843b708adf1e70b0205c4b367c37214d3c2763ab73316a68619d44156a",
+    "rawSha256": "646505a2a65cbf9dbe8d49d526e866bed3d61d7e95907f5e31621e8611bd91c6",
+    "themeMapVersion": "theme-map-v1",
+    "personaVersion": "persona-design-v1"
+  },
+  "totals": {
+    "places": 981,
+    "attractionsExcludingFoodCafeStay": 515,
+    "byCategory": {
+      "herit": 41,
+      "art": 101,
+      "leisure": 21,
+      "heal": 127,
+      "activity": 68,
+      "sea": 109,
+      "food": 201,
+      "cafe": 142,
+      "stay": 123,
+      "hike": 48
+    },
+    "byOrigin": {
+      "raw_poi": 863,
+      "app_generated": 118
+    },
+    "byThemeRule": {
+      "category": 901,
+      "override:urban-walk": 7,
+      "override:bike-route": 10,
+      "override:market": 19,
+      "override:oreum": 15,
+      "override:olle": 29
+    }
+  },
+  "attributes": {
+    "appAutoCandidate": {
+      "present": 981,
+      "byBasis": {
+        "computed": 981
+      },
+      "trueByBasis": {
+        "computed": 173
+      }
+    },
+    "barrierFree": {
+      "present": 121,
+      "byBasis": {
+        "source_reported": 121
+      }
+    },
+    "designations": {
+      "present": 48,
+      "byBasis": {
+        "app_curated": 48
+      }
+    },
+    "drama": {
+      "present": 85,
+      "byBasis": {
+        "app_curated": 85
+      }
+    },
+    "hours": {
+      "present": 514,
+      "byBasis": {
+        "inferred": 48,
+        "source_reported": 454,
+        "app_curated": 12
+      }
+    },
+    "indoor": {
+      "present": 981,
+      "byBasis": {
+        "inferred": 849,
+        "app_curated": 132
+      },
+      "trueByBasis": {
+        "inferred": 478,
+        "app_curated": 132
+      }
+    },
+    "nature": {
+      "present": 981,
+      "byBasis": {
+        "inferred": 886,
+        "app_curated": 95
+      },
+      "trueByBasis": {
+        "inferred": 153,
+        "app_curated": 95
+      }
+    },
+    "note": {
+      "present": 61,
+      "byBasis": {
+        "source_reported": 51,
+        "app_curated": 10
+      }
+    },
+    "popularity": {
+      "present": 637,
+      "byBasis": {
+        "source_reported": 637
+      }
+    },
+    "popularityRank": {
+      "present": 100,
+      "byBasis": {
+        "computed": 100
+      }
+    },
+    "route": {
+      "present": 48,
+      "byBasis": {
+        "source_reported": 48
+      }
+    },
+    "visitMinutes": {
+      "present": 858,
+      "byBasis": {
+        "inferred": 811,
+        "app_curated": 47
+      }
+    }
+  },
+  "hardRequirementReadiness": {
+    "note": "verified만 필수 조건 pass/fail에 쓸 수 있다. 나머지는 확인이 필요한 후보 신호다.",
+    "wheelchair": {
+      "verified": 0,
+      "sourceReportedOrCurated": 125,
+      "noInformation": 856
+    },
+    "indoorSourceOrCurated": {
+      "verified": 0,
+      "sourceReportedOrCurated": 132,
+      "noInformation": 849
+    },
+    "openingHours": {
+      "verified": 0,
+      "sourceReportedOrCurated": 466,
+      "noInformation": 515
+    },
+    "visitCost": {
+      "verified": 0,
+      "sourceReportedOrCurated": 0,
+      "noInformation": 981
+    }
+  },
+  "themes": {
+    "coast": {
+      "primary": 109,
+      "any": 148
+    },
+    "nature": {
+      "primary": 133,
+      "any": 271
+    },
+    "local_food": {
+      "primary": 201,
+      "any": 201
+    },
+    "cafe": {
+      "primary": 142,
+      "any": 142
+    },
+    "culture": {
+      "primary": 37,
+      "any": 145
+    },
+    "art": {
+      "primary": 101,
+      "any": 101
+    },
+    "outdoor": {
+      "primary": 37,
+      "any": 261
+    },
+    "learning": {
+      "primary": 68,
+      "any": 126
+    },
+    "neighborhood": {
+      "primary": 7,
+      "any": 320
+    }
+  },
+  "review": {
+    "nearDuplicatePairs": 8,
+    "nearDuplicateReasons": {
+      "contained_name_within_300m": 8
+    },
+    "rawNameMismatches": 0
+  }
+}

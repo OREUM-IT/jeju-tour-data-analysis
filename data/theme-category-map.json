@@ -1,0 +1,70 @@
+{
+  "version": "theme-map-v1",
+  "personaVersion": "persona-design-v1",
+  "provenance": "수작업 설계 가설. 실제 방문·만족·클릭 데이터로 학습하지 않았다. 장소의 테마 소속 확률이 아니라 페르소나 테마 벡터와 비교하기 위한 설계 가중치다.",
+  "themes": ["coast", "nature", "local_food", "cafe", "culture", "art", "outdoor", "learning", "neighborhood"],
+  "appCategories": ["herit", "art", "leisure", "heal", "activity", "sea", "food", "cafe", "stay", "hike"],
+  "categoryWeights": {
+    "sea": { "coast": 0.8, "nature": 0.2 },
+    "heal": { "nature": 0.8, "outdoor": 0.1, "neighborhood": 0.1 },
+    "hike": { "nature": 0.5, "outdoor": 0.5 },
+    "leisure": { "outdoor": 0.8, "learning": 0.2 },
+    "activity": { "learning": 0.7, "outdoor": 0.3 },
+    "herit": { "culture": 0.8, "learning": 0.2 },
+    "art": { "art": 0.8, "culture": 0.2 },
+    "food": { "local_food": 0.9, "neighborhood": 0.1 },
+    "cafe": { "cafe": 1 },
+    "stay": {}
+  },
+  "overrides": [
+    {
+      "id": "market",
+      "categories": ["food"],
+      "kinds": ["재래시장", "농수축산물시장", "종합시장", "marketplace"],
+      "namePattern": "시장$|오일장|야시장",
+      "weights": { "local_food": 0.6, "neighborhood": 0.4 },
+      "note": "시장은 식사 장소이면서 생활권 탐색 장소로 본다."
+    },
+    {
+      "id": "urban-walk",
+      "categories": ["herit", "hike"],
+      "kinds": ["하영올레"],
+      "namePattern": "거리$",
+      "weights": { "neighborhood": 0.7, "culture": 0.3 },
+      "note": "도심 올레·문화의 거리는 동네 산책 테마의 대표 후보다."
+    },
+    {
+      "id": "olle",
+      "categories": ["hike"],
+      "kinds": ["올레"],
+      "weights": { "outdoor": 0.4, "nature": 0.3, "coast": 0.3 },
+      "note": "제주올레 대부분이 해안·마을·오름을 함께 지난다. 코스별 해안 비중은 미측정."
+    },
+    {
+      "id": "bike-route",
+      "categories": ["hike"],
+      "kinds": ["자전거 인증센터"],
+      "weights": { "outdoor": 0.7, "coast": 0.3 },
+      "note": "제주환상자전거길은 해안 일주 경로다. 인증센터는 경유 지점이며 체류 명소가 아니다."
+    },
+    {
+      "id": "oreum",
+      "categories": ["heal", "hike"],
+      "kinds": ["오름"],
+      "namePattern": "오름$",
+      "weights": { "nature": 0.6, "outdoor": 0.4 },
+      "note": "오름은 숲·자연과 오르기 활동을 함께 가진다. 이름에 오름이 든 숙소는 분류 조건으로 제외한다."
+    }
+  ],
+  "matching": "overrides를 위에서부터 검사해 처음 맞는 하나만 적용한다. categories는 필수 조건이고, kinds와 namePattern 중 하나가 맞으면 일치로 본다. 맞는 것이 없으면 categoryWeights를 쓴다. 각 가중치 합은 1이며 stay는 테마 추천 대상이 아니다.",
+  "knownGaps": [
+    {
+      "theme": "neighborhood",
+      "note": "단일 장소 분류로는 표현이 약하다. 같은 권역의 시장·카페·거리·도심 올레를 묶는 동선 단위 조합이 필요하다."
+    },
+    {
+      "theme": "learning",
+      "note": "체험 예약·연령·언어 조건 자료가 없어 테마파크·박물관 분류로만 근사한다."
+    }
+  ]
+}

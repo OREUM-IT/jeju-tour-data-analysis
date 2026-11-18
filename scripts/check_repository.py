@@ -324,12 +324,75 @@ def check_deliverables():
                             f"Starter ZIP differs from example source: {name}")
 
 
+PLACE_ID = re.compile(r"^(?:kk|osm|cur|vj|nv|bf|olle|trail|hy|drama|bike|hub)-")
+
+
+def check_agent_data():
+    """Theme map design rules and the aggregate-only agent catalog coverage report."""
+    persona = read_json(ROOT / "data/persona-prototypes.json")
+    themes = [theme["id"] for theme in persona["themes"]]
+    data = read_json(ROOT / "data/theme-category-map.json")
+    require(data["version"] and data["provenance"] and data["personaVersion"] == persona["version"],
+            "Theme map/persona version drift")
+    require(data["themes"] == themes, "Theme map themes must equal the persona themes in order")
+    categories = data["appCategories"]
+    require(len(categories) == len(set(categories)) == 10 and set(data["categoryWeights"]) == set(categories),
+            "Theme map must have one row per app category")
+
+    def valid_weights(weights, allow_empty):
+        if not weights:
+            return allow_empty
+        return (all(key in themes and finite(value, 0, 1) and value > 0 for key, value in weights.items())
+                and math.isclose(sum(weights.values()), 1, abs_tol=1e-9))
+
+    for category, weights in data["categoryWeights"].items():
+        require(valid_weights(weights, category == "stay") and (category != "stay" or not weights),
+                "Invalid theme weights for an app category")
+    override_ids = set()
+    for rule in data["overrides"]:
+        require(rule["id"] not in override_ids and rule["categories"]
+                and set(rule["categories"]) <= set(categories) - {"stay"}
+                and (rule.get("kinds") or rule.get("namePattern")) and valid_weights(rule["weights"], False),
+                "Invalid theme override")
+        override_ids.add(rule["id"])
+        re.compile(rule.get("namePattern", ""))
+    reachable = {key for weights in data["categoryWeights"].values() for key in weights}
+    reachable |= {key for rule in data["overrides"] for key in rule["weights"]}
+    require(reachable == set(themes), "Every persona theme must be reachable from the theme map")
+
+    report = read_json(ROOT / "reports/agent-catalog-coverage.json")
+    require(report["kind"] == "jeju-agent-catalog-coverage" and "places" not in report,
+            "Coverage report must stay aggregate-only")
+    source = report["source"]
+    require(re.fullmatch(r"[0-9a-f]{40}", source["commit"]) and re.fullmatch(r"[0-9a-f]{64}", source["rawSha256"])
+            and source["themeMapVersion"] == data["version"] and source["personaVersion"] == persona["version"],
+            "Coverage report provenance drift")
+    totals = report["totals"]
+    require(set(totals["byCategory"]) == set(categories)
+            and sum(totals["byCategory"].values()) == totals["places"] == sum(totals["byOrigin"].values()),
+            "Coverage report totals drift")
+    require(set(report["themes"]) == set(themes), "Coverage report themes drift")
+
+    def strings(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                yield from strings(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from strings(item)
+        elif isinstance(value, str):
+            yield value
+
+    require(not any(PLACE_ID.match(text) for text in strings(report)), "Coverage report must not contain place IDs")
+
+
 def main():
     checks = [
         ("JSON syntax", lambda: [read_json(path) for path in sorted((ROOT / "data").glob("*.json"))]),
         ("document links", check_links), ("55-file metadata consistency", check_inventory),
         ("persona definitions and exported metadata", check_personas),
         ("model registry references and status structure", check_model_registry),
+        ("agent theme map and aggregate coverage report", check_agent_data),
         ("publication boundaries and archives", check_deliverables),
     ]
     failed = False
