@@ -9,7 +9,7 @@
     "themeMapVersion": "theme-map-v1",
     "personaVersion": "persona-design-v1",
     "specVersion": "evalset-spec-v1",
-    "specSha256": "db3c36093b60109c953cd09cae8c353433d03e0b97833b3ce9ca109b4de816be",
+    "specSha256": "508c71ec17bfdf2395e30e479cb330128c0dbe6e7fc084edf936963721ce04f2",
     "rulesVersion": "evalset-rules-v1",
     "seed": "jeju-evalset-v1",
     "anchorDate": "2026-12-07"
@@ -274,6 +274,7 @@
     "textRules": {
       "minLength": 10,
       "maxLength": 200,
+      "candidateNameMinLength": 2,
       "checks": [
         "length",
         "single_line",

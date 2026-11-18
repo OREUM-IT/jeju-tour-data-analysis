@@ -85,7 +85,7 @@ node --env-file=.env.local src/server.mjs
 MCP 도구와 별개인 오프라인 스크립트다. 서버를 띄우지 않고, 모델을 호출하지 않는다. 출력에는 제3자 장소 자료가 들어 있어 `.local`에만 쓰며 기존 파일을 덮어쓰지 않는다.
 
 - Agent 카탈로그 v2(근거 등급): `scripts/dump-app-places.mjs` → `scripts/export-agent-catalog.mjs`. 절차는 [19 문서](../../docs/19-agent-step2-data-foundation.md) 5절.
-- 3단계 평가셋: `scripts/build-evaluation-set.mjs`. 카탈로그 v2, 페르소나, 테마 매핑, [평가 명세](../../data/evaluation-spec.json)로 96문항의 정답을 규칙으로 계산한다. `--report`는 이름·ID 없는 집계만 쓰고, `--check`는 다시 만든 결과가 파일과 같은지 비교한다. `--queries`로 넣는 작성 질의는 문장 규칙(200자 이하, 명시한 조건을 모두 언급, 명시하지 않은 조건과 후보 장소 이름 금지)을 통과해야 붙는다. 절차와 규칙은 [23 문서](../../docs/23-agent-step3-evaluation-set.md).
+- 3단계 평가셋: `scripts/build-evaluation-set.mjs`. 카탈로그 v2, 페르소나, 테마 매핑, [평가 명세](../../data/evaluation-spec.json)로 96문항의 정답을 규칙으로 계산한다. `--report`는 이름·ID 없는 집계만 쓰고, `--check`는 다시 만든 결과가 파일과 같은지 비교한다. `--queries`로 넣는 작성 질의는 문장 규칙(200자 이하, 명시한 조건을 모두 언급, 명시하지 않은 조건을 가리키는 목록의 낱말·숫자와 후보 장소 이름 금지)을 통과해야 붙는다. 낱말 목록은 사실 요약 파일에 함께 실린다. 절차와 규칙은 [23 문서](../../docs/23-agent-step3-evaluation-set.md).
 - 채점: `src/evaluation-scoring.mjs`의 `createScorer`가 구조화 응답을 문항과 대조한다(허용되지 않은 ID, 필수 조건 오판, 재현율·정밀도@5, 고지, 동작). 자유 문장은 읽지 않는다.
 
 `npm test`는 이 스크립트들을 합성 값으로 검사한다. 실제 카탈로그나 평가셋 파일은 테스트에 필요 없다.

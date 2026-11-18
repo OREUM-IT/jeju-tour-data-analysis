@@ -395,7 +395,12 @@ EVALUATION_AUTHOR_KINDS = {"in_session_llm", "external_llm", "human"}
 EVALUATION_TEXT_CHECKS = ["length", "single_line", "korean", "request_wording", "no_place_id", "named_places",
                           "condition_cues", "no_unstated_cues", "no_candidate_names"]
 EVALUATION_CUE_MAPS = ("zone", "theme", "category", "transport", "companion", "walk")
-EVALUATION_CUE_LISTS = ("indoor_required", "rain", "crowd_avoid", "wheelchair", "budget_words", "exclude_places", "visited")
+EVALUATION_CUE_LISTS = ("indoor_required", "rain", "crowd_avoid", "wheelchair", "exclude_places", "visited")
+# Condition kinds with extra words a query must not use unless it states that kind.
+EVALUATION_UNSTATED_KINDS = ("zone", "transport", "companion", "walk", "indoor_required", "crowd_avoid", "open_at", "wheelchair",
+                             "budget_cap", "exclude_places", "trip_dates")
+# The reference method caps a query at 200 characters; the spec may be stricter, never looser.
+EVALUATION_MAX_QUERY_LENGTH = 200
 # Unlike PLACE_ID above, this also finds an ID embedded in a longer string or key, in any letter case.
 PLACE_ID_ANYWHERE = re.compile(r"(?:^|[^a-z0-9])(?:kk|osm|cur|vj|nv|bf|olle|trail|hy|drama|bike|hub)-[a-z0-9]", re.I)
 # Every key the summary may contain besides identifiers taken from the spec. A new summary field must be added here
@@ -414,7 +419,7 @@ EVALUATION_SUMMARY_KEYS = {
     "offProfileSelectors", "fallbackTierItems", "reusedCellItems", "walkMinimalItemsWithRouteExclusion",
     "accessibilityItemsWithListedCandidates", "disallowedIdItemsRankedByPopularity",
     "mode", "promptVersion", "authored", "template", "authorKind", "authoringRecord",
-    "textRules", "minLength", "maxLength", "checks", "textLength",
+    "textRules", "minLength", "maxLength", "candidateNameMinLength", "checks", "textLength",
     "1", "2", "3", "4", "theme", "category", "persona", "date_conflict", "no_candidates",
     "requirements_contradicted:jointly", "empty_cell", "all_routes_minimal_walk", "all_excluded",
     "user_excluded", "route_for_minimal_walk", "verified_fail",
@@ -459,8 +464,11 @@ def check_evaluation_set():
     require(authoring["promptVersion"] and authoring["prompt"], "Query authoring prompt is missing")
     rules = authoring["textRules"]
     checks = [row["id"] for row in rules["checks"]]
-    require(all(isinstance(rules[key], int) for key in ("minLength", "maxLength", "candidateNameMinLength"))
-            and 1 <= rules["minLength"] < rules["maxLength"] <= 400 and rules["candidateNameMinLength"] >= 2
+    require(set(rules) == {"minLength", "maxLength", "candidateNameMinLength", "checks"}
+            and all(isinstance(rules[key], int) and not isinstance(rules[key], bool)
+                    for key in ("minLength", "maxLength", "candidateNameMinLength"))
+            and 1 <= rules["minLength"] < rules["maxLength"] <= EVALUATION_MAX_QUERY_LENGTH
+            and 2 <= rules["candidateNameMinLength"] <= 4
             and checks == EVALUATION_TEXT_CHECKS and all(row["rule"] for row in rules["checks"]),
             "Query text rules drifted from the publication contract")
     cues = authoring["cues"]
@@ -472,13 +480,26 @@ def check_evaluation_set():
             and all(listed(words) for key in EVALUATION_CUE_MAPS for words in cues[key].values())
             and all(listed(cues[key]) for key in EVALUATION_CUE_LISTS),
             "Query cue words must cover every zone, theme, category and condition value")
+    unstated = authoring["unstatedWords"]
+    matching = authoring["cueMatching"]
+    all_cues = [word for key in EVALUATION_CUE_MAPS for words in cues[key].values() for word in words]
+    all_cues += [word for key in EVALUATION_CUE_LISTS for word in cues[key]]
+    require(set(unstated) == set(EVALUATION_UNSTATED_KINDS) and all(listed(words) for words in unstated.values())
+            and set(matching) == {"wordStart", "ignoredPhrases", "note"} and matching["note"]
+            and set(matching["wordStart"]) <= set(EVALUATION_CUE_MAPS) | set(EVALUATION_CUE_LISTS)
+            and len(set(matching["wordStart"])) == len(matching["wordStart"])
+            and isinstance(matching["ignoredPhrases"], list)
+            and (not matching["ignoredPhrases"] or listed(matching["ignoredPhrases"]))
+            and not set(matching["ignoredPhrases"]) & set(all_cues),
+            "Unstated-condition words or cue matching options drifted from the publication contract")
     # The method this spec follows is pinned to one commit of the authors' code, and the registry names the same commit.
     reference = spec["methodReference"]
     registry = read_json(ROOT / "data/ai-agent-models.json")
     pinned = {row["key"]: row for row in registry["sources"]}.get(reference["id"])
     date.fromisoformat(reference["reviewedOn"])
     require(pinned is not None and re.fullmatch(r"[0-9a-f]{40}", reference["commit"]) and pinned.get("commit") == reference["commit"]
-            and pinned.get("repository") == reference["repository"] and pinned.get("license") == reference["license"]
+            and isinstance(reference["repository"], str) and pinned.get("repository") == reference["repository"]
+            and pinned.get("license") == reference["license"] and pinned.get("reviewedOn") == reference["reviewedOn"]
             and pinned.get("codeExecuted") is False and reference["scope"],
             "Evaluation method reference must match the pinned registry source")
 
@@ -538,7 +559,8 @@ def check_evaluation_set():
             and re.fullmatch(r"[0-9a-f]{64}", report["contentSha256"]["gold"]),
             "Evaluation summary query counts, hashes or authoring record drifted")
     lengths = queries["textLength"]
-    require(queries["textRules"] == {"minLength": rules["minLength"], "maxLength": rules["maxLength"], "checks": checks}
+    require(queries["textRules"] == {"minLength": rules["minLength"], "maxLength": rules["maxLength"],
+                                     "candidateNameMinLength": rules["candidateNameMinLength"], "checks": checks}
             and set(lengths) == {"authored", "template"} and lengths["authored"]["count"] == queries["authored"]
             and lengths["template"]["count"] == totals["items"]
             and all(row["count"] == 0 or rules["minLength"] <= row["min"] <= row["median"] <= row["max"] <= rules["maxLength"]

@@ -141,8 +141,20 @@ test('committed spec is valid and drifting versions, precedence, hard cases or s
   assert.throws(broken((s) => { s.methodReference.commit = '9562f53'; }), /methodReference/u);
   assert.throws(broken((s) => { delete s.methodReference; }), /methodReference/u);
   assert.throws(broken((s) => { s.methodReference.reviewedOn = '2026-13-01'; }), /calendar date|YYYY-MM-DD/u);
-  assert.throws(broken((s) => { s.queryAuthoring.textRules.maxLength = 401; }), /textRules needs/u);
+  // The 200-character cap of the reference method may be tightened in the spec but not raised.
+  assert.throws(broken((s) => { s.queryAuthoring.textRules.maxLength = 201; }), /textRules needs/u);
+  assert.equal(validateEvaluationSpec({ ...spec, queryAuthoring: { ...spec.queryAuthoring, textRules: { ...spec.queryAuthoring.textRules, maxLength: 150 } } }, personas, themeMap).zoneIds.length, ZONES.length);
   assert.throws(broken((s) => { s.queryAuthoring.textRules.candidateNameMinLength = 1; }), /textRules needs/u);
+  assert.throws(broken((s) => { s.queryAuthoring.textRules.candidateNameMinLength = 5; }), /textRules needs/u, 'a huge minimum would switch the name rule off');
+  assert.throws(broken((s) => { s.queryAuthoring.textRules.extra = true; }), /textRules needs/u);
+  assert.throws(broken((s) => { s.methodReference.repository = ['ashmibanerjee/synthTRIPS-code']; }), /methodReference/u);
+  assert.throws(broken((s) => { s.methodReference.commit = [s.methodReference.commit]; }), /methodReference/u);
+  assert.throws(broken((s) => { delete s.queryAuthoring.unstatedWords.budget_cap; }), /unstatedWords must list/u);
+  assert.throws(broken((s) => { s.queryAuthoring.unstatedWords.parking = ['주차']; }), /unstatedWords must list/u);
+  assert.throws(broken((s) => { s.queryAuthoring.cueMatching.wordStart = ['zone', 'weather']; }), /cueMatching needs/u);
+  assert.throws(broken((s) => { s.queryAuthoring.cueMatching.ignoredPhrases = ['ice']; }), /cueMatching needs/u);
+  assert.throws(broken((s) => { s.queryAuthoring.cueMatching.ignoredPhrases.push('휠체어'); }), /must not equal a cue word/u);
+  assert.throws(broken((s) => { delete s.queryAuthoring.cueMatching.note; }), /cueMatching needs/u);
   assert.throws(broken((s) => { s.queryAuthoring.textRules.checks.reverse(); }), /must document, in order/u);
   assert.throws(broken((s) => { delete s.queryAuthoring.cues.zone.JC; }), /cues\.zone must list/u);
   assert.throws(broken((s) => { s.queryAuthoring.cues.theme.coast = []; }), /cues\.theme must list/u);
@@ -514,7 +526,7 @@ test('summary is aggregate-only: counts, identifiers and hashes with no place na
   assert.equal(summary.contentSha256.queries, null);
   const templateLengths = set.items.map((item) => item.query.template.length).sort((a, b) => a - b);
   assert.deepEqual(summary.queries, { mode: 'template_only', promptVersion: spec.queryAuthoring.promptVersion, authored: 0, template: set.items.length, authorKind: null, authoringRecord: 'none',
-    textRules: { minLength: 10, maxLength: 200, checks: [...TEXT_CHECKS] },
+    textRules: { minLength: 10, maxLength: 200, candidateNameMinLength: 2, checks: [...TEXT_CHECKS] },
     textLength: { authored: { count: 0, min: null, median: null, max: null },
       template: { count: 96, min: templateLengths[0], median: (templateLengths[47] + templateLengths[48]) / 2, max: templateLengths[95] } } });
   for (const requirement of Object.values(summary.gold.hardRequirements)) assert.equal(requirement.candidateVerdicts.pass + requirement.candidateVerdicts.fail, 0);
@@ -531,7 +543,8 @@ test('writer briefs carry stated conditions only, and authored queries attach on
   const set = build();
   const briefs = evaluationBriefs(set, spec);
   assert.equal(briefs.briefs.length, set.items.length);
-  assert.deepEqual([briefs.textRules, briefs.cues], [spec.queryAuthoring.textRules, spec.queryAuthoring.cues], 'the writer is shown the rules the text is checked against');
+  assert.deepEqual([briefs.textRules, briefs.cues, briefs.unstatedWords, briefs.cueMatching],
+    [spec.queryAuthoring.textRules, spec.queryAuthoring.cues, spec.queryAuthoring.unstatedWords, spec.queryAuthoring.cueMatching], 'the writer is shown the rules the text is checked against');
   const serialized = JSON.stringify(briefs);
   for (const brief of briefs.briefs) {
     assert.deepEqual(Object.keys(brief).sort(), ['briefSha256', 'id', 'namedPlaces', 'notes', 'persona', 'statements', 'template', 'today']);
@@ -556,7 +569,7 @@ test('writer briefs carry stated conditions only, and authored queries attach on
   assert.notEqual(reworded.contentSha256.queries, authored.contentSha256.queries, 'the queries hash must follow the text');
   assert.equal(reworded.contentSha256.gold, set.contentSha256.gold);
   assert.deepEqual(authored.queryAuthoring, { mode: 'authored', promptVersion: spec.queryAuthoring.promptVersion,
-    textRules: { minLength: 10, maxLength: 200, checks: [...TEXT_CHECKS] }, authored: 1, template: set.items.length - 1,
+    textRules: { minLength: 10, maxLength: 200, candidateNameMinLength: 2, checks: [...TEXT_CHECKS] }, authored: 1, template: set.items.length - 1,
     author: { kind: 'in_session_llm', model: 'test-model', promptVersion: spec.queryAuthoring.promptVersion, seed: null, samplingSeed: null, authoredOn: null, review: null } });
   const summary = summarizeEvaluationSet(authored);
   assert.deepEqual([summary.queries.mode, summary.queries.authored, summary.queries.template, summary.queries.authorKind, summary.queries.authoringRecord],
@@ -598,6 +611,7 @@ test('a query must state every condition of its item, nothing the item does not 
   const value = (item, type) => item.conditions.find((condition) => condition.type === type).value;
   const missing = (label) => new RegExp(`does not mention the stated condition ${label}`, 'u');
   const unstated = (label) => new RegExp(`mentions ${label}, which the item does not state`, 'u');
+  const leftover = (label) => new RegExp(`mentions ${label} that no stated condition accounts for`, 'u');
   const problems = (item, textValue) => check(textValue, item).join('; ');
 
   // A plain zone + theme item: the template states both; losing either, or adding a condition of another kind, is refused.
@@ -607,16 +621,51 @@ test('a query must state every condition of its item, nothing the item does not 
   assert.match(problems(plain, plain.query.template.replace(zoneLabel, '제주')), missing('zone'));
   const otherZone = spec.zones.find((zone) => zone.id !== plain.zone && zone.id !== 'JC').label;
   assert.match(problems(plain, plain.query.template.replace(zoneLabel, otherZone)), /does not mention the stated condition zone.*mentions zone:/u);
-  assert.match(problems(plain, `${plain.query.template} 그리고 맛있는 곳이면 좋겠어요.`.replace(/\S+ 테마로/u, '아무 테마로')), missing('theme'));
+  const themeLabel = personas.themes.find((theme) => theme.id === value(plain, 'theme')).label;
+  assert.match(problems(plain, plain.query.template.replace(`${themeLabel} 테마로`, '아무 테마로')), missing('theme'));
+  // A zone is a group of areas and every one of them has to be said; a bare city name is not the downtown zone.
+  const twoAreas = find((item) => item.zone !== null && spec.queryAuthoring.cues.zone[item.zone].length === 2);
+  const [firstArea, secondArea] = spec.queryAuthoring.cues.zone[twoAreas.zone];
+  const twoAreaLabel = spec.zones.find((zone) => zone.id === twoAreas.zone).label;
+  assert.deepEqual(check(twoAreas.query.template.replace(twoAreaLabel, `${secondArea}나 ${firstArea}`), twoAreas), []);
+  assert.match(problems(twoAreas, twoAreas.query.template.replace(twoAreaLabel, firstArea)), missing('zone'));
+  const downtown = find((item) => item.zone === 'S');
+  assert.match(problems(downtown, downtown.query.template.replace('서귀포 시내', '서귀포')), missing('zone'));
+  const resort = find((item) => item.zone === 'SW');
+  assert.deepEqual(check(resort.query.template.replace('중문', '서귀포 중문'), resort), [], 'a city prefix before the stated zone is not another zone');
+  // Wording of a condition the item does not state: listed cue words, the extra words per kind, and any number that
+  // would be the value of such a condition.
   for (const [extra, label] of [
-    ['휠체어로 이용할 수 있어야 합니다.', 'wheelchair'], ['실내였으면 합니다.', 'indoor_required'], ['비가 올 것 같아요.', 'indoor_required:rain'],
-    ['사람이 붐비는 곳은 싫어요.', 'crowd_avoid'], ['오후 3시에 가려고 합니다.', 'open_at'], ['예산은 넉넉하지 않아요.', 'budget_cap'],
-    ['하루 5만 원 안에서요.', 'budget_cap'], ['2박 3일 일정입니다.', 'trip_dates:nights'], ['12월 9일에 갑니다.', 'a calendar date'],
-    ['버스로만 다닙니다.', 'transport:public_transit'], ['부모님을 모시고 갑니다.', 'companion:parents'], ['거의 걷지 않으려고 합니다.', 'walk:minimal'],
-    ['거기는 이미 가 봤어요.', 'exclude_places'],
+    ['휠체어로 이용할 수 있어야 합니다.', 'wheelchair'], ['계단이 없어야 합니다.', 'wheelchair'], ['실내였으면 합니다.', 'indoor_required'],
+    ['비가 올 것 같아요.', 'indoor_required:rain'], ['비 오는 날에도 갈 수 있어야 해요.', 'indoor_required'],
+    ['사람이 붐비는 곳은 싫어요.', 'crowd_avoid'], ['한적한 곳이면 좋겠습니다.', 'crowd_avoid'], ['밤늦게 갈 수 있어야 해요.', 'open_at'],
+    ['예산은 넉넉하지 않아요.', 'budget_cap'], ['무료인 곳만요.', 'budget_cap'], ['버스로만 다닙니다.', 'transport:public_transit'],
+    ['택시로 이동합니다.', 'transport'], ['부모님을 모시고 갑니다.', 'companion:parents'], ['어머니와 갑니다.', 'companion'],
+    ['거의 걷지 않으려고 합니다.', 'walk:minimal'], ['거의 못 걸어요.', 'walk'], ['거기는 이미 가 봤어요.', 'exclude_places'],
+    ['유명 관광지는 빼 주세요.', 'exclude_places'], ['주말에 가요.', 'trip_dates'], ['다음 주 토요일에 가요.', 'trip_dates'],
   ]) assert.match(problems(plain, `${plain.query.template} ${extra}`), unstated(label), extra);
-  // Durations and words that merely contain a cue syllable are not conditions.
-  assert.deepEqual(check(`${plain.query.template} 2시간쯤 머물 생각입니다.`, plain), []);
+  for (const [extra, label] of [
+    ['오후 3시에 가려고 합니다.', 'a clock time'], ['14:00에 가려고요.', 'a clock time'], ['오후 두 시에 가려고요.', 'a clock time'],
+    ['하루 5만 원 안에서요.', 'an amount of money'], ['하루 50,000원 안에서요.', 'an amount of money'], ['하루 5천 원 안에서요.', 'an amount of money'],
+    ['하루 오만 원 안쪽으로요.', 'an amount of money'], ['2박 3일 일정입니다.', 'a night count'], ['이박 삼일 일정이에요.', 'a night count'],
+    ['12월 9일에 갑니다.', 'a calendar date'], ['9일에 가요.', 'a calendar date'], ['12월에 가요.', 'a calendar date'],
+  ]) assert.match(problems(plain, `${plain.query.template} ${extra}`), leftover(label), extra);
+  // The zone words above apply to an item that names no zone at all.
+  const anywhere = find((item) => item.zone === null && item.conditions.length === 1 && item.selector.source === 'theme');
+  for (const extra of ['공항 근처여야 해요.', '제주 동쪽에서만요.', '서귀포 쪽이면 좋겠어요.']) assert.match(problems(anywhere, `${anywhere.query.template} ${extra}`), unstated('zone'), extra);
+  // Durations, and words that merely contain a cue syllable, are not conditions.
+  for (const extra of ['2시간쯤 머물 생각입니다.', '3일 동안 고민했어요.', '예약이 필요한 경우도 알려 주세요.', '미리 준비가 필요 없으면 좋겠어요.', '아이스 음료가 맛있으면 좋겠어요.',
+    '그런 곳만 원해요.', '제가 본 사진 같은 곳이면 좋겠어요.', '버스킹 공연이 있으면 더 좋아요.', '자연스럽게 둘러보고 싶어요.']) {
+    assert.deepEqual(check(`${plain.query.template} ${extra}`, plain), [], extra);
+  }
+  // A cue inside an unrelated word does not state the condition either.
+  const island = find((item) => item.zone === 'E');
+  assert.match(problems(island, `${island.query.template.replace(spec.zones.find((zone) => zone.id === 'E').label, '제주')} 그런 경우도 괜찮아요.`), missing('zone'));
+  // Control, format and compatibility characters cannot hide or fake a cue.
+  assert.match(problems(plain, `${plain.query.template}\u2028둘째 줄입니다.`), /single line/u);
+  assert.match(problems(plain, `${plain.query.template}\u0085둘째 줄입니다.`), /single line/u);
+  assert.match(problems(plain, `${plain.query.template} 휠\u200b체어로 갈 수 있어야 해요.`), /single line/u);
+  assert.match(problems(plain, `${plain.query.template} 오후 ２시에 가요.`), /NFKC/u);
 
   // Values are checked, not just the kind of condition: another time, amount, date or transport does not count.
   const timed = find((item) => has('open_at')(item) && value(item, 'open_at') === '14:00');
@@ -715,6 +764,135 @@ test('a query must state every condition of its item, nothing the item does not 
   assert.throws(tampered((s) => { stored(s).query.text = `${plain.query.template} ${candidate.name} 같은 곳이요.`; }), /breaks the text rules/u);
   assert.throws(tampered((s) => { s.queryAuthoring.textRules.maxLength = 400; }), /authoring record/u);
   assert.throws(tampered((s) => { s.queryAuthoring.textRules.checks.pop(); }), /authoring record/u);
+  assert.throws(tampered((s) => { s.queryAuthoring.textRules.candidateNameMinLength = 3; }), /authoring record/u);
+  assert.throws(tampered((s) => { s.queryAuthoring.textRules = null; }), /authoring record/u);
+  const reordered = structuredClone(authoredSet);
+  const { minLength, maxLength, candidateNameMinLength, checks } = reordered.queryAuthoring.textRules;
+  reordered.queryAuthoring.textRules = { checks, candidateNameMinLength, maxLength, minLength };
+  assert.equal(validateEvaluationSet(reordered, inputs()).items.length, set.items.length, 'the key order of the recorded rules does not matter');
+});
+
+test('text rules hold for whole-cell exclusions, colliding names, date roles and spoken times', () => {
+  const set = build();
+  const check = createQueryChecker(inputs());
+  const find = (predicate) => { const item = set.items.find(predicate); assert.ok(item, 'the fixture set lacks an item this test needs'); return item; };
+  const has = (type) => (item) => item.conditions.some((condition) => condition.type === type);
+  const value = (item, type) => item.conditions.find((condition) => condition.type === type).value;
+  const withValue = (item, type, next) => ({ ...item, conditions: item.conditions.map((condition) => condition.type === type ? { ...condition, value: next } : condition) });
+  const missing = (label) => new RegExp(`does not mention the stated condition ${label}`, 'u');
+  const leftover = (label) => new RegExp(`mentions ${label} that no stated condition accounts for`, 'u');
+  const problems = (item, textValue, checker = check) => checker(textValue, item).join('; ');
+
+  // A catalog without an empty cell makes the empty-result slot exclude every place of a small cell by name.
+  serial = 0;
+  const packed = [];
+  for (const zone of ZONES) {
+    for (const category of CATEGORIES) for (let i = 1; i <= 2; i++) packed.push(place(category, zone, { attributes: { indoor: inferred(false) } }));
+    packed.push(place('herit', zone, { name: `시험 ${zone} 거리`, attributes: { indoor: inferred(false) } }));
+  }
+  const packedInputs = inputs({ catalog: catalogOf(packed) });
+  const whole = buildEvaluationSet(packedInputs).items.find((item) => item.generation.mechanism === 'all_excluded');
+  assert.ok(whole, 'the packed catalog must produce a whole-cell exclusion');
+  assert.deepEqual([whole.gold.expectedAction, whole.gold.allowedIds.length, whole.brief.namedPlaces.length >= 1], ['impossible', 0, true]);
+  const packedCheck = createQueryChecker(packedInputs);
+  assert.deepEqual(packedCheck(whole.query.template, whole), []);
+  assert.match(problems(whole, whole.query.template.replace('이미 가 봐서 빼 주세요', '기억해 주세요'), packedCheck), missing('exclude_places'));
+  assert.match(problems(whole, whole.query.template.replace(whole.brief.namedPlaces[0], '그곳'), packedCheck), /name every place/u);
+
+  // An excluded place may be named like its zone. The build still works, and the name does not say the zone for the user.
+  const excluding = find((item) => item.hardCase === 'disallowed_id');
+  const zoneWord = spec.queryAuthoring.cues.zone[excluding.zone].at(-1);
+  const zoneLabel = spec.zones.find((zone) => zone.id === excluding.zone).label;
+  const collidingInputs = inputs({ catalog: fixtureCatalog((entry) => { if (entry.id === excluding.gold.forbidden[0].id) entry.name = zoneWord; }) });
+  const colliding = buildEvaluationSet(collidingInputs).items.find((item) => item.id === excluding.id);
+  assert.ok(colliding.brief.namedPlaces.includes(zoneWord));
+  const collidingCheck = createQueryChecker(collidingInputs);
+  assert.deepEqual(collidingCheck(colliding.query.template, colliding), []);
+  assert.match(problems(colliding, colliding.query.template.replace(zoneLabel, '제주'), collidingCheck), missing('zone'));
+  // One excluded name may sit inside another; whichever order they are listed in, neither leaves the zone word behind.
+  const twoExcluded = find((item) => item.hardCase === 'disallowed_id' && item.gold.forbidden.length === 2);
+  const nestedWord = spec.queryAuthoring.cues.zone[twoExcluded.zone].at(-1);
+  const nestedLabel = spec.zones.find((zone) => zone.id === twoExcluded.zone).label;
+  for (const [shortId, longId] of [[0, 1], [1, 0]].map((order) => order.map((index) => twoExcluded.gold.forbidden[index].id))) {
+    const nestedInputs = inputs({ catalog: fixtureCatalog((entry) => {
+      if (entry.id === shortId) entry.name = nestedWord;
+      if (entry.id === longId) entry.name = `${nestedWord} 카페`;
+    }) });
+    const nested = buildEvaluationSet(nestedInputs).items.find((item) => item.id === twoExcluded.id);
+    assert.deepEqual([...nested.brief.namedPlaces].sort(), [nestedWord, `${nestedWord} 카페`].sort());
+    const nestedCheck = createQueryChecker(nestedInputs);
+    assert.deepEqual(nestedCheck(nested.query.template, nested), []);
+    assert.match(problems(nested, nested.query.template.replace(nestedLabel, '제주'), nestedCheck), missing('zone'));
+  }
+
+  // A candidate name is found whatever spacing the writer gives it.
+  const plain = find((item) => item.slot === 'C1');
+  const candidate = fixture.places.find((entry) => entry.id === plain.gold.allowedIds[0]);
+  const joined = candidate.name.replace(/\s+/gu, '');
+  assert.notEqual(joined, candidate.name, 'the fixture name must contain a space for this check');
+  for (const spelling of [joined, [...joined].join(' ')]) {
+    assert.match(problems(plain, `${plain.query.template} ${spelling} 같은 곳이요.`), /candidate places/u, spelling);
+  }
+
+  // Trip dates are read in their roles: 'start부터 end까지', and the visit day on its own.
+  const outside = find((item) => has('trip_dates')(item) && value(item, 'trip_dates').conflict === 'date_outside_trip');
+  const trip = value(outside, 'trip_dates');
+  const md = (ymd) => `${Number(ymd.slice(5, 7))}월 ${Number(ymd.slice(8))}일`;
+  const ask = (item, sentence) => `제주에서 ${personas.themes.find((theme) => theme.id === item.selector.themes[0]).label} 테마로 갈 만한 곳을 추천해 주세요. ${sentence}`;
+  assert.deepEqual(check(ask(outside, `여행은 ${md(trip.startDate)}부터 ${md(trip.endDate)}까지이고, ${md(trip.requestedDate)}에 방문하려고 합니다.`), outside), []);
+  assert.deepEqual(check(ask(outside, `${md(trip.requestedDate)}에 방문하려고 합니다. 여행은 ${md(trip.startDate)}부터 ${Number(trip.endDate.slice(8))}일까지예요.`), outside), []);
+  // The same three dates with the roles swapped no longer contradict each other, so the text is refused.
+  const swapped = problems(outside, ask(outside, `여행은 ${md(trip.startDate)}부터 ${md(trip.requestedDate)}까지이고, ${md(trip.endDate)}에 방문하려고 합니다.`));
+  assert.match(swapped, missing('trip_dates:end'));
+  assert.match(swapped, missing('trip_dates:requested'), 'the end of a range is not the day of the visit');
+  assert.match(problems(outside, ask(outside, `여행은 ${md(trip.startDate)}에 시작해서 ${md(trip.endDate)}까지이고, ${md(trip.requestedDate)}에 방문하려고 합니다.`)), missing('trip_dates:start'));
+  const otherMonth = `${(Number(trip.endDate.slice(5, 7)) % 12) + 1}월 ${Number(trip.endDate.slice(8))}일`;
+  assert.match(problems(outside, ask(outside, `여행은 ${md(trip.startDate)}부터 ${otherMonth}까지이고, ${md(trip.requestedDate)}에 방문하려고 합니다.`)), missing('trip_dates:end'));
+  assert.match(problems(outside, ask(outside, `여행은 ${md(trip.startDate)}부터 ${md(trip.endDate)}까지이고, ${md(trip.requestedDate)}에 방문하려고 합니다. 2박 3일이에요.`)), leftover('a night count'));
+  const mismatch = find((item) => has('trip_dates')(item) && value(item, 'trip_dates').conflict === 'nights_mismatch');
+  const stated = value(mismatch, 'trip_dates').statedNights;
+  assert.match(problems(mismatch, `${mismatch.query.template} 아니, ${stated + 3}박이었나요?`), leftover('a night count'));
+  assert.match(problems(mismatch, mismatch.query.template.replace('까지', '쯤')), missing('trip_dates:end'));
+  // The day number of 'N박 M일' is not the end date.
+  const short = withValue(mismatch, 'trip_dates', { ...value(mismatch, 'trip_dates'), startDate: '2026-12-31', endDate: '2027-01-03', nights: 3, statedNights: 2 });
+  assert.match(problems(short, ask(mismatch, '12월 31일부터 2박 3일 일정입니다.')), missing('trip_dates:end'));
+  assert.deepEqual(check(ask(mismatch, '12월 31일부터 1월 3일까지 2박 3일 일정입니다.'), short), []);
+
+  // A day-period word belongs to its hours: a wrong word names another time. Midnight and noon are told apart.
+  const timed = find(has('open_at'));
+  const said = (phrase) => timed.query.template.replace(/(?:오전|오후|낮|밤) \d+시(?: \d+분)?에 방문/u, `${phrase}에 방문`);
+  assert.notEqual(said('언젠가'), timed.query.template);
+  for (const [time, accepted, refused] of [
+    ['12:00', ['낮 12시', '오후 12시'], ['밤 12시', '오전 12시', '12시', '낮 12시 반']],
+    ['00:00', ['밤 12시', '자정 12시', '0시'], ['낮 12시', '오후 12시']],
+    ['14:00', ['오후 2시', '낮 2시', '14시'], ['밤 2시', '저녁 2시', '새벽 2시', '오전 2시', '2시']],
+    ['20:00', ['오후 8시', '저녁 8시', '밤 8시', '20시'], ['낮 8시', '아침 8시']],
+    ['07:00', ['오전 7시', '아침 7시'], ['새벽 7시', '저녁 7시', '7시', '07시']],
+    ['03:00', ['새벽 3시', '오전 3시'], ['아침 3시', '저녁 3시', '3시']],
+    ['09:05', ['오전 9시 5분', '오전 9시 05분'], ['오전 9시', '오전 9시 50분']],
+  ]) {
+    const item = withValue(timed, 'open_at', time);
+    for (const phrase of accepted) assert.deepEqual(check(said(phrase), item), [], `${time} ${phrase}`);
+    for (const phrase of refused) assert.match(problems(item, said(phrase)), missing('open_at'), `${time} ${phrase}`);
+  }
+  const afternoon = withValue(timed, 'open_at', '14:00');
+  assert.deepEqual(check(said('오후 2시 반드시 그 시간'), afternoon), [], 'the 반 of 반드시 is not half past');
+  assert.match(problems(afternoon, said('오후 2시 반')), missing('open_at'));
+  assert.match(problems(afternoon, said('오전 11시나 오후 2시쯤')), leftover('a clock time'));
+  assert.deepEqual(check(`${said('오후 2시')} 오후 2시가 아니면 안 됩니다.`, afternoon), [], 'saying the stated time twice adds no other time');
+  // A rain forecast brings its date into the question, so date words are not refused there; they are without any date.
+  const rainy = find(has('indoor_required'));
+  assert.deepEqual(check(`${rainy.query.template} 주말이라 걱정입니다.`, rainy), []);
+  assert.match(problems(plain, `${plain.query.template} 주말이라 걱정입니다.`), /mentions trip_dates, which the item does not state/u);
+  assert.match(problems(rainy, `${rainy.query.template} 12월 30일도 괜찮습니다.`), leftover('a calendar date'));
+
+  // An amount that is not a round ten thousand is written with its digits.
+  const capped = find(has('budget_cap'));
+  const odd = withValue(capped, 'budget_cap', 35000);
+  const costs = (phrase) => capped.query.template.replace(/\d+만 원/u, phrase);
+  for (const phrase of ['35,000원', '35000원']) assert.deepEqual(check(costs(phrase), odd), [], phrase);
+  for (const phrase of ['135,000원', '3만 원', '35,000엔']) assert.match(problems(odd, costs(phrase)), missing('budget_cap'), phrase);
+  assert.match(problems(capped, `${capped.query.template} 입장료는 5천 원까지요.`), leftover('an amount of money'));
 });
 
 test('scorer gives a gold-built answer full marks and flags unknown-as-pass, forbidden IDs and missing notices', () => {
@@ -767,6 +945,11 @@ test('scorer gives a gold-built answer full marks and flags unknown-as-pass, for
   assert.deepEqual([totals.hardRequirementMisjudgement.applicableItems, totals.hardRequirementMisjudgement.passOnUnknownItems, totals.hardRequirementMisjudgement.rate], [1, 1, 1]);
   assert.deepEqual([totals.latencyMs.measuredItems, totals.latencyMs.p50, totals.costUsd.total], [1, 1200, 0.002]);
   assert.deepEqual(aggregateScores([careless, honest], scorer.k).precisionAtK, { k: scorer.k, scoredItems: 1, mean: carelessHits / 3 });
+  const wide = set.items.find((item) => item.gold.expectedAction === 'recommend' && item.gold.relevantIds.length > scorer.k);
+  assert.ok(wide, 'the fixture needs an item with more gold candidates than k');
+  const beyond = scorer.score(wide, { itemId: wide.id, action: 'recommend',
+    placeIds: [...wide.gold.relevantIds.slice(0, scorer.k - 1), 'kk-not-in-catalog', ...wide.gold.relevantIds.slice(scorer.k - 1, scorer.k + 1)] });
+  assert.deepEqual([beyond.precisionAtK, beyond.recallAtK], [(scorer.k - 1) / scorer.k, (scorer.k - 1) / scorer.k], 'places after the first k are not counted');
   assert.deepEqual(aggregateScores([noPlaces, honest], scorer.k).precisionAtK, { k: scorer.k, scoredItems: 0, mean: null });
   assert.equal(aggregateScores([honest], scorer.k).disallowedIds.rate, null, 'no returned IDs means the rate is undefined, not 0');
 
