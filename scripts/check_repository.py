@@ -634,6 +634,57 @@ def check_langflow():
             and "LANGFLOW_SECRET_KEY" not in settings, "Langflow settings example lost a safe default or holds a secret")
 
 
+def check_baseline_summary():
+    """The published run is a scorer self-check, never a fabricated provider benchmark."""
+    report = read_json(ROOT / "reports/baseline-harness-self-check.json")
+    evaluation = read_json(ROOT / "reports/evaluation-set-summary.json")
+    require(set(report) == {"schemaVersion", "kind", "mode", "resultType", "system", "planSha256", "binding",
+                            "provenanceSha256", "runSha256", "startedAt", "completedAt", "wording", "groups", "securityEvaluation"},
+            "Unexpected fields in the public baseline aggregate")
+    require(report["schemaVersion"] == "1.0" and report["kind"] == "jeju-baseline-summary"
+            and report["mode"] == report["system"] == "oracle_self_check"
+            and report["resultType"] == "scorer_self_check_not_model_quality"
+            and report["securityEvaluation"] == "not_executed", "Self-check must not claim model or security execution")
+    binding = report["binding"]
+    require(set(binding) == {"goldSha256", "queriesSha256", "specSha256", "catalogSha256", "personasSha256", "themeMapSha256"}
+            and binding["goldSha256"] == evaluation["contentSha256"]["gold"] and binding["queriesSha256"] is None,
+            "Self-check is not bound to the restored template-only evaluation set")
+    hashes = [report[key] for key in ("planSha256", "provenanceSha256", "runSha256")]
+    hashes += [value for key, value in binding.items() if key != "queriesSha256"]
+    require(all(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes), "Invalid baseline provenance hash")
+    require(report["wording"] == {"templateItems": 96, "writtenItems": 0, "identicalWrittenItems": 0, "distinctWrittenItems": 0},
+            "Unavailable authored queries must not be counted as restored")
+    require(len(report["groups"]) == 1, "Expected one template-only self-check group")
+    group = report["groups"][0]
+    require(group["system"] == "oracle_self_check" and group["variant"] == "template"
+            and group["plannedCases"] == group["successfulResponses"] == 96 and group["failedCases"] == 0
+            and group["completionRate"] == group["actionAccuracyAllCases"] == 1,
+            "Self-check must retain all 96 cases")
+    metrics = group["metrics"]
+    require(metrics["items"] == 96 and metrics["disallowedIds"]["rate"] == 0
+            and metrics["hardRequirementMisjudgement"]["rate"] == 0
+            and metrics["recallAtK"]["mean"] == metrics["precisionAtK"]["mean"] == 1
+            and metrics["latencyMs"] == {"measuredItems": 0, "p50": None, "p95": None}
+            and metrics["costUsd"] == {"measuredItems": 0, "total": None},
+            "Self-check results or unmeasured model latency/cost were changed")
+    # Only fixed labels, timestamps and hashes may occur as string values in a published summary.
+    safe_labels = {"1.0", "jeju-baseline-summary", "oracle_self_check", "scorer_self_check_not_model_quality", "template", "not_executed"}
+    def check_values(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                check_values(child)
+        elif isinstance(value, list):
+            for child in value:
+                check_values(child)
+        elif isinstance(value, str):
+            require(value in safe_labels or re.fullmatch(r"[0-9a-f]{64}", value)
+                    or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", value),
+                    "Free text or raw identifiers must not be published in the self-check summary")
+        else:
+            require(value is None or finite(value, 0), "Invalid public baseline measurement")
+    check_values(report)
+
+
 def main():
     checks = [
         ("JSON syntax", lambda: [read_json(path) for path in sorted((ROOT / "data").glob("*.json"))]),
@@ -642,6 +693,7 @@ def main():
         ("model registry references and status structure", check_model_registry),
         ("agent theme map and aggregate coverage report", check_agent_data),
         ("evaluation spec and aggregate evaluation set summary", check_evaluation_set),
+        ("baseline harness self-check and publication boundary", check_baseline_summary),
         ("Langflow starter flow and settings example", check_langflow),
         ("publication boundaries and archives", check_deliverables),
     ]

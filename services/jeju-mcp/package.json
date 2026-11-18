@@ -9,6 +9,7 @@
     "start": "node src/server.mjs",
     "check:client": "node scripts/check-client.mjs",
     "test": "node --test tests/*.test.mjs",
+    "evaluate:baseline": "node scripts/evaluate-baselines.mjs",
     "import:catalog": "node scripts/import-catalog.mjs"
   },
   "dependencies": {
