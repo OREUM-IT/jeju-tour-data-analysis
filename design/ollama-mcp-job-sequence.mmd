@@ -1,0 +1,36 @@
+sequenceDiagram
+  participant U as 기존 웹 화면
+  participant V as Vercel BFF
+  participant G as Agent Gateway
+  participant Q as 영속 DB/큐
+  participant W as Worker/MCP client
+  participant O as 사설 Ollama
+  participant M as MCP 도구 서버
+  U->>V: POST /api/agent/jobs + 입력·버전·멱등성 키
+  V->>V: 로그인·범위·한도 확인
+  V->>G: 대상이 제한된 위임 토큰 + 작업
+  G->>Q: 소유권·입력 해시와 작업 영속 기록
+  G-->>V: jobId / queued
+  V-->>U: 202 + 조회 경로
+  Q->>W: 작업 lease
+  W->>M: initialize → initialized → tools/list
+  loop 허용된 호출·시간 예산 안
+    W->>O: 메시지·승인 도구 스키마
+    O-->>W: tool_calls 또는 구조화 응답
+    alt 도구 요청
+      W->>W: 인자·권한·호출 예산 검증
+      W->>M: tools/call
+      M-->>W: 구조화 결과·근거·미확인 상태
+      W->>W: 도구 결과를 메시지에 추가 후 다음 반복
+    else 최종 구조화 응답
+      W->>W: 루프 종료 후 최종 검증 단계로 이동
+    end
+  end
+  W->>W: 장소·필수 제약·근거·프로필 버전 검증
+  W->>Q: completed 결과 / 실패·취소 상태
+  U->>V: GET 작업 상태 (본인 인증)
+  V->>G: 작업 소유권 확인 후 조회
+  G-->>V: 상태·검증 결과
+  V-->>U: 기존 reply/action/places와 호환
+  U->>U: 사용자가 코스 적용 선택
+  Note over U,Q: 새 프로필이면 이전 결과 미적용. 취소 API는 영속 취소 요청이며 폴링 연결 종료와 다름.

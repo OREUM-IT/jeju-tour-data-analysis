@@ -1,0 +1,29 @@
+digraph MultiProvider {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.42", fontname="Noto Sans CJK KR", fontsize=18, labelloc=t, label="Claude·OpenAI·Ollama를 하나의 앱에서 사용\n제안 설계 · Agent/MCP 분산 호스트 예시"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5f7", color="#8aa7ac", fontname="Noto Sans CJK KR", fontsize=12, margin="0.16,0.13"];
+  edge [fontname="Noto Sans CJK KR", fontsize=10, color="#506974", arrowsize=0.75];
+  vercel [label="기존 Vercel 화면·인증 API\n설문 · 결과 · 기존 코스 적용", fillcolor="#dceee1"];
+  ta [label="T-A · 인증된 Agent 터널\nagent.example.com", fillcolor="#efe8f7"];
+  worker [label="호스트 A · Agent Gateway / Worker\n모델 선택 · 작업/비용 제한 · 결과 검증", fillcolor="#dceaf7"];
+  openai [label="OpenAI API\n서버 API 키 · 사용량 과금", fillcolor="#f8edce"];
+  claude [label="Anthropic Claude API\n서버 API 키 · 사용량 과금", fillcolor="#f8edce"];
+  ollama [label="선택 · 사설 Ollama\n호스트 자원 비용 별도", fillcolor="#f8edce"];
+  tm [label="T-M · 별도 MCP 호스트일 때\nmcp.example.com", fillcolor="#efe8f7"];
+  mcp [label="호스트 B · 공유 MCP 도구\n장소 · 근거 · 경로 · 제약 검사", fillcolor="#dceaf7"];
+  db [shape=cylinder, label="관리형 PostgreSQL · 권장 후보 Supabase\n기존 회원·코스 / 프로필·영속 작업·사용량\n기존 운영 DB의 실제 위치·플랜은 확인 필요", fillcolor="#dceee1"];
+  storage [label="비공개 객체 저장소\nPDF·엑셀·원본·큰 결과", fillcolor="#dceee1"];
+  note [shape=note, label="공급자별 터널·DB는 불필요\n같은 호스트의 MCP는 내부 호출 가능\nDB·Ollama 원본 포트는 비공개", fillcolor="#f5f5f5", fontsize=10];
+  vercel -> ta [label="접수 · 조회 · 취소"];
+  ta -> worker [label="터널 인증 + 앱 권한 검증"];
+  worker -> openai [label="외부 HTTPS"];
+  worker -> claude [label="외부 HTTPS"];
+  worker -> ollama [label="사설 호출"];
+  {rank=same; openai; claude; ollama;}
+  worker -> tm [label="MCP 인증", minlen=2];
+  tm -> mcp;
+  worker -> db [label="작업 lease · 결과 · 비용", minlen=4];
+  vercel -> db [style=dashed, label="기존 코스 API", constraint=false];
+  mcp -> db [label="도구별 읽기 권한"];
+  db -> storage [style=dashed, label="객체 경로·해시·권한 메타데이터"];
+  note -> worker [style=dashed, arrowhead=none, constraint=false];
+}

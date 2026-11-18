@@ -1,0 +1,17 @@
+digraph Jobs {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.4", ranksep="0.35", fontname="Noto Sans CJK KR", fontsize=18, labelloc=t, label="긴 요청은 Vercel 연결과 작업 수명을 분리\n앱 작업 API의 제안 흐름 · MCP 내장 Tasks 구현을 뜻하지 않음"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5f7", color="#8aa7ac", fontname="Noto Sans CJK KR", fontsize=12, margin="0.2,0.12", width=6.0];
+  edge [fontname="Noto Sans CJK KR", fontsize=10, color="#506974", arrowsize=0.75];
+  submit [label="1  기존 웹 → Vercel BFF\nPOST /api/agent/jobs · 로그인 · 입력/프로필 버전 · 멱등성 키", fillcolor="#dceee1"];
+  persist [label="2  Gateway → 영속 DB/큐\n별도 대상 토큰 검증 · 소유권/입력 해시 기록 · 중복 접수 방지"];
+  receipt [label="3  Vercel → 기존 웹\n202 + jobId + 조회 경로 · 장시간 연결 유지하지 않음", fillcolor="#dceee1"];
+  work [label="4  Worker가 작업 lease 획득\nMCP 초기화·도구 목록 · 모델/자료/프로토콜 버전 고정"];
+  loop [label="5  Worker가 Ollama 응답에 따라 분기\n도구 요청 → 권한/인자 검증 → MCP 호출 → 결과 추가 후 반복\n최종 응답 → 루프 종료 · 호출 수/시간/결과 크기 제한", fillcolor="#f8edce"];
+  validate [label="6  Worker 최종 검증 → 결과 영속 기록\n장소 ID · 필수 조건 · 근거/유효시각 · 프로필 버전\ncompleted / failed / cancelled / expired"];
+  poll [label="7  기존 웹 → Vercel → Gateway\n본인 작업 상태 조회 · no-store · 제한된 폴링\n완료 시 기존 reply / action / places 의미로 반환", fillcolor="#dceee1"];
+  apply [label="8  사용자가 기존 코스빌더에 적용\n현재 코스 버전 확인 · 오래된 결과 자동 적용 금지", fillcolor="#dceee1"];
+  cancel [label="별도 취소 경로\nPOST /api/agent/jobs/:id/cancel\n소유권 확인 → cancellation_requested\nWorker 취소 전파 · 늦은 결과 미적용", fillcolor="#f8e8e4", width=3.0];
+  submit -> persist -> receipt -> work -> loop -> validate -> poll -> apply;
+  receipt -> cancel [style=dashed, label="사용자 취소"];
+  cancel -> work [style=dashed, label="대기 제거 / 실행 중단 요청", constraint=false];
+}

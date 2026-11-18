@@ -1,0 +1,9 @@
+# Keep generated CSV BOM and RFC 4180 CRLF bytes stable across checkouts.
+*.csv -text whitespace=cr-at-eol
+
+# Matplotlib emits harmless trailing spaces in SVG path coordinates.
+reports/assets/*.svg linguist-generated=true whitespace=-blank-at-eol
+reports/jeju-personal-tour-agent-design.md linguist-generated=true
+*.docx binary
+*.pdf binary
+*.zip binary

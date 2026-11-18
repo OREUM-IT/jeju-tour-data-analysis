@@ -1,0 +1,9 @@
+flowchart TD
+  A[1 · DNS 전파 확인<br/>Cloudflare Active · 기존 웹 HTTPS · Vercel 정상]
+  B[2 · MCP 로컬 검증<br/>초기화·도구 목록·호출·인증·미확인 처리]
+  C[3 · 상시 호스트 배포<br/>Access 정책 먼저 · Named Tunnel · mcp.oreumit.com/mcp]
+  D[4 · 외부 MCP 검증<br/>정상 서비스 인증 성공 · 무인증/잘못된 Origin 차단]
+  E[5 · Vercel Preview 연결<br/>서버 전용 호출 · 기존 로그인·검색·저장 회귀 확인]
+  F[6 · Windows·Mac Ollama<br/>로컬 짧은 추론 → 인증 Gateway → 호스트별 상태/한도]
+  G[7 · 통합 Agent 단계<br/>모델 라우터 · 영속 작업 · 취소 · 비용 · 사용자 실험]
+  A --> B --> C --> D --> E --> F --> G

@@ -1,0 +1,22 @@
+digraph NextDeployment {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.3", ranksep="0.45", fontname="Noto Sans CJK KR", fontsize=18, labelloc=t, label="oreumit.com · 다음 연결 설계\nDNS 전파·운영 배포·외부 연결은 별도 확인"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5f7", color="#8aa7ac", fontname="Noto Sans CJK KR", fontsize=12, margin="0.16,0.13"];
+  edge [fontname="Noto Sans CJK KR", fontsize=10, color="#506974", arrowsize=0.75];
+  web [label="사용자 · 등록된 대표 웹 주소\n기존 Vercel 웹·인증 API", fillcolor="#dceee1"];
+  cf [label="Cloudflare Access + Named Tunnel\n서비스 인증 · 고정 HTTPS 주소", fillcolor="#efe8f7"];
+  mcp [label="상시 호스트 · 제주 MCP 서버\nmcp.oreumit.com/mcp → localhost:8788/mcp\n장소 검색 · 상세 · 필수 조건 검사", fillcolor="#dceaf7"];
+  catalog [label="초기 · 기존 자료의 카탈로그 파일\n장소 ID·출처 유지 · 근거 없으면 미확인", fillcolor="#dceee1"];
+  worker [label="후속 구현 · Agent Gateway/Worker\n영속 작업 · 모델 선택 · 비용/결과 검증", style="rounded,filled,dashed", fillcolor="#f8edce"];
+  api [label="OpenAI / Anthropic API\n외부 HTTPS · 공급자별 키/한도", fillcolor="#f8edce"];
+  gpu [label="Windows / Mac Ollama\n사설 연결 또는 인증된 Gateway\n원본 모델 관리 포트 비공개", fillcolor="#f8edce"];
+  db [shape=cylinder, label="기존 또는 관리형 PostgreSQL\n작업·사용량·프로필·결과\n운영 DB 위치·권한 확인 후 연결", fillcolor="#dceee1"];
+  web -> cf [label="1차 · 인증된 짧은 조회"];
+  cf -> mcp [label="Access + MCP 인증"];
+  mcp -> catalog [label="읽기 전용"];
+  web -> worker [style=dashed,label="2차 · 비동기 작업"];
+  worker -> cf [style=dashed,label="공유 MCP 도구",constraint=false];
+  worker -> api [style=dashed];
+  worker -> gpu [style=dashed];
+  worker -> db [style=dashed,label="영속 상태"];
+  mcp -> db [style=dashed,label="후속 DB 어댑터",minlen=2];
+}

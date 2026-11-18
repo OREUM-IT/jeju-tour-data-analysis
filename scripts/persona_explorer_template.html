@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>나의 제주, 취향으로 살펴보기 · 페르소나 설계 탐색기</title>
+  <style>
+    :root { --ink:#18332e; --muted:#596d67; --line:#dbe4dc; --paper:#f5f5ed; --white:#fff; --green:#24694f; --lime:#d9ed9e; --soft:#edf3e9; --sand:#fbefda; --amber:#895714; --blue:#286187; --radius:22px; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font-family:ui-sans-serif,system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif; line-height:1.6; }
+    button,input { font:inherit; }
+    button { cursor:pointer; }
+    button:focus-visible,input:focus-visible,summary:focus-visible { outline:3px solid #d38635; outline-offset:4px; }
+    .shell { width:min(1320px,100%); margin:auto; padding:32px 34px 48px; }
+    .masthead { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:25px; font-size:12px; letter-spacing:.09em; font-weight:750; }
+    .brand { display:flex; align-items:center; gap:10px; }
+    .mark { width:29px; height:25px; background:var(--green); border-radius:50% 50% 6px 6px; transform:rotate(-9deg); display:inline-block; }
+    .edition { color:var(--muted); text-align:right; letter-spacing:.03em; }
+    .hero { position:relative; overflow:hidden; display:grid; grid-template-columns:minmax(0,1fr) 270px; gap:34px; background:var(--ink); color:#f8fbf3; padding:35px 39px; border-radius:var(--radius); margin-bottom:20px; }
+    .eyebrow { font-size:12px; font-weight:700; letter-spacing:.12em; margin:0 0 12px; color:#c1d8bc; }
+    h1 { font-size:clamp(27px,3.4vw,43px); line-height:1.27; letter-spacing:-.055em; margin:0 0 16px; font-weight:750; }
+    .hero p:not(.eyebrow) { margin:0; color:#d3dfd4; font-size:14px; max-width:620px; }
+    .hero-side { display:flex; flex-direction:column; justify-content:center; align-items:flex-start; border-left:1px solid #557064; padding-left:28px; }
+    .hero-side strong { color:var(--lime); font-size:40px; line-height:1.2; letter-spacing:-.05em; }
+    .hero-side span { font-size:13px; margin:9px 0 4px; }
+    .hero-side small { color:#c1d3c5; font-size:12px; }
+    .scope { padding:14px 18px; border:1px solid #e6d5b9; border-radius:14px; background:var(--sand); color:#644c2c; margin-bottom:24px; font-size:13px; }
+    .scope strong { color:#69471b; }
+    .workspace { display:grid; grid-template-columns:minmax(340px, .95fr) minmax(0,1.3fr); gap:24px; align-items:start; }
+    .panel { background:var(--white); border:1px solid var(--line); border-radius:var(--radius); padding:26px; }
+    .panel + .panel { margin-top:20px; }
+    .section-head { display:flex; align-items:start; justify-content:space-between; gap:16px; margin-bottom:13px; }
+    .step { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:50%; background:var(--soft); color:var(--green); font-size:12px; margin-right:8px; vertical-align:2px; }
+    h2 { font-size:19px; line-height:1.4; letter-spacing:-.035em; margin:0; }
+    h3 { font-size:15px; margin:0; }
+    .sub { font-size:13px; color:var(--muted); margin:0 0 17px; }
+    .quiet-btn { border:0; background:none; color:var(--green); text-decoration:underline; text-underline-offset:3px; padding:3px; white-space:nowrap; font-size:12px; }
+    .input-group { padding-top:19px; margin-top:18px; border-top:1px solid var(--line); }
+    .group-top { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    .check { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:12px; white-space:nowrap; cursor:pointer; }
+    .check input { accent-color:var(--green); width:16px; height:16px; margin:0; }
+    .hint { font-size:12px; color:var(--muted); margin:7px 0 14px; }
+    .theme-row { display:grid; grid-template-columns:94px minmax(60px,1fr) 31px; align-items:center; gap:10px; margin:10px 0; font-size:12px; }
+    .theme-row label { line-height:1.35; }
+    output { font-size:12px; font-variant-numeric:tabular-nums; text-align:right; color:var(--green); }
+    input[type=range] { width:100%; accent-color:var(--green); height:20px; margin:0; cursor:pointer; }
+    input[type=range]:disabled { opacity:.4; cursor:default; }
+    .unknown output { color:#8b9791; }
+    .axis-labels { display:flex; justify-content:space-between; color:var(--muted); font-size:10px; margin-top:2px; }
+    .scalar-question { font-size:12px; color:var(--muted); margin:7px 0 10px; }
+    .scalar-range { display:grid; grid-template-columns:1fr 34px; gap:12px; align-items:center; }
+    .inline-warning { color:#8b4b16; font-size:12px; margin:8px 0 0; }
+    .presets { display:flex; flex-wrap:wrap; gap:7px; }
+    .preset { border:1px solid var(--line); color:var(--ink); background:#fafbf7; border-radius:9px; padding:7px 10px; font-size:11px; text-align:left; }
+    .preset:hover { border-color:var(--green); background:var(--soft); }
+    .preset[aria-pressed=true] { border-color:var(--green); background:var(--soft); box-shadow:inset 0 0 0 1px var(--green); }
+    .preset span { color:var(--green); font-weight:750; margin-right:5px; }
+    .results { min-width:0; }
+    .status-line { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:15px; }
+    .pill { border-radius:100px; font-size:11px; font-weight:700; padding:5px 10px; background:var(--soft); color:var(--green); }
+    .pill[data-state=insufficient],.pill[data-state=exploratory] { background:var(--sand); color:var(--amber); }
+    .coverage { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+    .coverage-track { height:5px; background:#e8ede7; border-radius:9px; overflow:hidden; margin-bottom:18px; }
+    .coverage-fill { height:100%; background:var(--green); width:0%; transition:width .18s; }
+    .result-title { font-size:25px; line-height:1.4; letter-spacing:-.045em; margin:0 0 8px; }
+    .result-copy { font-size:13px; color:var(--muted); margin:0; }
+    .result-cards { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:20px; }
+    .result-card { border:1px solid var(--line); border-radius:15px; padding:17px; background:#fafbf7; min-width:0; }
+    .result-card:first-child { background:var(--soft); border-color:#c8d8bd; }
+    .card-top { display:flex; align-items:center; justify-content:space-between; gap:5px; font-size:11px; color:var(--muted); }
+    .card-name { font-size:17px; margin:8px 0 5px; line-height:1.4; }
+    .card-score { font-size:23px; font-weight:730; color:var(--green); letter-spacing:-.04em; }
+    .card-score small { font-size:10px; font-weight:500; letter-spacing:0; padding-left:3px; }
+    .card-desc { font-size:12px; color:var(--muted); margin:9px 0 0; }
+    .card-rec { font-size:12px; color:var(--ink); margin:11px 0 0; padding-top:10px; border-top:1px solid var(--line); }
+    .match-meta { font-size:11px; color:var(--muted); margin-top:13px; }
+    .empty-state { padding:22px; background:#f6f8f2; border:1px dashed #ccd8c6; border-radius:14px; margin-top:18px; font-size:12px; color:var(--muted); }
+    .legend { display:flex; flex-wrap:wrap; gap:14px; color:var(--muted); font-size:11px; margin:14px 0 8px; }
+    .legend span { display:inline-flex; align-items:center; gap:6px; }
+    .dot { width:8px; height:8px; background:var(--green); border-radius:50%; display:inline-block; }
+    .diamond { width:8px; height:8px; background:#b46822; transform:rotate(45deg); display:inline-block; }
+    .plot { width:100%; aspect-ratio:1.65; display:block; overflow:visible; font-family:inherit; }
+    .plot-note { color:var(--muted); font-size:11px; margin:8px 0 0; }
+    .prototype-key { display:flex; flex-wrap:wrap; gap:4px 14px; padding-top:10px; margin-top:9px; border-top:1px solid var(--line); color:var(--muted); font-size:10px; }
+    .prototype-key b { color:var(--green); margin-right:4px; }
+    .method { margin-top:18px; border-top:1px solid var(--line); padding-top:16px; }
+    summary { cursor:pointer; color:var(--green); font-size:12px; font-weight:650; }
+    .method p,.method li { font-size:12px; color:var(--muted); }
+    .method ul { padding-left:19px; }
+    .formula { padding:12px; background:#f5f7f1; border-radius:10px; font-family:ui-monospace,monospace; font-size:11px!important; overflow-wrap:anywhere; }
+    .contribution-table { width:100%; border-collapse:collapse; font-size:11px; margin-top:13px; }
+    .contribution-table th { font-weight:600; color:var(--muted); text-align:left; border-bottom:1px solid var(--line); padding:7px 3px; }
+    .contribution-table td { padding:7px 3px; border-bottom:1px solid #eef1ea; }
+    .contribution-table th:last-child,.contribution-table td:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+    .footer { padding:23px 2px 0; display:flex; justify-content:space-between; gap:20px; font-size:11px; color:var(--muted); }
+    [hidden] { display:none!important; }
+    @media (max-width:960px) { .shell { padding:22px 20px 34px; } .workspace { grid-template-columns:minmax(290px,.95fr) minmax(0,1.15fr); gap:16px; } .panel { padding:20px; } .hero { padding:28px; grid-template-columns:1fr 200px; gap:22px; } .hero-side { padding-left:22px; } .result-cards { grid-template-columns:1fr; } }
+    @media (max-width:700px) { .shell { padding:20px 15px 30px; } .masthead { margin-bottom:17px; font-size:10px; } .hero { grid-template-columns:1fr; padding:27px 24px; gap:19px; } .hero-side { border-left:0; border-top:1px solid #557064; padding:16px 0 0; flex-direction:row; align-items:center; gap:14px; } .hero-side strong { font-size:30px; } .hero-side span { margin:0; } .hero-side small { max-width:165px; } .workspace { grid-template-columns:1fr; } .result-cards { grid-template-columns:1fr 1fr; } .footer { flex-direction:column; gap:5px; } }
+    @media (max-width:400px) { .result-cards { grid-template-columns:1fr; } .panel { padding:18px; } .hero-side small { display:none; } .theme-row { grid-template-columns:93px minmax(50px,1fr) 28px; gap:7px; } }
+    @media (prefers-reduced-motion:reduce) { * { transition:none!important; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="masthead"><div class="brand"><span class="mark" aria-hidden="true"></span> OREUM IT · JEJU LAB</div><span class="edition">PERSONA EXPLORER <span id="version"></span></span></div>
+    <header class="hero">
+      <div><p class="eyebrow">여행 취향을 연결하는 작은 실험</p><h1>나의 제주,<br>취향으로 살펴보기.</h1><p>가고 싶은 테마와 여행 방식을 조절해 보세요.<br>서로 다른 여행의 모습을 비교하고, 이번 여행에 가까운 설계 유형을 찾아봅니다.</p></div>
+      <div class="hero-side"><strong>8</strong><span>설계한 여행 프로토타입</span><small>실제 관광객 표본으로 학습한<br>군집이나 성격 진단이 아닙니다.</small></div>
+    </header>
+    <aside class="scope" aria-label="설계 탐색기의 확인 범위"><strong>연구 전 설계안</strong> · 8개 유형은 사람이 작성한 비교 기준입니다. 실제 관광객 표본·실증 군집·군집별 인원은 없으며 LAG도 구현하지 않았습니다. 점수는 소속 확률이 아닙니다.</aside>
+    <div class="workspace">
+      <section class="panel" aria-labelledby="input-title">
+        <div class="section-head"><h2 id="input-title"><span class="step">1</span>이번 여행의 취향</h2><button id="reset" class="quiet-btn" type="button">모두 미입력으로</button></div>
+        <p class="sub">아는 항목만 ‘입력함’을 켜세요. 미입력은 중간 취향으로 간주하지 않습니다.</p>
+        <p class="hint">슬라이더는 연속 값을 탐색하는 설계 데모입니다. 실제 Q07의 최대 3개 테마 선택이나 5단계 추가 설문 응답과 다르며, 예시의 9개 테마 값도 실제 관광객 응답이 아닙니다.</p>
+        <div id="theme-group" class="input-group unknown">
+          <div class="group-top"><h3>관심 테마</h3><label class="check"><input id="themes-observed" type="checkbox">입력함</label></div>
+          <p id="theme-help" class="hint">9개 테마의 상대적인 관심을 0–100으로 표현합니다. 모두 0이면 테마 정보가 없는 것으로 처리합니다.</p>
+          <div id="theme-sliders"></div>
+          <p id="theme-warning" class="inline-warning" hidden>하나 이상의 테마에 관심도를 입력해 주세요. 모두 0인 벡터는 점수에 사용하지 않습니다.</p>
+        </div>
+        <div id="scalar-sliders"></div>
+        <div class="input-group">
+          <h3>설계 예시 불러오기</h3><p class="hint">유형의 작성값을 그대로 입력하는 예시입니다. 실제 응답자나 학습 데이터가 아닙니다.</p>
+          <div id="presets" class="presets" aria-label="프로토타입 설계 예시"></div>
+        </div>
+      </section>
+      <div class="results">
+        <section class="panel" aria-labelledby="result-heading">
+          <div class="section-head"><h2 id="result-heading"><span class="step">2</span>가까운 여행의 모습</h2></div>
+          <div class="status-line"><span id="status" class="pill" data-state="insufficient">정보 부족</span><span id="coverage" class="coverage">정보 충족도 0%</span></div>
+          <div class="coverage-track" aria-hidden="true"><div id="coverage-fill" class="coverage-fill"></div></div>
+          <div id="result-summary" aria-live="polite" aria-atomic="true"><h3 id="result-title" class="result-title">아직 정해지지 않은 제주</h3><p id="result-copy" class="result-copy"></p></div>
+          <div id="result-cards" class="result-cards" hidden></div>
+          <div id="empty-state" class="empty-state"></div>
+          <p id="match-meta" class="match-meta" hidden></p>
+          <details id="contribution-detail" class="method" hidden><summary>가장 가까운 유형과의 차이 살펴보기</summary><p id="contribution-copy"></p><table class="contribution-table"><thead><tr><th scope="col">비교 항목</th><th scope="col">거리 기여도</th><th scope="col">점수 감점</th></tr></thead><tbody id="contributions"></tbody></table></details>
+        </section>
+        <section class="panel" aria-labelledby="map-title">
+          <div class="section-head"><h2 id="map-title"><span class="step">3</span>여행 취향의 지도</h2><span class="pill">PCA · 설계값</span></div>
+          <p class="sub">8개 프로토타입의 차이를 두 축으로 압축한 지도입니다. 가까운 점이 항상 최종 추천 순위와 같지는 않습니다.</p>
+          <div class="legend"><span><i class="dot" aria-hidden="true"></i>작성한 프로토타입</span><span><i class="diamond" aria-hidden="true"></i>현재 입력 · 전체 입력 시 표시</span></div>
+          <svg id="plot" class="plot" viewBox="0 0 600 365" role="img" aria-labelledby="plot-title plot-desc"><title id="plot-title">8개 여행 프로토타입의 PCA 비교 지도</title><desc id="plot-desc">실제 응답자 없이 작성한 설계값만 표시합니다. 모든 항목을 입력한 경우 현재 입력이 추가됩니다.</desc></svg>
+          <p id="projection-note" class="plot-note"></p>
+          <div id="prototype-key" class="prototype-key" aria-label="지도에 표시한 유형 이름"></div>
+          <details class="method"><summary>이 탐색기가 비교하는 방법</summary><p>테마는 방향의 유사도(코사인), 나머지 여행 방식은 0–1 값의 절대 차이로 비교합니다. 입력한 항목의 가중치만 합산해 거리를 정규화합니다.</p><p class="formula">거리 = Σ(입력한 항목의 가중치 × 항목 거리) / 정보 충족도<br>설계 유사도 점수 = 100 × (1 − 거리)</p><ul><li id="weights-explainer"></li><li id="threshold-explainer"></li><li>테마를 입력하지 않으면 다른 항목이 있어도 정보 부족입니다. 관측된 값이 없는 항목을 0이나 0.5로 보간하지 않습니다.</li><li>지도는 가중치를 적용한 13차원 설계값을 PCA로 투영합니다. 2차원 지도상의 거리는 위 매칭 거리와 다르며 군집 경계나 확률을 의미하지 않습니다.</li><li>입력값은 이 페이지 메모리에서만 사용하며 저장하거나 외부로 전송하지 않습니다.</li></ul></details>
+        </section>
+      </div>
+    </div>
+    <footer class="footer"><span>제주도 맞춤 개인 관광 페르소나(테마) 추천 AI AGENT · 설계 검토용</span><span>실증 검증 전 · 장소 추천 및 여행 가능성 검증은 별도 단계</span></footer>
+  </main>
+  <script>
+    'use strict';
+    const DATA = __PERSONA_DATA__;
+    const scalarIds = DATA.scalars.map(item => item.id);
+    const prototypes = new Map(DATA.prototypes.map(item => [item.id, item]));
+    const labels = {themes:'관심 테마', ...Object.fromEntries(DATA.scalars.map(item => [item.id,item.label]))};
+    const $ = id => document.getElementById(id);
+    const number = (value,digits=1) => Number(value).toFixed(digits);
+    const safeScalar = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+    function themeVector(value) {
+      if (value == null) return null;
+      if (!Array.isArray(value) || value.length !== DATA.themes.length || !value.every(x => typeof x === 'number' && Number.isFinite(x) && x >= 0)) throw new TypeError('테마는 유한한 0 이상 숫자 9개여야 합니다.');
+      const norm = Math.hypot(...value);
+      return norm > 0 ? value.map(x => x/norm) : null;
+    }
+    function score(profile) {
+      const input = profile && typeof profile === 'object' ? profile : {};
+      const themes = themeVector(input.themes);
+      const observed = {themes: themes !== null};
+      for (const id of scalarIds) {
+        if(input[id] != null && !safeScalar(input[id])) throw new TypeError(id+' 값은 null 또는 0–1 숫자여야 합니다.');
+        observed[id] = safeScalar(input[id]);
+      }
+      const coverage = Object.keys(observed).reduce((sum,id) => sum+(observed[id] ? DATA.weights[id] : 0),0);
+      if (coverage <= 0) return {coverage:0,status:'insufficient',ranked:[],margin:null,observed};
+      const ranked = DATA.prototypes.map(p => {
+        const contributions = [];
+        if (themes) {
+          const target = themeVector(p.themes);
+          const similarity = Math.max(0,Math.min(1,themes.reduce((sum,x,i) => sum+x*target[i],0)));
+          const distance = 1-similarity;
+          contributions.push({id:'themes',label:labels.themes,weight:DATA.weights.themes,distance,weightedDistance:distance*DATA.weights.themes,contribution:distance*DATA.weights.themes/coverage});
+        }
+        for (const id of scalarIds) if (observed[id]) {
+          const distance = Math.abs(input[id]-p[id]);
+          contributions.push({id,label:labels[id],weight:DATA.weights[id],distance,weightedDistance:distance*DATA.weights[id],contribution:distance*DATA.weights[id]/coverage});
+        }
+        const distance = contributions.reduce((sum,c) => sum+c.contribution,0);
+        return {id:p.id,score:Math.max(0,Math.min(100,100*(1-distance))),distance,contributions:Object.fromEntries(contributions.map(c=>[c.id,c.contribution])),contributionDetails:contributions};
+      }).sort((a,b) => b.score-a.score || a.id.localeCompare(b.id));
+      const margin = ranked.length > 1 ? ranked[0].score-ranked[1].score : null;
+      let status = 'matched';
+      if (!themes || coverage+1e-10 < DATA.thresholds.min_coverage) status='insufficient';
+      else if (ranked[0].score < DATA.thresholds.min_score) status='exploratory';
+      else if (margin !== null && margin < DATA.thresholds.mixed_margin) status='mixed';
+      return {coverage,status,ranked,margin,observed};
+    }
+    function project(profile) {
+      const themes = themeVector(profile?.themes);
+      if (!themes || scalarIds.some(id => !safeScalar(profile[id]))) return null;
+      const vector = [...themes.map(x => x*Math.sqrt(DATA.weights.themes)),...scalarIds.map(id => profile[id]*Math.sqrt(DATA.weights[id]))];
+      return DATA.projection.components.map(component => component.reduce((sum,x,i) => sum+x*(vector[i]-DATA.projection.mean[i]),0));
+    }
+    function el(tag,className,text) {
+      const node = document.createElement(tag);
+      if (className) node.className=className;
+      if (text !== undefined) node.textContent=String(text);
+      return node;
+    }
+    function svg(tag,attrs={},text) {
+      const node=document.createElementNS('http://www.w3.org/2000/svg',tag);
+      for(const [key,value] of Object.entries(attrs)) node.setAttribute(key,String(value));
+      if(text !== undefined) node.textContent=String(text);
+      return node;
+    }
+    const themeInputs=[];
+    let activePreset=null;
+    DATA.themes.forEach((theme,i) => {
+      const row=el('div','theme-row');
+      const label=el('label','',theme.label); label.htmlFor='theme-'+i;
+      const input=el('input'); Object.assign(input,{id:'theme-'+i,type:'range',min:'0',max:'100',step:'1',value:'0',disabled:true}); input.setAttribute('aria-describedby','theme-help');
+      const out=el('output','','미입력'); out.htmlFor=input.id;
+      row.append(label,input,out); $('theme-sliders').append(row); themeInputs.push(input);
+      input.addEventListener('input',() => {activePreset=null; render();});
+    });
+    const scalarControls=new Map();
+    DATA.scalars.forEach(item => {
+      const group=el('div','input-group unknown');
+      const top=el('div','group-top'); const title=el('h3','',item.label); title.id=item.id+'-title';
+      const label=el('label','check'); const check=el('input'); check.type='checkbox';check.id=item.id+'-observed'; label.append(check,document.createTextNode('입력함'));
+      const question=el('p','scalar-question',item.question);question.id=item.id+'-question';
+      const row=el('div','scalar-range'); const input=el('input'); Object.assign(input,{id:item.id+'-value',type:'range',min:'0',max:'100',step:'5',value:'50',disabled:true}); input.setAttribute('aria-labelledby',title.id);input.setAttribute('aria-describedby',question.id);
+      const out=el('output','','미입력');out.htmlFor=input.id;row.append(input,out);
+      const ends=el('div','axis-labels'); ends.append(el('span','','0 · 낮음'),el('span','','100 · 높음'));
+      top.append(title,label);group.append(top,question,row,ends);$('scalar-sliders').append(group);
+      scalarControls.set(item.id,{group,check,input,out});
+      check.addEventListener('change',() => {activePreset=null;render();});input.addEventListener('input',() => {activePreset=null;render();});
+    });
+    DATA.prototypes.forEach(p => {
+      const button=el('button','preset');button.type='button';button.dataset.id=p.id;button.setAttribute('aria-pressed','false');button.setAttribute('aria-label',p.id+' '+p.label+' 설계 예시 불러오기');button.append(el('span','',p.id),document.createTextNode(p.label));button.addEventListener('click',() => loadPreset(p.id));$('presets').append(button);
+      const key=el('span');key.append(el('b','',p.id),document.createTextNode(p.label));$('prototype-key').append(key);
+    });
+    function getProfile() {
+      const profile={themes:$('themes-observed').checked ? themeInputs.map(input => Number(input.value)/100) : null};
+      for(const [id,c] of scalarControls) profile[id]=c.check.checked ? Number(c.input.value)/100 : null;
+      return profile;
+    }
+    function loadPreset(id) {
+      const p=prototypes.get(id);if(!p)return;
+      $('themes-observed').checked=true;
+      p.themes.forEach((x,i) => {themeInputs[i].value=String(x*100);});
+      for(const [key,c] of scalarControls){c.check.checked=true;c.input.value=String(p[key]*100);}
+      activePreset=id;render();
+    }
+    function reset() {
+      $('themes-observed').checked=false;themeInputs.forEach(input=>{input.value='0';});
+      for(const c of scalarControls.values()){c.check.checked=false;c.input.value='50';}
+      activePreset=null;render();
+    }
+    function renderInputs() {
+      const on=$('themes-observed').checked;
+      $('theme-group').classList.toggle('unknown',!on);
+      themeInputs.forEach(input=>{input.disabled=!on;input.nextSibling.textContent=on?input.value:'미입력';input.setAttribute('aria-valuetext',on?input.value+' / 100':'미입력');});
+      $('theme-warning').hidden=!(on&&!themeVector(themeInputs.map(input=>Number(input.value)/100)));
+      for(const c of scalarControls.values()){c.group.classList.toggle('unknown',!c.check.checked);c.input.disabled=!c.check.checked;c.out.textContent=c.check.checked?c.input.value:'미입력';c.input.setAttribute('aria-valuetext',c.check.checked?c.input.value+' / 100':'미입력');}
+      for(const b of $('presets').children)b.setAttribute('aria-pressed',String(b.dataset.id===activePreset));
+    }
+    function renderResult(result) {
+      const {status,ranked,coverage,margin}=result;
+      $('coverage').textContent='정보 충족도 '+number(coverage*100,0)+'%';$('coverage-fill').style.width=(coverage*100)+'%';
+      $('status').dataset.state=status;
+      const eligible=status!=='insufficient';
+      $('result-cards').hidden=!eligible;$('empty-state').hidden=eligible;$('match-meta').hidden=!eligible;$('contribution-detail').hidden=!eligible;
+      if(!eligible){
+        $('status').textContent='정보 부족';$('result-title').textContent=coverage===0?'아직 정해지지 않은 제주':'조금 더 알려 주세요';
+        $('result-copy').textContent='관심 테마와 여행 방식의 일부를 입력하면 가까운 설계 유형을 비교할 수 있습니다.';
+        $('empty-state').textContent='정보 충족도는 입력한 항목 가중치의 합입니다. 유효한 테마 입력과 '+number(DATA.thresholds.min_coverage*100,0)+'% 이상의 정보가 필요하며, 소속 확률이나 진단 정확도를 뜻하지 않습니다.';
+        return;
+      }
+      const first=prototypes.get(ranked[0].id),second=prototypes.get(ranked[1].id);
+      if(status==='exploratory'){
+        $('status').textContent='탐색이 더 필요해요';$('result-title').textContent='기존 유형 밖의 새로운 조합';$('result-copy').textContent='가장 가까운 설계 유형도 기준 점수에 못 미칩니다. 아래는 비교 후보이며, 현재 취향을 유형에 억지로 맞추지 않습니다.';
+      }else if(status==='mixed'){
+        $('status').textContent='혼합 취향 제안';$('result-title').textContent='두 가지 여행 사이';$('result-copy').textContent=first.label+'과 '+second.label+'의 점수 차이가 작습니다. 두 유형을 함께 살펴보세요.';
+      }else{
+        $('status').textContent='가까운 유형 제안';$('result-title').textContent=first.label+'에 가까운 여행';$('result-copy').textContent='현재 입력과 가장 비슷한 설계 유형입니다. 두 번째 후보는 차이를 살펴보기 위한 비교용입니다.';
+      }
+      $('result-cards').replaceChildren();
+      ranked.slice(0,2).forEach((r,i)=>{
+        const p=prototypes.get(r.id),card=el('article','result-card');
+        const top=el('div','card-top');top.append(el('span','',status==='matched'?(i===0?'가장 가까운 유형':'다음 비교 후보'):(i===0?'비교 후보 1':'비교 후보 2')),el('span','',p.id));
+        const h=el('h3','card-name',p.label);const s=el('div','card-score',number(r.score));s.append(el('small','','점 / 100'));
+        s.setAttribute('aria-label','설계 유사도 '+number(r.score)+'점, 확률 아님');
+        card.append(top,h,s,el('p','card-desc',p.description),el('p','card-rec',Array.isArray(p.recommendation)?p.recommendation.join(' · '):p.recommendation));$('result-cards').append(card);
+      });
+      $('match-meta').textContent='설계 유사도 점수 · 확률 아님 / 1·2위 차이 '+number(margin)+'점 / '+(activePreset?'작성된 '+activePreset+' 설계값 예시':'현재 입력 기준');
+      $('contribution-copy').textContent=first.label+'과 비교해 각 항목이 만든 차이입니다. 입력한 항목만 사용하며 감점 합계는 100점에서 빠진 점수와 같습니다.';
+      $('contributions').replaceChildren();
+      [...ranked[0].contributionDetails].sort((a,b)=>b.contribution-a.contribution).forEach(c=>{
+        const row=el('tr');row.append(el('td','',c.label),el('td','',number(c.contribution,3)),el('td','',number(c.contribution*100,2)+'점'));$('contributions').append(row);
+      });
+    }
+    function renderPlot(profile) {
+      const chart=$('plot');chart.querySelectorAll('g').forEach(g=>g.remove());
+      const user=project(profile),points=DATA.projection.points;
+      const all=user?[...points,user]:points;
+      let xmin=Math.min(...all.map(p=>p[0])),xmax=Math.max(...all.map(p=>p[0])),ymin=Math.min(...all.map(p=>p[1])),ymax=Math.max(...all.map(p=>p[1]));
+      const dx=Math.max(xmax-xmin,.2),dy=Math.max(ymax-ymin,.2);xmin-=dx*.17;xmax+=dx*.17;ymin-=dy*.2;ymax+=dy*.2;
+      const left=45,right=575,top=22,bottom=315;
+      const x=v=>left+(v-xmin)/(xmax-xmin)*(right-left),y=v=>bottom-(v-ymin)/(ymax-ymin)*(bottom-top);
+      const g=svg('g');g.append(svg('rect',{x:left,y:top,width:right-left,height:bottom-top,rx:12,fill:'#f5f8f1'}));
+      for(let i=1;i<5;i++){const xx=left+(right-left)*i/5,yy=top+(bottom-top)*i/5;g.append(svg('line',{x1:xx,y1:top,x2:xx,y2:bottom,stroke:'#e1e8dc'}),svg('line',{x1:left,y1:yy,x2:right,y2:yy,stroke:'#e1e8dc'}));}
+      if(xmin<0&&xmax>0)g.append(svg('line',{x1:x(0),y1:top,x2:x(0),y2:bottom,stroke:'#b6c7b1','stroke-dasharray':'3 4'}));
+      if(ymin<0&&ymax>0)g.append(svg('line',{x1:left,y1:y(0),x2:right,y2:y(0),stroke:'#b6c7b1','stroke-dasharray':'3 4'}));
+      points.forEach((p,i)=>{
+        const group=svg('g',{'data-prototype':DATA.prototypes[i].id});const active=activePreset===DATA.prototypes[i].id;
+        group.append(svg('title',{},DATA.prototypes[i].id+' '+DATA.prototypes[i].label+' · 작성한 설계값'));
+        group.append(svg('circle',{cx:x(p[0]),cy:y(p[1]),r:active?8:6,fill:active?'#18332e':'#397957',stroke:'#fff','stroke-width':2}));
+        group.append(svg('text',{x:x(p[0])+10,y:y(p[1])+4,fill:'#244d3a','font-size':11,'font-weight':650},DATA.prototypes[i].id));g.append(group);
+      });
+      if(user){
+        const ux=x(user[0]),uy=y(user[1]);const group=svg('g',{'data-user-point':'true'});
+        group.append(svg('title',{},'현재 입력 · 모든 항목 관측됨'),svg('path',{d:'M '+ux+' '+(uy-9)+' L '+(ux+9)+' '+uy+' L '+ux+' '+(uy+9)+' L '+(ux-9)+' '+uy+' Z',fill:'#b46822',stroke:'#fff','stroke-width':2}));
+        g.append(group);
+      }
+      const variance=DATA.projection.variance_ratio;
+      g.append(svg('text',{x:(left+right)/2,y:350,'text-anchor':'middle',fill:'#596d67','font-size':11},'PC1 · 설계값 분산 '+number(variance[0]*100,1)+'%'));
+      g.append(svg('text',{transform:'translate(16 '+((top+bottom)/2)+') rotate(-90)','text-anchor':'middle',fill:'#596d67','font-size':11},'PC2 · '+number(variance[1]*100,1)+'%'));
+      chart.append(g);
+      $('projection-note').textContent=user?'현재 입력을 전체 관측값으로 투영했습니다. 축은 통계적 투영 방향이며 심리적 특성의 이름이 아닙니다.':'유효한 테마와 4개 여행 방식이 모두 입력되면 현재 입력을 표시합니다. 미입력 값을 채워서 점을 만들지 않습니다.';
+    }
+    function render(){renderInputs();const profile=getProfile();renderResult(score(profile));renderPlot(profile);}
+    $('themes-observed').addEventListener('change',()=>{activePreset=null;render();});$('reset').addEventListener('click',reset);
+    $('version').textContent=DATA.version;
+    $('weights-explainer').textContent='가중치: '+Object.keys(DATA.weights).map(id=>labels[id]+' '+number(DATA.weights[id]*100,0)+'%').join(' · ')+'. 이 비율은 설계한 가중치입니다.';
+    $('threshold-explainer').textContent='정보 충족도 '+number(DATA.thresholds.min_coverage*100,0)+'% 이상에서 비교합니다. 최고 점수 '+DATA.thresholds.min_score+'점 미만은 탐색, 1·2위 차이 '+DATA.thresholds.mixed_margin+'점 미만은 혼합으로 표시합니다.';
+    window.personaDemo={score,project,getProfile,loadPreset,reset,data:DATA};
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+flowchart TD
+  V[기존 Vercel UI · 인증 API]
+  TA[T-A · 인증된 Agent 터널]
+  W[호스트 A · Gateway / Worker / Model Router]
+  O[OpenAI API]
+  C[Anthropic Claude API]
+  L[선택 · 사설 Ollama]
+  TM[T-M · 별도 MCP 호스트일 때]
+  M[호스트 B · 승인 MCP 도구]
+  D[(관리형 PostgreSQL · 권장 후보 Supabase<br/>기존 회원·코스 + 프로필·작업·사용량)]
+  S[비공개 객체 저장소 · 원본·큰 결과]
+  V -->|작업 제출·조회·취소| TA
+  TA --> W
+  W -->|외부 HTTPS · API 키| O
+  W -->|외부 HTTPS · API 키| C
+  W -->|로컬 또는 인증된 추론 Gateway| L
+  W -->|MCP 전용 인증| TM
+  TM --> M
+  V -->|기존 코스 API · 소유권 검증| D
+  W -->|작업 lease · 결과 · 비용| D
+  M -->|도구별 읽기 권한| D
+  D -.->|객체 경로·해시·권한 메타데이터| S
+  NOTE[구축 전 설계 · 모델별 터널/DB 불필요<br/>같은 호스트의 MCP는 내부 호출 가능<br/>DB·Ollama 원본 포트는 공개하지 않음]
+  NOTE -.-> W

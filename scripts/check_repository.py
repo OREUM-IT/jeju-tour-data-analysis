@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Offline publication checks using Python 3.11+ standard library only.
+
+Checks committed metadata, links and deliverables, not source-data accuracy,
+licenses, model performance, live services or reproduction of external datasets.
+The raw CSV snapshot ZIP is a local-only optional output, never a deliverable.
+"""
+from __future__ import annotations
+
+import collections
+import csv
+from datetime import date
+import json
+import math
+from pathlib import Path, PurePosixPath
+import re
+import stat
+import subprocess
+import sys
+from urllib.parse import unquote, urlsplit
+import xml.etree.ElementTree as ET
+from zipfile import BadZipFile, ZipFile
+
+ROOT = Path(__file__).resolve().parents[1]
+LOCAL_ONLY = "reports/jeju-data-snapshot-bundle.zip"
+
+
+class CheckError(Exception):
+    pass
+
+
+def require(condition, message):
+    if not condition:
+        raise CheckError(message)
+
+
+def read_json(path):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            require(key not in result, f"Duplicate JSON key in {path.name}")
+            result[key] = value
+        return result
+
+    def invalid_number(_value):
+        raise CheckError(f"Non-finite JSON number in {path.name}")
+
+    return json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=pairs,
+                      parse_constant=invalid_number)
+
+
+def read_csv(path):
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream, strict=True)
+        require(reader.fieldnames and len(reader.fieldnames) == len(set(reader.fieldnames)),
+                f"Missing or duplicate CSV headers: {path.name}")
+        rows = list(reader)
+        require(all(None not in row and None not in row.values() for row in rows),
+                f"Ragged CSV records: {path.name}")
+        return rows
+
+
+def unique(items, field, context):
+    require(isinstance(items, list), f"Expected array: {context}")
+    result = {}
+    for item in items:
+        key = item[field]
+        require(isinstance(key, str) and key.strip() and key not in result,
+                f"Missing or duplicate identifier: {context}")
+        result[key] = item
+    return result
+
+
+def finite(value, low=None, high=None):
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and (low is None or value >= low)
+            and (high is None or value <= high))
+
+
+def local_link(target, origin, root=ROOT):
+    parsed = urlsplit(target.strip("<>"))
+    if parsed.scheme or parsed.netloc or not parsed.path:
+        require(parsed.scheme != "file", f"Machine-local file URL in {origin.name}")
+        return
+    path = unquote(parsed.path)
+    require(not path.startswith("/"), f"Absolute filesystem link in {origin.name}")
+    resolved = (origin.parent / path).resolve()
+    require(resolved.is_relative_to(root), f"Link escapes repository: {origin.name}")
+    relative = resolved.relative_to(root).as_posix()
+    require(relative != LOCAL_ONLY,
+            f"Local-only raw ZIP must be described as code, not a download link: {origin.name}")
+    require(resolved.exists(), f"Missing link target from {origin.name}: {relative}")
+
+
+def check_links():
+    paths = [ROOT / "README.md", ROOT / "CLAUDE.md"]
+    paths += sorted((ROOT / "docs").glob("*.md")) + sorted((ROOT / "reports").glob("*.md"))
+    for path in paths:
+        require(path.is_file(), f"Required document missing: {path.name}")
+        lines, fence = [], None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+            if marker:
+                token = marker.group(1)
+                if fence is None:
+                    fence = token
+                elif token[0] == fence[0] and len(token) >= len(fence):
+                    fence = None
+                continue
+            if fence is None:
+                lines.append(line)
+        text = re.sub(r"`+[^`\n]*`+", "", "\n".join(lines))
+        targets = re.findall(r'!?\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^\s]+?)(?:\s+[\"\'][^\n]*?[\"\'])?\s*\)', text)
+        targets += re.findall(r"^\s*\[[^\]]+\]:\s*(<[^>]+>|[^\s]+)", text, re.M)
+        for target in targets:
+            local_link(target, path)
+
+
+def check_inventory():
+    inventory = read_json(ROOT / "data/raw-data-inventory.json")
+    files = unique(inventory["files"], "relative_path", "inventory JSON")
+    table = unique(read_csv(ROOT / "data/raw-data-inventory.csv"), "relative_path", "inventory CSV")
+    catalog = unique(read_csv(ROOT / "data/confirmed-data-catalog.csv"), "relative_path", "catalog")
+    require(len(files) == inventory["summary"]["csv_files"] == 55, "Expected the documented 55-file snapshot")
+    require(files.keys() == table.keys() == catalog.keys(), "Inventory/catalog file sets differ")
+    commit = inventory["source_commit"]
+    require(re.fullmatch(r"[0-9a-f]{40}", commit), "Invalid source commit")
+    require(inventory["source_unchanged_during_run"] is True, "Source changed during recorded inspection")
+    for flag in ("source_row_values_included", "license_or_semantic_quality_approved", "excel_attachment_coverage_confirmed"):
+        require(inventory[flag] is False, f"Unexpected provenance approval: {flag}")
+    columns = read_csv(ROOT / "data/raw-data-columns.csv")
+    by_file = collections.defaultdict(list)
+    for column in columns:
+        require(column["relative_path"] in files, "Column dictionary references an unknown file")
+        by_file[column["relative_path"]].append(column)
+    require(by_file.keys() == files.keys(), "Column dictionary is missing a file")
+    for relative, info in files.items():
+        pure = PurePosixPath(relative)
+        require(relative.startswith("prototype/data/") and ".." not in pure.parts and pure.suffix == ".csv",
+                "Invalid source-file path in metadata")
+        require(info["source_commit"] == commit and info["git_blob"] == info["worktree_git_blob"]
+                and info["head_blob_matches_worktree"] is True and info["status"] == "ok",
+                f"Inconsistent recorded source verification: {relative}")
+        require(re.fullmatch(r"[0-9a-f]{64}", info["sha256"]), f"Invalid SHA-256: {relative}")
+        for key, value in table[relative].items():
+            require(key in info and value == str(info[key]), f"Inventory CSV/JSON drift: {relative} ({key})")
+        row = catalog[relative]
+        for key in ("source_commit", "sha256", "data_rows", "column_count", "encoding", "byte_size"):
+            require(row[key] == str(info[key]), f"Catalog/inventory drift: {relative} ({key})")
+        require(row["metadata_hash_check"] in {"match", "not_recorded"}
+                and row["metadata_rows_check"] in {"match", "not_recorded"}, f"Manifest mismatch: {relative}")
+        require(row["license_review_status"] == "recorded_source_only; current_terms_not_rechecked",
+                f"License review status changed without updating the publication contract: {relative}")
+        require(row["archive_path"] == "csv/" + str(pure.relative_to("prototype/data")),
+                f"Archive mapping drift: {relative}")
+        for key, expected in {
+            "repository_file_url": f"https://github.com/OREUM-IT/jeju-tour/blob/{commit}/{relative}",
+            "snapshot_download_url": f"https://raw.githubusercontent.com/OREUM-IT/jeju-tour/{commit}/{relative}",
+        }.items():
+            require(unquote(row[key]) == expected, f"Unpinned or inconsistent source URL: {relative}")
+        headers = json.loads(info["column_names_json"])
+        group = sorted(by_file[relative], key=lambda c: int(c["column_index"]))
+        require(len(headers) == info["column_count"] and len(group) == info["max_columns"],
+                f"Column count drift: {relative}")
+        for index, column in enumerate(group, 1):
+            require(int(column["column_index"]) == index and column["original_column_name"] == headers[index - 1],
+                    f"Column identity drift: {relative}")
+            counts = {key: int(column[key]) for key in column if key.endswith("_count")}
+            require(all(n >= 0 for n in counts.values()) and int(column["data_rows"]) == info["data_rows"],
+                    f"Invalid column counts: {relative}")
+            require(counts["null_count"] + counts["nonempty_count"] == info["data_rows"]
+                    and counts["null_count"] == sum(counts[k] for k in (
+                        "blank_count", "nan_literal_count", "other_null_literal_count", "missing_field_count"))
+                    and counts["present_nonempty_count"] == sum(counts[k] for k in (
+                        "nonempty_count", "nan_literal_count", "other_null_literal_count")),
+                    f"Column missingness arithmetic drift: {relative}")
+    summary = inventory["summary"]
+    for field, expected in {"total_bytes": sum(f["byte_size"] for f in files.values()),
+                            "data_rows": sum(f["data_rows"] for f in files.values()),
+                            "column_records": len(columns),
+                            "encodings": dict(collections.Counter(f["encoding"] for f in files.values())),
+                            "statuses": dict(collections.Counter(f["status"] for f in files.values()))}.items():
+        require(summary[field] == expected, f"Inventory summary drift: {field}")
+    kinds = collections.Counter(row["data_kind"] for row in catalog.values())
+    require(kinds == {"source_file_snapshot": 37, "jeju_filtered_snapshot": 17, "derived_aggregate": 1},
+            "Snapshot source/transformation classification drift")
+    require(catalog["prototype/data/public-csv/temporal-demand/profiles.csv"]["data_kind"] == "derived_aggregate",
+            "Temporal profiles must remain labelled as a derived aggregate")
+
+
+def check_personas():
+    data = read_json(ROOT / "data/persona-prototypes.json")
+    themes = unique(data["themes"], "id", "persona themes")
+    scalars = unique(data["scalars"], "id", "persona scalar preferences")
+    prototypes = unique(data["prototypes"], "id", "persona prototypes")
+    require(data["version"] and data["provenance"] and themes and scalars and len(prototypes) >= 2,
+            "Persona identity or provenance is missing")
+    weights = data["weights"]
+    require(weights.keys() == {"themes", *scalars} and all(finite(v, 0, 1) for v in weights.values())
+            and math.isclose(sum(weights.values()), 1), "Persona weights are invalid")
+    for key, scalar in scalars.items():
+        require(scalar["weight"] == weights[key], "Scalar weight differs from the matching weights")
+    for prototype in prototypes.values():
+        require(len(prototype["themes"]) == len(themes) and all(finite(v, 0, 1) for v in prototype["themes"])
+                and math.isclose(sum(prototype["themes"]), 1)
+                and all(finite(prototype[key], 0, 1) for key in scalars), "Invalid persona feature vector")
+    thresholds = data["thresholds"]
+    require(finite(thresholds["min_coverage"], 0, 1) and finite(thresholds["mixed_margin"], 0, 100)
+            and finite(thresholds["min_score"], 0, 100), "Invalid persona matching thresholds")
+    exported = unique(read_csv(ROOT / "reports/assets/persona-prototypes.csv"), "id", "persona CSV")
+    require(exported.keys() == prototypes.keys(), "Persona CSV/definition identities differ")
+    for key, prototype in prototypes.items():
+        row = exported[key]
+        require(row["label"] == prototype["label"] and row["provenance"] == "manually_authored_not_learned",
+                "Persona CSV provenance or labels drifted")
+        for feature, value in [*zip(themes, prototype["themes"]), *((s, prototype[s]) for s in scalars)]:
+            require(math.isclose(float(row[feature]), value), "Persona CSV/definition feature drift")
+    projection = read_json(ROOT / "reports/assets/persona-projection.json")
+    dimensions = len(themes) + len(scalars)
+    require(len(projection["mean"]) == dimensions and len(projection["components"]) == 2
+            and all(len(row) == dimensions for row in projection["components"])
+            and len(projection["points"]) == len(prototypes) and all(len(row) == 2 for row in projection["points"])
+            and len(projection["variance_ratio"]) == 2, "Persona projection dimensions drifted")
+    require(all(finite(v) for row in [projection["mean"], *projection["components"], *projection["points"]] for v in row)
+            and all(finite(v, 0, 1) for v in projection["variance_ratio"])
+            and sum(projection["variance_ratio"]) <= 1 + 1e-9, "Invalid persona projection numbers")
+
+
+def check_model_registry():
+    data = read_json(ROOT / "data/ai-agent-models.json")
+    require(data["schemaVersion"] == "1.0" and data["registryVersion"], "Missing model registry version")
+    date.fromisoformat(data["updatedOn"])
+    require(data["isRuntimeConfiguration"] is False and data["activatesProductionChanges"] is False,
+            "The documentation registry must not activate runtime changes")
+    local_link(data["documentation"], ROOT / "registry-root.md")
+    groups = {key: unique(data[key], "key", key) for key in
+              ("sources", "hosts", "engines", "models", "methods", "toolConnections")}
+    require(all(groups.values()), "Model registry sections must not be empty")
+    kinds = {"local_artifact_observed", "reference_source_observed", "official_source_reviewed",
+             "user_reported", "unread_reference"}
+    for source in groups["sources"].values():
+        require(source["kind"] in kinds, "Unknown source evidence kind")
+        for path in source.get("paths", []):
+            local_link(path, ROOT / "registry-root.md")
+        if "commit" in source:
+            require(re.fullmatch(r"[0-9a-f]{40}", source["commit"])
+                    and source["commit"] in source["url"], "Unpinned registry source")
+
+    def references(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "sourceRefs":
+                    require(isinstance(item, list) and item and all(ref in groups["sources"] for ref in item),
+                            "Unresolved source reference in registry")
+                elif key in {"hostRef", "applicationHostRef", "engineRef"}:
+                    require(item in groups["engines" if key == "engineRef" else "hosts"],
+                            "Unresolved engine/host reference in registry")
+                references(item)
+        elif isinstance(value, list):
+            for item in value:
+                references(item)
+    references(data)
+    for model in groups["models"].values():
+        require(model["engineRef"] in groups["engines"] and model["role"]
+                and isinstance(model["role"], list) and model["status"] and model["sourceRefs"]
+                and model["inferenceValidation"] and model["qualityValidation"] and model["nextTests"],
+                "Model role, evidence or separate validation status is missing")
+        require(model["runtimeResolvedModelId"] is None or isinstance(model["runtimeResolvedModelId"], str),
+                "Unknown model IDs must be null, not an invented structure")
+    roles = unique(data["unselectedModelRoles"], "role", "unselected model roles")
+    require(all(role["selectedModelId"] is None for role in roles.values()), "An unselected role contains a selected model")
+    persona = read_json(ROOT / "data/persona-prototypes.json")
+    for method in groups["methods"].values():
+        if "prototypeCount" in method:
+            require(method["prototypeCount"] == len(persona["prototypes"]) and method["version"] == persona["version"],
+                    "Model registry/persona version drift")
+    dependencies = read_json(ROOT / "services/jeju-mcp/package.json")["dependencies"]
+    for connection in groups["toolConnections"].values():
+        require(connection["isModel"] is False, "MCP connections must not be classified as models")
+        if "sdkVersion" in connection:
+            require(connection["sdkVersion"] == dependencies["@modelcontextprotocol/sdk"]
+                    and connection["schemaLibraryVersion"] == dependencies["zod"], "Registry/MCP dependency version drift")
+
+
+def forbidden_name(name):
+    path = PurePosixPath(name.replace("\\", "/"))
+    return (any(part in {".git", ".local", "node_modules", "__pycache__", ".aws", ".ssh"} for part in path.parts)
+            or any(part == ".env" or part.startswith(".env.") for part in path.parts)
+            or path.suffix.lower() in {".pyc", ".pem", ".p12", ".pfx", ".key"}
+            or path.name in {"id_rsa", "id_ed25519", ".netrc"})
+
+
+def check_deliverables():
+    tracked = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], check=True,
+                             capture_output=True).stdout.decode().split("\0")
+    require(LOCAL_ONLY not in tracked, "Raw snapshot ZIP is local-only and must not be committed")
+    for name in filter(None, tracked):
+        require(not forbidden_name(name), f"Private/local filename in Git: {name}")
+    archives = [ROOT / "reports/jeju-personal-tour-agent-design.docx", ROOT / "reports/ollama-tunnel-starter.zip"]
+    for path in archives:
+        with ZipFile(path) as archive:
+            names = archive.namelist()
+            require(len(names) == len(set(names)), f"Duplicate archive member: {path.name}")
+            require(sum(item.file_size for item in archive.infolist()) <= 100 * 1024 * 1024,
+                    f"Unexpected expanded archive size: {path.name}")
+            for item in archive.infolist():
+                name = item.filename
+                require(not name.startswith(("/", "\\")) and ".." not in PurePosixPath(name).parts
+                        and "\\" not in name and not forbidden_name(name)
+                        and not stat.S_ISLNK(item.external_attr >> 16) and not (item.flag_bits & 1),
+                        f"Unsafe or encrypted archive member: {path.name}")
+            require(archive.testzip() is None, f"Archive CRC failure: {path.name}")
+            if path.suffix == ".docx":
+                require({"[Content_Types].xml", "_rels/.rels", "word/document.xml", "word/styles.xml"} <= set(names),
+                        "Word report is missing required package parts")
+                for name in names:
+                    if name.endswith((".xml", ".rels")):
+                        ET.fromstring(archive.read(name))
+            else:
+                expected = {"README.md", ".gitignore", "gateway.mjs", "gateway.test.mjs", "configure.mjs", "check.mjs"}
+                require(set(names) == {"ollama-tunnel/" + name for name in expected}, "Starter ZIP contents drifted")
+                for name in expected:
+                    require(archive.read("ollama-tunnel/" + name) == (ROOT / "examples/ollama-tunnel" / name).read_bytes(),
+                            f"Starter ZIP differs from example source: {name}")
+
+
+def main():
+    checks = [
+        ("JSON syntax", lambda: [read_json(path) for path in sorted((ROOT / "data").glob("*.json"))]),
+        ("document links", check_links), ("55-file metadata consistency", check_inventory),
+        ("persona definitions and exported metadata", check_personas),
+        ("model registry references and status structure", check_model_registry),
+        ("publication boundaries and archives", check_deliverables),
+    ]
+    failed = False
+    for label, check in checks:
+        try:
+            check()
+            print(f"PASS: {label}")
+        except CheckError as error:
+            failed = True
+            print(f"FAIL: {label}: {error}", file=sys.stderr)
+        except (OSError, ValueError, KeyError, TypeError, IndexError, BadZipFile, ET.ParseError, subprocess.SubprocessError):
+            failed = True
+            print(f"FAIL: {label}: missing, malformed or inconsistent artifact; no file contents printed", file=sys.stderr)
+    print("Offline checks only; raw source CSVs, network services and optional local ZIP were not accessed.")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
