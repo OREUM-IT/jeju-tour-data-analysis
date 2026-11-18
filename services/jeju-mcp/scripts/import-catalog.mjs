@@ -115,7 +115,7 @@ async function git(cwd, args, encoding = 'utf8') {
   return stdout;
 }
 
-function repositoryIdentity(remote) {
+export function repositoryIdentity(remote) {
   // Parse only to validate identity; never include the remote (possibly credential-bearing) in errors/logs.
   const value = remote.trim();
   try {

@@ -1,13 +1,14 @@
 # 제주도 맞춤 개인 관광 페르소나(테마) 추천 AI Agent
 
-관광 설문을 여행 선호도와 실행 제약으로 변환하고, 그 근거를 설명하는 개인화 추천 Agent의 기획 저장소입니다. 사용자가 지정한 논문 **2504.09277의 LAG 방법**을 주 연구 방향으로 검토합니다. LAG를 RAG의 오타나 동의어로 해석하지 않습니다.
+관광 설문을 여행 선호도와 실행 제약으로 변환하고, 그 근거를 설명하는 개인화 추천 Agent의 기획 저장소입니다. 처음 지정된 논문 **2504.09277은 SynthTRIPs**(관광 추천기 평가용 합성 질의 생성 틀)로 확인되어 평가셋 설계에 쓰고, **LAG는 2508.05509 Logic-Augmented Generation**을 Agent 추론 비교 실험으로 검토합니다(2026-11-18 사용자 결정, [19 문서](docs/19-agent-step2-data-foundation.md)). LAG를 RAG의 오타나 동의어로 해석하지 않습니다.
 
 ## 현재 상태
 
+- **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. 다음은 SynthTRIPs 방식 평가셋(3단계)입니다.
 - **다른 Claude Code 세션의 시작점:** [CLAUDE.md](CLAUDE.md) → [상세 인수인계·재개 절차](docs/18-claude-code-handoff.md) → [전체 AI AGENT MODEL 목록](docs/17-ai-agent-model-registry.md). 모델별 구현·실행·평가 상태는 [JSON 레지스트리](data/ai-agent-models.json)에서도 관리합니다.
 - 상세 설계와 읽기 전용 MCP 초기 구현 단계입니다. 장소 검색·상세·조건 검사 3개 도구를 로컬 검증했습니다. 전체 추천 Agent·학습 모델·운영 통합은 후속 작업입니다.
 - 기존 서비스: <https://jeju-tour-six.vercel.app/>. 관련 OREUM-IT 저장소의 소스 검토 결과는 아래 문서에 기록합니다.
-- 논문 원문, 별도 PDF 및 제주데이터허브 목록 엑셀은 아직 내용 확인을 완료하지 못했습니다. 실제 데이터셋과 논문의 방법·성능을 추정해서 기재하지 않습니다.
+- 두 논문의 본문 세부, 별도 PDF 및 제주데이터허브 목록 엑셀은 아직 내용 확인을 완료하지 못했습니다. 실제 데이터셋과 논문의 방법·성능을 추정해서 기재하지 않습니다.
 - 문항·점수·일정·평가 목표는 검증 전 제안입니다. 기존 서비스에서 확인한 사실과 새 제안을 구분합니다.
 
 ## 문서 읽는 순서
@@ -30,6 +31,7 @@
 16. [Hugging Face 조직·계정·CI 설정과 검증 상태](docs/16-huggingface-organization-and-ci.md)
 17. [AI AGENT MODEL 전체 목록·역할·선정 기준·실행 상태](docs/17-ai-agent-model-registry.md)
 18. [Claude Code 상세 인수인계·재현·다음 작업](docs/18-claude-code-handoff.md)
+19. [AI Agent 1·2단계: 구축 가능성 진단·근거 등급 카탈로그·테마 매핑](docs/19-agent-step2-data-foundation.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 
@@ -48,7 +50,8 @@ Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·�
 - [Word 보고서](reports/jeju-personal-tour-agent-design.docx)
 - [PDF 열람본](reports/jeju-personal-tour-agent-design.pdf)
 - [Windows·macOS Ollama 연결 시험 안내](examples/ollama-tunnel/README.md) · [인증 Gateway 예제 ZIP](reports/ollama-tunnel-starter.zip): 모의 서버 테스트를 갖춘 연결 시험용 예제. 운영 Agent·MCP 서버 구현과 구분.
-- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트 32개 테스트와 로컬 SDK 연결 확인. 기존 자료 7,561건 가져오기 검증. 공개 배포는 미완료.
+- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트·Agent 카탈로그 41개 테스트와 로컬 SDK 연결 확인. 기존 자료 7,561건 가져오기 검증. 공개 배포는 미완료.
+- [Agent 카탈로그 커버리지](reports/agent-catalog-coverage.json): 앱 장소 981곳의 속성·근거 등급·테마별 개수만 담은 집계. 카탈로그 본체는 `.local` 전용입니다.
 - [확정 목록 CSV](data/confirmed-data-catalog.csv) · [실측 인벤토리 CSV](data/raw-data-inventory.csv) · [컬럼 사전 CSV](data/raw-data-columns.csv): 원본 CSV 파일은 공개 PR에 포함하지 않습니다.
 - [Codex Hugging Face 설정](.codex/config.toml) · [Claude Code 설정](.mcp.json): 공개 모델·데이터셋·논문 조회용. 현재 클라우드 도메인 허용 초안의 적용 및 실제 연결 검증은 남아 있습니다.
 - 시각화 재생성: `python3 scripts/build_persona_assets.py` (`numpy`, `matplotlib`, `Noto Sans CJK` 폰트 필요)

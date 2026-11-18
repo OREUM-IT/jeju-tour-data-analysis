@@ -16,7 +16,7 @@
 | HF 계정·조직 | 사용자가 다른 계정으로 로그인했다고 보고. 기본 조직 ID 제안은 `oreumit` | 실제 사용자명·조직 ID 가용성·관리자 권한 미확인, 조직 생성 미실행 |
 | 도메인 | 사용자 보고: `oreumit.com`의 Vercel Valid Configuration, Cloudflare NS `dilbert.ns.cloudflare.com`·`irma.ns.cloudflare.com` 저장 | 계정 화면 직접 조회, 실제 DNS Active·전파·TLS·웹 alias 목록 미확인 |
 | 모델 | 기존 앱 코드의 공급자 경로와 후보 모델을 문서화 | 이 작업에서 Ollama 적재·LLM 추론·성능·비용 실측 없음 |
-| 연구 원자료 | 논문 식별자 `2504.09277`, 사용자 지시의 LAG 방법 | 논문 본문·별도 PDF·목록 Excel 1,259항목의 원본 미확보 |
+| 연구 원자료 | `2504.09277` = SynthTRIPs(평가셋 생성 틀), LAG = `2508.05509`(2026-11-18 사용자 결정, [19 문서](19-agent-step2-data-foundation.md)) | 두 논문 본문 세부·별도 PDF·목록 Excel 1,259항목의 원본 미확보 |
 
 55개 CSV는 7,561건 MCP 카탈로그와 다른 산출물이다. CSV 전체를 MCP에 적재한 상태가 아니다. 210,532는 고유 장소 수가 아니며 파생 수요 통계도 관광객 선호 정답이 아니다. `/readyz`의 `productionReady:false`는 실제 자료 모드에서도 유지한다.
 
@@ -189,6 +189,8 @@ python3 scripts/build_data_source_catalog.py --source /workspace/scratch/referen
 출력 `reports/jeju-data-snapshot-bundle.zip`은 원래 CSV 바이트와 출처를 포함하는 **로컬 재생성 경로**이며 공개 PR에서 제외한다. 라이선스 공란 8개와 개별 조건 미확인 2개를 비롯한 재배포 조건을 해결하기 전에는 공개 첨부나 HF 업로드로 확대하지 않는다. 빌더가 ZIP을 만들었다는 사실은 재배포 승인이 아니다. 별도 원 Excel이나 누락된 파생 통계의 원천 26 CSV가 생겼다고 가정하지 않는다. 검사 스크립트는 원본을 수정하지 않는다.
 
 ## 8. 다음 작업 순서와 완료 기준
+
+추가(2026-11-18): Agent 구현은 [19 문서](19-agent-step2-data-foundation.md)의 단계적 절차를 따른다. 1·2단계(진단·근거 등급 카탈로그)는 완료했고 다음은 3단계 평가셋이다. 아래 연결·계정 작업은 그와 병행할 수 있다.
 
 | 순서 | 할 일 | 완료 기준 |
 |---|---|---|
