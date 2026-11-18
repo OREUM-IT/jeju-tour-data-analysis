@@ -1,6 +1,6 @@
 # Claude Code 시작 안내
 
-이 저장소는 제주 관광 Agent의 설계·자료 검토·읽기 전용 MCP 초기 구현이다. 먼저 [인수인계](docs/18-claude-code-handoff.md)를 읽고 현재 Git 상태와 PR head를 확인한다. 모델의 역할·근거·미검증 상태는 [모델 레지스트리](docs/17-ai-agent-model-registry.md)와 [JSON](data/ai-agent-models.json)을 따른다.
+이 저장소는 제주 관광 Agent의 설계·자료 검토·읽기 전용 MCP 초기 구현이다. 먼저 [인수인계](docs/18-claude-code-handoff.md) 0절(최신 상태)·3절(Git·PR 방식)·11절(다음 작업)을 읽고 현재 Git 상태와 열린 PR을 확인한다. 모델의 역할·근거·미검증 상태는 [모델 레지스트리](docs/17-ai-agent-model-registry.md)와 [JSON](data/ai-agent-models.json)을 따른다.
 
 - 기존 작업을 보존한다. 분석 저장소의 전체 작업 PR과 그 본문을 이어서 관리하고, 이미 승인된 브라우저 조작·무료 HF 조직 생성·MCP 연결·CI·PR 작업에 다시 포괄 승인을 묻지 않는다. 실행 도구·인증이 없으면 필요한 접근만 구체적으로 설명한다.
 - `OREUM-IT/jeju-tour`와 `jeju-tour-flutter`는 고정 커밋의 읽기 전용 참고 대상이다. 원본 앱·운영 배포·DB·DNS·참고 저장소에 임의 수정, push, 삭제를 하지 않는다. 분석 저장소의 PR 작업과 구분한다.

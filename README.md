@@ -4,7 +4,7 @@
 
 ## 현재 상태
 
-- **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. 다음은 SynthTRIPs 방식 평가셋(3단계)입니다.
+- **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. 다음은 SynthTRIPs 방식 평가셋(3단계)이며, 작업 명세와 새 Claude Code 세션 시작 프롬프트는 [인수인계 11·12절](docs/18-claude-code-handoff.md)에 있습니다.
 - **시각적 Agent 빌더:** 사용자 결정으로 [Langflow](docs/20-langflow-agent-builder.md)를 씁니다(Flowise는 2026-08-31 지원 종료). Langflow 1.13.3에서 jeju-mcp 도구 3개 발견·호출과 [시작 흐름](services/langflow/jeju-tour-agent.flow.json) 가져오기·MCP 노드 빌드를 확인했습니다. 실제 모델로 Agent를 돌리는 검증은 모델 키가 필요해 남아 있습니다.
 - **다른 Claude Code 세션의 시작점:** [CLAUDE.md](CLAUDE.md) → [상세 인수인계·재개 절차](docs/18-claude-code-handoff.md) → [전체 AI AGENT MODEL 목록](docs/17-ai-agent-model-registry.md). 모델별 구현·실행·평가 상태는 [JSON 레지스트리](data/ai-agent-models.json)에서도 관리합니다.
 - 상세 설계와 읽기 전용 MCP 초기 구현 단계입니다. 장소 검색·상세·조건 검사 3개 도구를 로컬 검증했습니다. 전체 추천 Agent·학습 모델·운영 통합은 후속 작업입니다.
