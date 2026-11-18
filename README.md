@@ -56,7 +56,7 @@ Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·�
 - [Word 보고서](reports/jeju-personal-tour-agent-design.docx)
 - [PDF 열람본](reports/jeju-personal-tour-agent-design.pdf)
 - [Windows·macOS Ollama 연결 시험 안내](examples/ollama-tunnel/README.md) · [인증 Gateway 예제 ZIP](reports/ollama-tunnel-starter.zip): 모의 서버 테스트를 갖춘 연결 시험용 예제. 운영 Agent·MCP 서버 구현과 구분.
-- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트·Agent 카탈로그·평가셋 60개 테스트와 로컬 SDK 연결 확인. 기존 자료 7,561건 가져오기 검증. 공개 배포는 미완료.
+- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트·Agent 카탈로그·평가셋 61개 테스트와 로컬 SDK 연결 확인. 기존 자료 7,561건 가져오기 검증. 공개 배포는 미완료.
 - [Agent 카탈로그 커버리지](reports/agent-catalog-coverage.json): 앱 장소 981곳의 속성·근거 등급·테마별 개수만 담은 집계. 카탈로그 본체는 `.local` 전용입니다.
 - [평가셋 집계](reports/evaluation-set-summary.json): 96문항의 난이도·기대 동작·필수 조건 판정 개수와 정답 해시만 담은 집계. 질의와 정답 후보는 `.local` 전용입니다.
 - [확정 목록 CSV](data/confirmed-data-catalog.csv) · [실측 인벤토리 CSV](data/raw-data-inventory.csv) · [컬럼 사전 CSV](data/raw-data-columns.csv): 원본 CSV 파일은 공개 PR에 포함하지 않습니다.

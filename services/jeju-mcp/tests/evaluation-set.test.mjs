@@ -9,8 +9,8 @@ import { promisify } from 'node:util';
 import { BASIS_POLICY, SOURCES, themeWeights } from '../src/agent-catalog.mjs';
 import { canonicalJson, canonicalSha256, createRng } from '../src/evaluation-rng.mjs';
 import {
-  CONDITION_KINDS, EVALUATION_QUERIES_KIND, EXPECTED_ACTIONS, PLACE_ID_PREFIX, REQUIRED_HARD_CASES, buildEvaluationSet, checkQueryText,
-  classifyDifficulty, computeGold, evaluationBriefs, evaluationInstant, expectedAction, personaVector, primaryThemes, requirementEvidence,
+  CONDITION_KINDS, EVALUATION_QUERIES_KIND, EXPECTED_ACTIONS, PLACE_ID_PREFIX, REQUIRED_HARD_CASES, TEXT_CHECKS, buildEvaluationSet, checkQueryText,
+  classifyDifficulty, computeGold, createQueryChecker, evaluationBriefs, evaluationInstant, expectedAction, personaVector, primaryThemes, requirementEvidence,
   summarizeEvaluationSet, tripConflict, validateEvaluationSet, validateEvaluationSpec,
 } from '../src/evaluation-set.mjs';
 import { aggregateScores, createScorer, validateResponse } from '../src/evaluation-scoring.mjs';
@@ -137,6 +137,19 @@ test('committed spec is valid and drifting versions, precedence, hard cases or s
   assert.throws(broken((s) => { s.blueprint.itemsPerPersona = 3; }), /number of slots/u);
   assert.throws(broken((s) => { s.conditions.find((c) => c.id === 'open_at').values = ['25:00']; }), /HH:MM/u);
   assert.throws(broken((s) => { s.noticeTopics.pop(); }), /every notice topic/u);
+  // The method reference is pinned to a full commit, and the text rules and cue words cover every value they are used for.
+  assert.throws(broken((s) => { s.methodReference.commit = '9562f53'; }), /methodReference/u);
+  assert.throws(broken((s) => { delete s.methodReference; }), /methodReference/u);
+  assert.throws(broken((s) => { s.methodReference.reviewedOn = '2026-13-01'; }), /calendar date|YYYY-MM-DD/u);
+  assert.throws(broken((s) => { s.queryAuthoring.textRules.maxLength = 401; }), /textRules needs/u);
+  assert.throws(broken((s) => { s.queryAuthoring.textRules.candidateNameMinLength = 1; }), /textRules needs/u);
+  assert.throws(broken((s) => { s.queryAuthoring.textRules.checks.reverse(); }), /must document, in order/u);
+  assert.throws(broken((s) => { delete s.queryAuthoring.cues.zone.JC; }), /cues\.zone must list/u);
+  assert.throws(broken((s) => { s.queryAuthoring.cues.theme.coast = []; }), /cues\.theme must list/u);
+  assert.throws(broken((s) => { s.queryAuthoring.cues.wheelchair = ['wheelchair']; }), /cues\.wheelchair must be a list of Korean/u);
+  assert.throws(broken((s) => { s.queryAuthoring.cues.extra = ['추가']; }), /exactly the known cue groups/u);
+  assert.throws(broken((s) => { s.queryAuthoring.cues.zone.S = ['서귀포', '중문']; }), /also matches another value/u);
+  assert.deepEqual(spec.queryAuthoring.textRules.checks.map((row) => row.id), TEXT_CHECKS);
 });
 
 test('a hard requirement is judged only from verified evidence that is valid when the requirement applies', () => {
@@ -366,6 +379,7 @@ test('date conflicts are computed from the stated dates and ask before recommend
 
 test('the generated set is reproducible from its seed and covers every persona, slot and mandatory hard case', () => {
   const set = build();
+  const check = createQueryChecker(inputs());
   assert.equal(JSON.stringify(build()), JSON.stringify(set));
   // Pinned hashes of the synthetic fixture build. They change only when the rules, the spec or this fixture change;
   // update them together with such a change. Anything else (clock, process, platform) must leave them untouched.
@@ -400,7 +414,8 @@ test('the generated set is reproducible from its seed and covers every persona, 
     assert.ok(item.gold.forbidden.every((entry) => !item.gold.allowedIds.includes(entry.id)));
     assert.ok(item.gold.ruleTrace.length >= 3 && item.facts.allowed === item.gold.allowedIds.length);
     assert.equal(item.query.source, 'template');
-    assert.deepEqual(checkQueryText(item.query.template, item.brief), [], `${item.id} template breaks the text rules`);
+    assert.deepEqual(check(item.query.template, item), [], `${item.id} template breaks the text rules`);
+    assert.ok(item.query.template.length <= spec.queryAuthoring.textRules.maxLength);
   }
   const excludedItem = set.items.find((item) => item.hardCase === 'disallowed_id');
   assert.ok(excludedItem.gold.forbidden.length >= 1 && excludedItem.gold.forbidden.every((entry) => entry.reason === 'user_excluded'));
@@ -497,7 +512,11 @@ test('summary is aggregate-only: counts, identifiers and hashes with no place na
   assert.equal(summary.gold.itemsWithVerifiedPass, 0);
   assert.equal(summary.contentSha256.gold, set.contentSha256.gold);
   assert.equal(summary.contentSha256.queries, null);
-  assert.deepEqual(summary.queries, { mode: 'template_only', promptVersion: spec.queryAuthoring.promptVersion, authored: 0, template: set.items.length, authorKind: null, authoringRecord: 'none' });
+  const templateLengths = set.items.map((item) => item.query.template.length).sort((a, b) => a - b);
+  assert.deepEqual(summary.queries, { mode: 'template_only', promptVersion: spec.queryAuthoring.promptVersion, authored: 0, template: set.items.length, authorKind: null, authoringRecord: 'none',
+    textRules: { minLength: 10, maxLength: 200, checks: [...TEXT_CHECKS] },
+    textLength: { authored: { count: 0, min: null, median: null, max: null },
+      template: { count: 96, min: templateLengths[0], median: (templateLengths[47] + templateLengths[48]) / 2, max: templateLengths[95] } } });
   for (const requirement of Object.values(summary.gold.hardRequirements)) assert.equal(requirement.candidateVerdicts.pass + requirement.candidateVerdicts.fail, 0);
   // The median is the true median: the mean of the two middle values for an even count.
   const bySize = [...set.items].sort((a, b) => a.gold.relevantIds.length - b.gold.relevantIds.length);
@@ -512,6 +531,7 @@ test('writer briefs carry stated conditions only, and authored queries attach on
   const set = build();
   const briefs = evaluationBriefs(set, spec);
   assert.equal(briefs.briefs.length, set.items.length);
+  assert.deepEqual([briefs.textRules, briefs.cues], [spec.queryAuthoring.textRules, spec.queryAuthoring.cues], 'the writer is shown the rules the text is checked against');
   const serialized = JSON.stringify(briefs);
   for (const brief of briefs.briefs) {
     assert.deepEqual(Object.keys(brief).sort(), ['briefSha256', 'id', 'namedPlaces', 'notes', 'persona', 'statements', 'template', 'today']);
@@ -523,7 +543,7 @@ test('writer briefs carry stated conditions only, and authored queries attach on
   }
   const target = set.items.find((item) => item.hardCase === 'disallowed_id');
   const other = set.items.find((item) => item.hardCase === 'date_conflict');
-  const text = `${target.brief.namedPlaces.join(', ')}는 이미 다녀와서 빼고 추천해 주세요.`;
+  const text = `${target.query.template} 부탁드려요.`;
   const document = (queries, author = {}) => ({ schemaVersion: '1.0', kind: EVALUATION_QUERIES_KIND,
     author: { kind: 'in_session_llm', model: 'test-model', promptVersion: spec.queryAuthoring.promptVersion, ...author }, queries });
   const entry = (item, value) => ({ id: item.id, briefSha256: item.brief.sha256, text: value });
@@ -535,10 +555,13 @@ test('writer briefs carry stated conditions only, and authored queries attach on
   const reworded = build({ authoredQueries: document([entry(target, `${text} 부탁드려요.`)]) });
   assert.notEqual(reworded.contentSha256.queries, authored.contentSha256.queries, 'the queries hash must follow the text');
   assert.equal(reworded.contentSha256.gold, set.contentSha256.gold);
-  assert.deepEqual(authored.queryAuthoring, { mode: 'authored', promptVersion: spec.queryAuthoring.promptVersion, authored: 1, template: set.items.length - 1,
+  assert.deepEqual(authored.queryAuthoring, { mode: 'authored', promptVersion: spec.queryAuthoring.promptVersion,
+    textRules: { minLength: 10, maxLength: 200, checks: [...TEXT_CHECKS] }, authored: 1, template: set.items.length - 1,
     author: { kind: 'in_session_llm', model: 'test-model', promptVersion: spec.queryAuthoring.promptVersion, seed: null, samplingSeed: null, authoredOn: null, review: null } });
   const summary = summarizeEvaluationSet(authored);
-  assert.deepEqual(summary.queries, { mode: 'authored', promptVersion: spec.queryAuthoring.promptVersion, authored: 1, template: set.items.length - 1, authorKind: 'in_session_llm', authoringRecord: 'local_only' });
+  assert.deepEqual([summary.queries.mode, summary.queries.authored, summary.queries.template, summary.queries.authorKind, summary.queries.authoringRecord],
+    ['authored', 1, set.items.length - 1, 'in_session_llm', 'local_only']);
+  assert.deepEqual(summary.queries.textLength.authored, { count: 1, min: text.length, median: text.length, max: text.length });
   assert.equal(JSON.stringify(summary).includes('test-model'), false, 'the committed summary must not name the authoring model');
   assert.equal(build({ authoredQueries: document([]) }).queryAuthoring.mode, 'template_only');
   const rejects = (queries, pattern, author) => assert.throws(() => build({ authoredQueries: document(queries, author) }), pattern);
@@ -548,7 +571,7 @@ test('writer briefs carry stated conditions only, and authored queries attach on
   rejects([entry(target, '그곳은 빼고 추천해 주세요. 다른 곳이 좋아요.')], /name every place/u);
   rejects([entry(other, 'kk-12345 장소를 일정에 넣어 추천해 주세요.')], /place ID/u);
   rejects([entry(other, 'Please recommend places.')], /Korean/u);
-  rejects([entry(other, '짧다')], /10 to 400/u);
+  rejects([entry(other, '짧다')], /10 to 200/u);
   rejects([entry(other, '첫 줄입니다.\n둘째 줄을 추천해 주세요.')], /single line/u);
   rejects([entry(other, '다음 주에 제주에 가려고 합니다. 바다를 좋아해요.')], /ask for something/u);
   rejects([entry(target, text)], /prompt version/u, { promptVersion: 'old-prompt' });
@@ -558,7 +581,140 @@ test('writer briefs carry stated conditions only, and authored queries attach on
   rejects([entry(target, text)], /unsupported fields/u, { mode: 'template_only' });
   rejects([entry(target, text)], /seed or review/u, { samplingSeed: 'x' });
   assert.throws(() => build({ authoredQueries: { author: { kind: 'human', model: 'none', promptVersion: spec.queryAuthoring.promptVersion }, queries: [] } }), /schemaVersion "1\.0" and kind/u);
-  assert.deepEqual(checkQueryText('바다가 보이는 조용한 곳을 추천해 주세요.', { namedPlaces: [] }), []);
+  assert.deepEqual(checkQueryText('바다가 보이는 조용한 곳을 추천해 주세요.', { namedPlaces: [] }, spec.queryAuthoring.textRules), []);
+  // The upper limit is inclusive: 200 characters pass and 201 do not.
+  const padded = (length) => `${'가'.repeat(length - 9)} 추천해 주세요.`;
+  assert.deepEqual([padded(200).length, checkQueryText(padded(200), { namedPlaces: [] }, spec.queryAuthoring.textRules)], [200, []]);
+  assert.deepEqual(checkQueryText(padded(201), { namedPlaces: [] }, spec.queryAuthoring.textRules), ['query text must be 10 to 200 characters']);
+  assert.deepEqual([padded(10).length, checkQueryText(padded(10), { namedPlaces: [] }, spec.queryAuthoring.textRules)], [10, []]);
+  assert.deepEqual(checkQueryText('꼭 추천해 주세요', { namedPlaces: [] }, spec.queryAuthoring.textRules), ['query text must be 10 to 200 characters']);
+});
+
+test('a query must state every condition of its item, nothing the item does not state, and never name a candidate place', () => {
+  const set = build();
+  const check = createQueryChecker(inputs());
+  const find = (predicate) => { const item = set.items.find(predicate); assert.ok(item, 'the fixture set lacks an item this test needs'); return item; };
+  const has = (type) => (item) => item.conditions.some((condition) => condition.type === type);
+  const value = (item, type) => item.conditions.find((condition) => condition.type === type).value;
+  const missing = (label) => new RegExp(`does not mention the stated condition ${label}`, 'u');
+  const unstated = (label) => new RegExp(`mentions ${label}, which the item does not state`, 'u');
+  const problems = (item, textValue) => check(textValue, item).join('; ');
+
+  // A plain zone + theme item: the template states both; losing either, or adding a condition of another kind, is refused.
+  const plain = find((item) => item.slot === 'C1');
+  const zoneLabel = spec.zones.find((zone) => zone.id === plain.zone).label;
+  assert.deepEqual(check(plain.query.template, plain), []);
+  assert.match(problems(plain, plain.query.template.replace(zoneLabel, '제주')), missing('zone'));
+  const otherZone = spec.zones.find((zone) => zone.id !== plain.zone && zone.id !== 'JC').label;
+  assert.match(problems(plain, plain.query.template.replace(zoneLabel, otherZone)), /does not mention the stated condition zone.*mentions zone:/u);
+  assert.match(problems(plain, `${plain.query.template} 그리고 맛있는 곳이면 좋겠어요.`.replace(/\S+ 테마로/u, '아무 테마로')), missing('theme'));
+  for (const [extra, label] of [
+    ['휠체어로 이용할 수 있어야 합니다.', 'wheelchair'], ['실내였으면 합니다.', 'indoor_required'], ['비가 올 것 같아요.', 'indoor_required:rain'],
+    ['사람이 붐비는 곳은 싫어요.', 'crowd_avoid'], ['오후 3시에 가려고 합니다.', 'open_at'], ['예산은 넉넉하지 않아요.', 'budget_cap'],
+    ['하루 5만 원 안에서요.', 'budget_cap'], ['2박 3일 일정입니다.', 'trip_dates:nights'], ['12월 9일에 갑니다.', 'a calendar date'],
+    ['버스로만 다닙니다.', 'transport:public_transit'], ['부모님을 모시고 갑니다.', 'companion:parents'], ['거의 걷지 않으려고 합니다.', 'walk:minimal'],
+    ['거기는 이미 가 봤어요.', 'exclude_places'],
+  ]) assert.match(problems(plain, `${plain.query.template} ${extra}`), unstated(label), extra);
+  // Durations and words that merely contain a cue syllable are not conditions.
+  assert.deepEqual(check(`${plain.query.template} 2시간쯤 머물 생각입니다.`, plain), []);
+
+  // Values are checked, not just the kind of condition: another time, amount, date or transport does not count.
+  const timed = find((item) => has('open_at')(item) && value(item, 'open_at') === '14:00');
+  assert.deepEqual(check(timed.query.template, timed), []);
+  assert.deepEqual(check(timed.query.template.replace('오후 2시', '14시'), timed), []);
+  for (const wrong of ['오전 2시', '오후 12시', '오후 2시 30분', '오후 2시 반', '2시']) {
+    assert.match(problems(timed, timed.query.template.replace('오후 2시', wrong)), missing('open_at'), wrong);
+  }
+  const morning = find((item) => has('open_at')(item) && value(item, 'open_at') === '10:00');
+  assert.deepEqual(check(morning.query.template.replace('오전 10시', '아침 10시'), morning), []);
+  for (const wrong of ['오후 10시', '밤 10시', '10시', '오전 10시 30분']) {
+    assert.match(problems(morning, morning.query.template.replace('오전 10시', wrong)), missing('open_at'), wrong);
+  }
+  const half = find((item) => has('open_at')(item) && value(item, 'open_at') === '21:30');
+  assert.deepEqual(check(half.query.template.replace('오후 9시 30분', '밤 9시 반'), half), []);
+  assert.match(problems(half, half.query.template.replace('오후 9시 30분', '오후 9시')), missing('open_at'));
+  const capped = find(has('budget_cap'));
+  const amount = value(capped, 'budget_cap');
+  assert.deepEqual(check(capped.query.template.replace(`${amount / 10000}만 원`, `${amount.toLocaleString('en-US')}원`), capped), []);
+  assert.match(problems(capped, capped.query.template.replace(`${amount / 10000}만 원`, `1${amount / 10000}만 원`)), missing('budget_cap'));
+  const rainy = find(has('indoor_required'));
+  const rainDay = Number(rainy.conditions.find((condition) => condition.type === 'indoor_required').date.slice(8));
+  assert.match(problems(rainy, rainy.query.template.replace(`${rainDay}일`, `${rainDay + 10}일`)), missing('indoor_required:date'));
+  assert.match(problems(rainy, rainy.query.template.replace('실내여야', '안쪽이어야')), missing('indoor_required'));
+  const mismatch = find((item) => has('trip_dates')(item) && value(item, 'trip_dates').conflict === 'nights_mismatch');
+  const stated = value(mismatch, 'trip_dates').statedNights;
+  assert.match(problems(mismatch, mismatch.query.template.replace(`${stated}박`, `${stated + 1}박`)), missing('trip_dates:nights'));
+  // A day number is not found inside a longer one: 19일 does not state an end date of the 9th, nor 12월 a start in 2월.
+  const tripOf = (trip) => ({ ...mismatch, conditions: mismatch.conditions.map((condition) => condition.type === 'trip_dates' ? { ...condition, value: { ...condition.value, ...trip } } : condition) });
+  const tripText = (start, end) => `제주에서 ${personas.themes.find((theme) => theme.id === mismatch.selector.themes[0]).label} 테마로 갈 만한 곳을 추천해 주세요. ${start}부터 ${end}까지 ${stated}박 ${stated + 1}일 일정입니다.`;
+  const ninth = tripOf({ startDate: '2026-12-07', endDate: '2026-12-09' });
+  assert.deepEqual(check(tripText('12월 7일', '12월 9일'), ninth), []);
+  assert.deepEqual(check(tripText('12월 7일', '9일'), ninth), [], 'the end date may leave the month out');
+  assert.match(problems(ninth, tripText('12월 7일', '12월 19일')), missing('trip_dates:end'));
+  assert.match(problems(tripOf({ startDate: '2026-02-07', endDate: '2026-02-09' }), tripText('12월 7일', '2월 9일')), missing('trip_dates:start'));
+  const outside = find((item) => has('trip_dates')(item) && value(item, 'trip_dates').conflict === 'date_outside_trip');
+  assert.match(problems(outside, outside.query.template.replace(/, \d+월 \d+일\(.\)에 방문하려고 합니다\./u, ', 그 뒤에 방문하려고 합니다.')), missing('trip_dates:requested'));
+  const driving = find((item) => has('transport')(item) && value(item, 'transport') === 'rental_car');
+  assert.match(problems(driving, driving.query.template.replace('렌터카로 이동합니다.', '버스 같은 대중교통으로만 이동합니다.')), /does not mention the stated condition transport.*mentions transport:public_transit/u);
+  const walking = find((item) => item.hardCase === 'walk_minimal');
+  assert.match(problems(walking, walking.query.template.replace('거의 걷지 않으려고 합니다.', '많이 걸어도 좋습니다.')), missing('walk'));
+
+  // A persona-selected item has to show each of the persona's primary themes.
+  const interest = find((item) => item.selector.source === 'persona' && item.selector.themes.length === 2);
+  assert.deepEqual(check(interest.query.template, interest), []);
+  const firstLabel = personas.themes.find((theme) => theme.id === interest.selector.themes[0]).label;
+  assert.match(problems(interest, interest.query.template.replace(`${firstLabel}·`, '')), missing(`persona_interest:${interest.selector.themes[0]}`));
+
+  // Excluded places are named verbatim, with wording that excludes them; their names cannot stand in for a condition.
+  const excluding = find((item) => item.hardCase === 'disallowed_id');
+  assert.deepEqual(check(excluding.query.template, excluding), []);
+  assert.match(problems(excluding, excluding.query.template.replace('이미 가 봐서 빼 주세요', '기억해 주세요')), missing('exclude_places'));
+  const renamed = fixtureCatalog((entry) => { if (entry.id === excluding.gold.forbidden[0].id) entry.name = '서귀포 중문 카페'; });
+  const renamedItem = buildEvaluationSet(inputs({ catalog: renamed })).items.find((item) => item.id === excluding.id);
+  assert.ok(renamedItem.brief.namedPlaces.includes('서귀포 중문 카페'), 'the fixture must exclude the renamed place');
+  assert.deepEqual(createQueryChecker(inputs({ catalog: renamed }))(renamedItem.query.template, renamedItem), [], 'zone words inside a named place are not read as zones');
+
+  // The answer must not appear in the question: a candidate name is refused unless the brief itself contains those characters.
+  const candidate = fixture.places.find((entry) => entry.id === plain.gold.allowedIds[0]);
+  assert.match(problems(plain, `${plain.query.template} ${candidate.name} 같은 곳이요.`), /names one of the item's candidate places/u);
+  assert.deepEqual(check(`${plain.query.template} ${candidate.name} 같은 곳이요.`, plain, { authored: false }), [], 'the rule applies to authored text only');
+  const zoneWord = spec.queryAuthoring.cues.zone[plain.zone][0];
+  const sameAsZone = fixtureCatalog((entry) => { if (entry.id === candidate.id) entry.name = zoneWord; });
+  const zoneNamed = buildEvaluationSet(inputs({ catalog: sameAsZone })).items.find((item) => item.id === plain.id);
+  assert.ok(zoneNamed.gold.allowedIds.includes(candidate.id));
+  assert.deepEqual(createQueryChecker(inputs({ catalog: sameAsZone }))(zoneNamed.query.template, zoneNamed), [], 'a name the brief already contains is not a leak');
+  assert.throws(() => build({ authoredQueries: { schemaVersion: '1.0', kind: EVALUATION_QUERIES_KIND,
+    author: { kind: 'human', model: 'none', promptVersion: spec.queryAuthoring.promptVersion },
+    queries: [{ id: plain.id, briefSha256: plain.brief.sha256, text: `${plain.query.template} ${candidate.name} 같은 곳이요.` }] } }), /candidate places/u);
+  // Names shorter than candidateNameMinLength are too ambiguous to check; from that length on they count.
+  const named = (name) => {
+    const catalog = fixtureCatalog((entry) => { if (entry.id === candidate.id) entry.name = name; });
+    const item = buildEvaluationSet(inputs({ catalog })).items.find((entry) => entry.id === plain.id);
+    return createQueryChecker(inputs({ catalog }))(item.query.template, item).join('; ');
+  };
+  assert.equal(spec.queryAuthoring.textRules.candidateNameMinLength, 2);
+  assert.equal(named('곳'), '');
+  assert.match(named('추천'), /candidate places/u);
+  // Places the item rules out (here: routes, for a user who barely walks) are candidates of the question too.
+  const routed = find((item) => item.gold.forbidden.some((entry) => entry.reason === 'route_for_minimal_walk'));
+  const routeName = fixture.places.find((entry) => entry.id === routed.gold.forbidden.find((row) => row.reason === 'route_for_minimal_walk').id).name;
+  assert.match(problems(routed, `${routed.query.template} ${routeName}는 어떤가요?`), /candidate places/u);
+
+  // The generator holds its own template wording to the same rules, so a cue list that no longer fits the wording stops the build.
+  const driftedCues = structuredClone(spec);
+  driftedCues.queryAuthoring.cues.zone.JC = ['구도심'];
+  assert.throws(() => build({ spec: driftedCues }), /template wording breaks the text rules \(query text does not mention the stated condition zone\)/u);
+
+  // A stored set is re-checked with the same rules, and it records which rules it was built under.
+  const authoredSet = build({ authoredQueries: { schemaVersion: '1.0', kind: EVALUATION_QUERIES_KIND,
+    author: { kind: 'human', model: 'none', promptVersion: spec.queryAuthoring.promptVersion },
+    queries: [{ id: plain.id, briefSha256: plain.brief.sha256, text: `${plain.query.template} 부탁드립니다.` }] } });
+  const tampered = (mutate) => { const copy = structuredClone(authoredSet); mutate(copy); return () => validateEvaluationSet(copy, inputs()); };
+  const stored = (copy) => copy.items.find((item) => item.id === plain.id);
+  assert.throws(tampered((s) => { stored(s).query.text = `${plain.query.template} 휠체어로 이용할 수 있어야 합니다.`; }), /breaks the text rules/u);
+  assert.throws(tampered((s) => { stored(s).query.text = `${plain.query.template} ${candidate.name} 같은 곳이요.`; }), /breaks the text rules/u);
+  assert.throws(tampered((s) => { s.queryAuthoring.textRules.maxLength = 400; }), /authoring record/u);
+  assert.throws(tampered((s) => { s.queryAuthoring.textRules.checks.pop(); }), /authoring record/u);
 });
 
 test('scorer gives a gold-built answer full marks and flags unknown-as-pass, forbidden IDs and missing notices', () => {
@@ -571,6 +727,7 @@ test('scorer gives a gold-built answer full marks and flags unknown-as-pass, for
   assert.equal(oracle.hardRequirementMisjudgement.applicableItems, set.items.filter((item) => item.gold.hardRequirements.length > 0).length);
   assert.equal(oracle.recallAtK.mean, 1);
   assert.equal(oracle.recallAtK.scoredItems, set.items.filter((item) => ['recommend', 'cannot_confirm'].includes(item.gold.expectedAction) && item.gold.relevantIds.length > 0).length);
+  assert.deepEqual(oracle.precisionAtK, { k: scorer.k, scoredItems: oracle.recallAtK.scoredItems, mean: 1 });
   assert.deepEqual([oracle.confirmationNotice.rate, oracle.confirmationNotice.topicCoverage.mean], [1, 1]);
   assert.deepEqual([oracle.latencyMs.p50, oracle.costUsd.total], [null, null], 'unmeasured values stay null');
 
@@ -581,6 +738,13 @@ test('scorer gives a gold-built answer full marks and flags unknown-as-pass, for
   assert.equal(careless.passOnUnknown, true);
   assert.deepEqual([careless.ids.disallowed, careless.ids.notInCatalog, careless.claims.unrequested], [1, 1, 1]);
   assert.deepEqual([careless.noticeRequired, careless.noticeGiven, careless.noticeTopicCoverage], [true, false, null]);
+  // Precision divides by what the answer returned (here three IDs), recall by what it could have found.
+  const carelessHits = wheelchair.gold.allowedIds.slice(0, 2).filter((id) => wheelchair.gold.relevantIds.includes(id)).length;
+  assert.deepEqual([careless.precisionAtK, careless.recallAtK], [carelessHits / 3, carelessHits / Math.min(scorer.k, wheelchair.gold.relevantIds.length)]);
+  const offTarget = scorer.score(wheelchair, { itemId: wheelchair.id, action: 'cannot_confirm', placeIds: ['kk-not-in-catalog'] });
+  assert.deepEqual([offTarget.precisionAtK, offTarget.recallAtK], [0, 0]);
+  const noPlaces = scorer.score(wheelchair, { itemId: wheelchair.id, action: 'cannot_confirm', placeIds: [] });
+  assert.deepEqual([noPlaces.precisionAtK, noPlaces.recallAtK], [null, 0], 'no returned place leaves precision undefined, not 0');
   const blanket = scorer.score(wheelchair, { itemId: wheelchair.id, action: 'cannot_confirm', placeIds: wheelchair.gold.relevantIds.slice(0, 1),
     requirementClaims: [{ requirement: 'wheelchair', verdict: 'pass' }], confirmationNotice: true, noticeTopics: [] });
   assert.deepEqual([blanket.passOnUnknown, blanket.noticeGiven, blanket.noticeTopicCoverage], [true, true, 0]);
@@ -593,7 +757,7 @@ test('scorer gives a gold-built answer full marks and flags unknown-as-pass, for
 
   const empty = set.items.find((item) => item.hardCase === 'empty_result');
   const invented = scorer.score(empty, { itemId: empty.id, action: 'recommend', placeIds: [fixture.places[0].id] });
-  assert.deepEqual([invented.actionCorrect, invented.ids.disallowed, invented.recallAtK], [false, 1, null]);
+  assert.deepEqual([invented.actionCorrect, invented.ids.disallowed, invented.recallAtK, invented.precisionAtK], [false, 1, null, null]);
   const honest = scorer.score(empty, { itemId: empty.id, action: 'impossible', placeIds: [] });
   assert.deepEqual([honest.actionCorrect, honest.ids.disallowed], [true, 0]);
 
@@ -602,6 +766,8 @@ test('scorer gives a gold-built answer full marks and flags unknown-as-pass, for
   assert.deepEqual(totals.disallowedIds.byReason, { notInCatalog: 1, outsideCandidates: 0, userExcluded: 1, routeForMinimalWalk: 0, verifiedFail: 0 });
   assert.deepEqual([totals.hardRequirementMisjudgement.applicableItems, totals.hardRequirementMisjudgement.passOnUnknownItems, totals.hardRequirementMisjudgement.rate], [1, 1, 1]);
   assert.deepEqual([totals.latencyMs.measuredItems, totals.latencyMs.p50, totals.costUsd.total], [1, 1200, 0.002]);
+  assert.deepEqual(aggregateScores([careless, honest], scorer.k).precisionAtK, { k: scorer.k, scoredItems: 1, mean: carelessHits / 3 });
+  assert.deepEqual(aggregateScores([noPlaces, honest], scorer.k).precisionAtK, { k: scorer.k, scoredItems: 0, mean: null });
   assert.equal(aggregateScores([honest], scorer.k).disallowedIds.rate, null, 'no returned IDs means the rate is undefined, not 0');
 
   assert.throws(() => scorer.score(empty, { itemId: 'EV-P01-S1', action: 'impossible', placeIds: [] }), /does not answer item/u);
@@ -632,6 +798,7 @@ test('scorer judges claims against verified evidence per place, including blanke
   // A blanket pass also covers the unverified place that was returned with it.
   const blanket = answer(one, { placeIds: [passes.id, unknown.id], requirementClaims: [{ requirement: 'indoor_required', verdict: 'pass' }] });
   assert.equal(blanket.passOnUnknown, true);
+  assert.deepEqual([one.gold.relevantIds, exact.precisionAtK, blanket.precisionAtK, blanket.recallAtK], [[passes.id], 1, 0.5, 1]);
   const perPlace = answer(one, { placeIds: [passes.id], requirementClaims: [{ requirement: 'indoor_required', placeId: unknown.id, verdict: 'pass' }] });
   assert.equal(perPlace.passOnUnknown, true);
   assert.deepEqual((({ applicableItems, passOnUnknownItems, rate }) => [applicableItems, passOnUnknownItems, rate])(aggregateScores([perPlace], scorer.k).hardRequirementMisjudgement), [1, 1, 1]);

@@ -91,7 +91,10 @@ export function createScorer({ catalog, personas, spec }) {
     const placesExpected = PLACE_ACTIONS.has(gold.expectedAction);
     const relevant = new Set(gold.relevantIds);
     const topK = response.placeIds.slice(0, k);
-    const recallAtK = placesExpected && relevant.size > 0 ? topK.filter((id) => relevant.has(id)).length / Math.min(k, relevant.size) : null;
+    const hits = topK.filter((id) => relevant.has(id)).length;
+    const recallAtK = placesExpected && relevant.size > 0 ? hits / Math.min(k, relevant.size) : null;
+    // Precision needs returned places to divide by; an answer without places has none and stays null, not 0.
+    const precisionAtK = placesExpected && relevant.size > 0 && topK.length > 0 ? hits / topK.length : null;
     const affinities = response.placeIds.map((id) => places.has(id) ? themeAffinity(vectors.get(item.personaId), places.get(id).themes) : null).filter((value) => value !== null);
     const topics = gold.notice.topics;
     return {
@@ -104,6 +107,7 @@ export function createScorer({ catalog, personas, spec }) {
       passOnUnknown: claims.passOnUnknown > 0,
       failOnUnknown: claims.failOnUnknown > 0,
       recallAtK,
+      precisionAtK,
       themeMatch: placesExpected && affinities.length > 0 ? affinities.reduce((sum, value) => sum + value, 0) / affinities.length : null,
       noticeRequired: gold.notice.required,
       noticeGiven: response.confirmationNotice,
@@ -148,6 +152,7 @@ export function aggregateScores(scores, k) {
   const applicable = scores.filter((score) => score.misjudgementApplicable);
   const noticeRequired = scores.filter((score) => score.noticeRequired);
   const recalls = scores.map((score) => score.recallAtK).filter((value) => value !== null);
+  const precisions = scores.map((score) => score.precisionAtK).filter((value) => value !== null);
   const matches = scores.map((score) => score.themeMatch).filter((value) => value !== null);
   const coverage = scores.map((score) => score.noticeTopicCoverage).filter((value) => value !== null);
   const latencies = scores.map((score) => score.latencyMs).filter((value) => value !== null);
@@ -172,6 +177,7 @@ export function aggregateScores(scores, k) {
       rate: rate(applicable.filter((score) => score.passOnUnknown || score.failOnUnknown).length, applicable.length),
     },
     recallAtK: { k, scoredItems: recalls.length, mean: mean(recalls) },
+    precisionAtK: { k, scoredItems: precisions.length, mean: mean(precisions) },
     personaThemeMatch: { scoredItems: matches.length, mean: mean(matches) },
     confirmationNotice: {
       requiredItems: noticeRequired.length, given: noticeRequired.filter((score) => score.noticeGiven).length,

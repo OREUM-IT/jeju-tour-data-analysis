@@ -11,16 +11,17 @@
 | 항목 | 상태 |
 |---|---|
 | main | `b1072a3`(PR #5 병합). PR #1(Codex 설계·인수인계), #2(2단계 데이터 기반·논문 정정), #3(Langflow 연결), #4(인수인계 갱신), #5(Docker 운영·탈옥 방어 설계)가 모두 병합됐다. 3단계 평가셋은 브랜치 `claude/agent-step3-evaluation`에서 PR로 올린다. PR 번호와 병합 여부는 GitHub에서 확인하고, 병합은 사용자가 한다 |
-| 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · 시각적 빌더 Langflow 연결 ✅(모델 실행 미검증) · 3 평가셋 ✅(생성기·테스트·집계, [23 문서](23-agent-step3-evaluation-set.md)) · **다음은 기준선 채점**(11절 명세) |
-| 검사 | 로컬: MCP·HF·Agent 카탈로그·평가셋 60개 + Gateway 10개 = 70개 통과(Node 22.23.5와 24.22.1), `check_repository.py` 9개 항목 PASS. CI 실행 결과는 3단계 PR 본문에 남긴다 |
+| 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · 시각적 빌더 Langflow 연결 ✅(모델 실행 미검증) · 3 평가셋 ✅(생성기·테스트·집계, SynthTRIPs 저자 코드 대조 반영, [23 문서](23-agent-step3-evaluation-set.md)) · **다음은 기준선 채점**(11절 명세) |
+| 검사 | 로컬: MCP·HF·Agent 카탈로그·평가셋 61개 + Gateway 10개 = 71개 통과(Node 22.23.5·24.22.1·24.22.3), `check_repository.py` 9개 항목 PASS. CI 실행 결과는 3단계 PR 본문에 남긴다 |
 | 데이터 실측 | 원본 앱 장소 981곳(원시 POI 863·앱 생성 118). `verified` 0, 비용 0, 실내 출처 132, 영업시간 출처 466, 동네 산책 테마 대표 후보 7. 집계는 [`reports/agent-catalog-coverage.json`](../reports/agent-catalog-coverage.json) |
-| 평가셋 실측 | 96문항(페르소나 8 × 슬롯 12). 추천 48·확인 불가 32·되묻기 8·불가 안내 8, 필수 어려운 사례 5종 각 8문항, 필수 조건 판정은 모두 `unknown`. 집계는 [`reports/evaluation-set-summary.json`](../reports/evaluation-set-summary.json) |
+| 평가셋 실측 | 96문항(페르소나 8 × 슬롯 12). 추천 48·확인 불가 32·되묻기 8·불가 안내 8, 필수 어려운 사례 5종 각 8문항, 필수 조건 판정은 모두 `unknown`. 작성 질의 96건과 템플릿 문장 96건이 문장 규칙 9개(200자 상한, 조건 반영, 후보 이름 금지 등)를 통과했다. 집계는 [`reports/evaluation-set-summary.json`](../reports/evaluation-set-summary.json) |
 | Langflow | 1.13.3에서 jeju-mcp 도구 3개 발견·호출, 서버 등록 API, 시작 흐름 가져오기와 MCP 노드 빌드를 확인했다. 실제 모델 실행·Desktop·Docker·사용자 PC는 미검증 |
 | 사라진 로컬 산출물 | 참고 앱 빌드 사본, `.local` 카탈로그·덤프·평가셋·질의 파일, `.env.local`, Langflow DB·가상환경은 그 클라우드 세션에만 있었다. 새 세션은 [19 문서](19-agent-step2-data-foundation.md) 5절, [23 문서](23-agent-step3-evaluation-set.md) 8절, [20 문서](20-langflow-agent-builder.md) 3·4절로 다시 만든다. 정답은 같은 해시로 재현되지만, 세션 안에서 쓴 질의 문장 96건은 Git에 없어 다시 쓰거나 템플릿 문장을 써야 한다 |
 
 **사용자 결정 (2026-11-18)**
 
 - 논문: `2504.09277`은 SynthTRIPs로 평가셋 생성에, LAG는 `2508.05509`로 추론 비교 실험에 쓴다(둘 다 사용).
+- SynthTRIPs는 저자 공식 GitHub 코드 `ashmibanerjee/synthTRIPS-code`를 참고해 설정한다. 커밋 `9562f53`의 파일 52개를 읽어 평가셋 명세에 반영했다([23 문서](23-agent-step3-evaluation-set.md) 2절). 코드 실행·재현은 하지 않았다.
 - 결과물 전달: 분석 저장소에 새 브랜치 push + PR. 병합은 사용자가 한다. 이번 세션의 PR은 사용자가 바로 병합했다.
 - 시각적 Agent 빌더: Langflow(1.13.0 이상, 로컬). Flowise는 지원 종료로 제외했다.
 - 시각화 커넥터(Mermaid Chart·Figma·Metabase·Grafana Cloud)는 안내만 했고, 사용자가 아직 고르지 않았다.
@@ -44,7 +45,7 @@
 | HF 계정·조직 | 사용자가 다른 계정으로 로그인했다고 보고. 기본 조직 ID 제안은 `oreumit` | 실제 사용자명·조직 ID 가용성·관리자 권한 미확인, 조직 생성 미실행 |
 | 도메인 | 사용자 보고: `oreumit.com`의 Vercel Valid Configuration, Cloudflare NS `dilbert.ns.cloudflare.com`·`irma.ns.cloudflare.com` 저장 | 계정 화면 직접 조회, 실제 DNS Active·전파·TLS·웹 alias 목록 미확인 |
 | 모델 | 기존 앱 코드의 공급자 경로와 후보 모델을 문서화. Langflow 시작 흐름의 Agent 노드는 모델·키가 비어 있다 | 이 작업에서 Ollama 적재·LLM 추론·성능·비용 실측 없음 |
-| 연구 원자료 | `2504.09277` = SynthTRIPs(평가셋 생성 틀), LAG = `2508.05509`(2026-11-18 사용자 결정, [19 문서](19-agent-step2-data-foundation.md)) | 두 논문 본문 세부·별도 PDF·목록 Excel 1,259항목의 원본 미확보 |
+| 연구 원자료 | `2504.09277` = SynthTRIPs(평가셋 생성 틀), LAG = `2508.05509`(2026-11-18 사용자 결정, [19 문서](19-agent-step2-data-foundation.md)). SynthTRIPs는 저자 코드 저장소를 커밋 `9562f53`으로 읽어 대조했다([23 문서](23-agent-step3-evaluation-set.md) 2절) | 두 논문 본문 세부, SynthTRIPs의 Hugging Face 데이터셋(지식베이스·판정 프롬프트 원문), 별도 PDF·목록 Excel 1,259항목의 원본 미확보 |
 
 55개 CSV는 7,561건 MCP 카탈로그와 다른 산출물이다. CSV 전체를 MCP에 적재한 상태가 아니다. 210,532는 고유 장소 수가 아니며 파생 수요 통계도 관광객 선호 정답이 아니다. `/readyz`의 `productionReady:false`는 실제 자료 모드에서도 유지한다.
 
@@ -151,7 +152,7 @@ npm --prefix services/jeju-mcp test
 node --test examples/ollama-tunnel/gateway.test.mjs
 ```
 
-현재 기대값은 60 + 10 = 70개다(서비스 24·HF 8·Agent 카탈로그 9·평가셋 19 + Gateway 10). 저장소 검사 `python3 scripts/check_repository.py`는 9개 항목이다. npm 캐시가 쓰기 불가한 경우 작업용 `--cache /workspace/scratch/npm-cache`를 추가한다. SDK `1.32.1`, zod `4.6.7`, MCP 프로토콜 `2025-11-25` 기준을 유지한다. v2 업그레이드는 별도 변경이다.
+현재 기대값은 61 + 10 = 71개다(서비스 24·HF 8·Agent 카탈로그 9·평가셋 20 + Gateway 10). 저장소 검사 `python3 scripts/check_repository.py`는 9개 항목이다. npm 캐시가 쓰기 불가한 경우 작업용 `--cache /workspace/scratch/npm-cache`를 추가한다. SDK `1.32.1`, zod `4.6.7`, MCP 프로토콜 `2025-11-25` 기준을 유지한다. v2 업그레이드는 별도 변경이다.
 
 ### 장소 가져오기와 서버 시작
 
@@ -276,10 +277,11 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 | Langflow `SSRFProtectionError`(127.0.0.1) | 로컬 MCP 연결 차단. `LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1`로 다시 시작. 사설망 전체를 열지 않는다 |
 | Langflow 전역 변수 저장이 HTTP 500 "Fernet key" | `LANGFLOW_SECRET_KEY` 형식 오류. 줄을 지워 자동 생성하거나 Fernet 형식 키를 넣는다 |
 | 참고 앱 서버 시작 시 `public-service-data.json.gz` 없음 | 사본에서 `scripts/copy-migrations.cjs`와 `copy-public-service.cjs`를 먼저 실행([19 문서](19-agent-step2-data-foundation.md) 5절) |
-| `arxiv.org`·배포 앱 직접 접속이 403 | 작업 공간 네트워크 허용 목록 밖이다. 웹 조회 도구로 읽고 우회하지 않는다. 두 번째 세션에서는 웹 조회 도구도 DNS 단계에서 실패했고 웹 검색 결과의 초록·요약만 확인했다. 본문이 필요하면 사용자가 환경 설정의 허용 도메인에 `arxiv.org`를 추가한다 |
+| `arxiv.org`·배포 앱 직접 접속이 403 | 작업 공간 네트워크 허용 목록 밖이다. 웹 조회 도구로 읽고 우회하지 않는다. 두 번째 세션에서는 웹 조회 도구도 DNS 단계에서 실패했고 웹 검색 결과의 초록·요약만 확인했다. 본문이 필요하면 사용자가 환경 설정의 허용 도메인에 `arxiv.org`를 추가한다. `huggingface.co`도 같은 이유로 막혀 SynthTRIPs 데이터셋을 열지 못했다. GitHub의 공개 저장소는 `git clone`으로 받을 수 있어 SynthTRIPs 저자 코드는 그렇게 읽었다 |
 | 서브에이전트·워크플로가 "5-hour limit"으로 실패 | 계정 사용량 한도다. 같은 호출을 반복하지 않는다. 한도가 풀릴 때까지 직접 구현·검증으로 진행하고, 독립 검토가 빠졌다는 사실을 결과에 남긴다 |
 | 세션이 다른 저장소에서 시작됨 | 저장소 추가 도구로 `OREUM-IT/jeju-tour-data-analysis`(push)와 `OREUM-IT/jeju-tour`(read)를 붙이고 clone한다. `gh api`를 쓸 수 없는 세션에서는 GitHub MCP 도구로 PR·Actions를 조회·생성한다 |
 | 평가셋 빌드가 "written for a different brief" | 명세나 카탈로그가 바뀌어 문항의 사실 요약이 달라졌다. 해당 질의를 다시 쓰거나 `--queries` 없이 템플릿 문장으로 만든다 |
+| 평가셋 빌드가 "does not mention the stated condition …", "mentions …, which the item does not state", "names one of the item's candidate places" | 작성 질의가 문장 규칙을 어겼다([23 문서](23-agent-step3-evaluation-set.md) 8.1절). 규칙을 끄지 않는다. 명세의 표현 목록(`queryAuthoring.cues`)에 있는 말로 조건을 빠짐없이 쓰고, 조건에 없는 요구와 후보 장소 이름을 뺀다 |
 
 차단이 유지되는 동안 같은 네트워크 호출·CI를 반복해 성공을 기대하지 않는다. 설정 적용, 새 도구, 계정 권한, 새 원자료처럼 전제가 바뀐 뒤 제한된 검사를 재개한다. 마지막 결과에는 완료한 변경, 실제 검증, 아직 막힌 작업과 그 정확한 전제를 각각 남긴다.
 
@@ -297,11 +299,12 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 2. 시스템별 하네스를 만든다. 문항의 질의와 `context`(기준일·비 예보·여행 기간)를 넣고, 출력을 23 문서 7절의 응답 구조(`action`, `placeIds`, `requirementClaims`, `confirmationNotice`, `latencyMs`, `costUsd`)로 옮긴다.
 3. 기존 Gemini 비서는 문장과 장소 ID만 돌려준다. 동작·판정·고지를 옮겨 적는 기준(사람 또는 별도 판정기)을 먼저 정하고, 판정기를 쓰면 생성 모델과 다른 모델을 쓰며 표본을 사람이 대조한다.
 4. 모델 ID, 프롬프트·도구 버전, 실행 시각, 평가셋의 정답 해시를 결과와 함께 기록한다. 측정하지 못한 값은 `null`로 둔다.
-5. [합성 보안 사례 14개](../data/agent-security-cases.json)를 같은 하네스로 실행하도록 설계한다([22 문서](22-jailbreak-and-prompt-injection-defense.md) 6절). 필수 조건 삭제(SEC-003), `unknown` 승격(SEC-004), 허용 목록 밖 장소 ID(SEC-005)는 평가셋 문항에 공격 문장을 덧붙여도 정답이 바뀌지 않으므로 같은 채점 함수로 판정할 수 있다. 권한·비밀·SSRF·비용·렌더링 사례는 호출 횟수·canary·감사 이벤트 같은 별도 계측이 필요하다. 정상 96문항은 오탐 거절률과 정상 추천 품질의 분모로 쓴다.
+5. 문항마다 작성 질의와 템플릿 문장이 함께 있다. 두 문장을 각각 넣어 문체가 결과를 바꾸는지 본다(SynthTRIPs의 v·p0 비교에 해당, [23 문서](23-agent-step3-evaluation-set.md) 2.2절). 승인을 받으면 질의를 쓴 모델과 다른 모델로 질의의 페르소나 정합과 조건 반영을 판정하고, 사람이 24문항 표본(페르소나 3번씩·슬롯 2번씩)을 검수한다.
+6. [합성 보안 사례 14개](../data/agent-security-cases.json)를 같은 하네스로 실행하도록 설계한다([22 문서](22-jailbreak-and-prompt-injection-defense.md) 6절). 필수 조건 삭제(SEC-003), `unknown` 승격(SEC-004), 허용 목록 밖 장소 ID(SEC-005)는 평가셋 문항에 공격 문장을 덧붙여도 정답이 바뀌지 않으므로 같은 채점 함수로 판정할 수 있다. 권한·비밀·SSRF·비용·렌더링 사례는 호출 횟수·canary·감사 이벤트 같은 별도 계측이 필요하다. 정상 96문항은 오탐 거절률과 정상 추천 품질의 분모로 쓴다.
 
 **산출물 위치.** Git에는 하네스 코드·테스트와 장소 이름·ID 없는 지표 집계를 넣는다. 문항별 응답과 장소 ID는 `.local`에 둔다.
 
-**완료 기준.** 두 시스템의 지표(허용되지 않은 ID 사용률, 필수 조건 오판, 재현율@5, 페르소나 테마 일치도, 고지율, 동작 정확도, 지연·비용)가 같은 평가셋 해시로 기록되고, 자유 문장을 구조로 옮긴 기준과 그 한계가 문서에 있고, PR 본문에 실측과 미검증이 나뉘어 있다.
+**완료 기준.** 두 시스템의 지표(허용되지 않은 ID 사용률, 필수 조건 오판, 재현율@5, 정밀도@5, 페르소나 테마 일치도, 고지율, 동작 정확도, 지연·비용)가 같은 평가셋 해시로 기록되고, 자유 문장을 구조로 옮긴 기준과 그 한계가 문서에 있고, PR 본문에 실측과 미검증이 나뉘어 있다.
 
 ## 12. 새 Claude Code 세션 시작 프롬프트
 

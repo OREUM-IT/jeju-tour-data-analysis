@@ -25,9 +25,10 @@
 | 관측 | arXiv `2504.09277`의 제목은 *SynthTRIPs: A Knowledge-Grounded Framework for Benchmark Query Generation for Personalized Tourism Recommenders*(SIGIR 2025)다. 페르소나와 예산·계절·인기도·지속가능성 같은 조건을 묶고, 지식베이스에서 맞는 사실을 찾은 뒤 LLM으로 관광 질의를 합성한다. 추천기 **평가용 벤치마크 생성 틀**이며 LAG라는 방법은 나오지 않는다. |
 | 관측 | 제목이 LAG인 논문은 arXiv `2508.05509` *LAG: Logic-Augmented Generation from a Cartesian Perspective*다. 복합 질문을 논리 의존 순서의 하위 질문으로 나눠 앞선 답으로 다음 검색을 이끌고, 답할 수 없는 하위 질문에서 추론을 멈춘다. |
 | 사용자 결정 (2026-11-18) | 둘 다 쓴다. SynthTRIPs는 3단계 평가셋 생성 틀로, LAG(`2508.05509`)는 5단계 Agent 추론의 비교 실험으로 쓴다. |
-| 한계 | 두 논문 모두 초록·HTML 요약 수준으로 확인했다. 본문의 세부 절차·수치·코드는 검토하지 않았다. 재현 전에는 결과에 `method=lag`를 붙이지 않는다. |
+| 한계 | 두 논문 모두 초록·HTML 요약 수준으로 확인했다. 본문의 세부 절차·수치는 검토하지 않았다. 재현 전에는 결과에 `method=lag`를 붙이지 않는다. |
+| 관측 (3단계에서 추가) | SynthTRIPs는 저자 공식 코드 저장소 `ashmibanerjee/synthTRIPS-code`를 커밋 `9562f53`으로 읽어 3단계 평가셋과 대조했다([23 문서](23-agent-step3-evaluation-set.md) 2절). 코드를 실행하지 않았고 논문 본문은 여전히 미확인이다. LAG의 코드는 확인하지 않았다. |
 
-[모델 레지스트리](../data/ai-agent-models.json)의 출처를 `synthtrips-paper`와 `lag-logic-augmented-generation`으로 나눴다. `paper-lag` 방법은 후자를 가리키고, 평가 방법 `synthtrips-evaluation-generation`을 추가했다.
+[모델 레지스트리](../data/ai-agent-models.json)의 출처를 `synthtrips-paper`와 `lag-logic-augmented-generation`으로 나눴다. `paper-lag` 방법은 후자를 가리키고, 평가 방법 `synthtrips-evaluation-generation`을 추가했다. 3단계에서 저자 코드 출처 `synthtrips-code`를 더했다.
 
 ## 3. 단계적 절차
 

@@ -55,7 +55,7 @@ Claude Code에서 이 저장소를 개발하거나 HF MCP를 연결하는 것과
 
 HF MCP는 연구용 서버다. [Codex 설정](../.codex/config.toml)은 공개 조회용 3개 도구, [Claude Code 설정](../.mcp.json)은 `files` preset을 가리킨다. 소스상 익명 공개 조회를 지원하므로 HF_TOKEN을 필수로 요구하지 않는다. 현재 클라우드는 HF 접근이 차단되어 운영 서버 `tools/list`·검색 성공을 확인하지 못했다. 환경 초안 저장, 실제 네트워크 적용, 새 세션에서 설정 로딩은 서로 다른 단계다.
 
-HF의 `paper.md`는 본문이 없을 때 메타데이터·초록·AI 요약을 대신 반환할 수 있다. 2026-11-18 웹 조회로 `2504.09277`의 제목·초록을 확인한 결과 SynthTRIPs(관광 추천기 평가용 합성 질의 생성 틀)였고 LAG를 정의하지 않았다. 사용자 결정에 따라 LAG는 `2508.05509` Logic-Augmented Generation을 뜻한다([19 문서](19-agent-step2-data-foundation.md)). **두 논문 모두 본문 세부·필수 모델·재현 결과는 미확인**이다. LAG를 RAG로 바꾸거나 일반 도구 루프를 LAG 재현으로 표시하지 않는다. 평가 방법 `synthtrips-evaluation-generation`은 2026-11-18에 규칙 기반 정답과 세션 안에서 쓴 질의로 구현했다([23 문서](23-agent-step3-evaluation-set.md)). 논문의 순서만 가져온 것이며 SynthTRIPs 재현이 아니다.
+HF의 `paper.md`는 본문이 없을 때 메타데이터·초록·AI 요약을 대신 반환할 수 있다. 2026-11-18 웹 조회로 `2504.09277`의 제목·초록을 확인한 결과 SynthTRIPs(관광 추천기 평가용 합성 질의 생성 틀)였고 LAG를 정의하지 않았다. 사용자 결정에 따라 LAG는 `2508.05509` Logic-Augmented Generation을 뜻한다([19 문서](19-agent-step2-data-foundation.md)). **두 논문 모두 본문 세부·필수 모델·재현 결과는 미확인**이다. LAG를 RAG로 바꾸거나 일반 도구 루프를 LAG 재현으로 표시하지 않는다. 평가 방법 `synthtrips-evaluation-generation`은 2026-11-18에 규칙 기반 정답과 세션 안에서 쓴 질의로 구현했다([23 문서](23-agent-step3-evaluation-set.md)). 같은 날 사용자 지시로 SynthTRIPs 저자 공식 코드 저장소(레지스트리 출처 `synthtrips-code`, 커밋 `9562f53`)를 읽고 생성 순서, 질의 200자 상한, 정답 이름 금지, 조건 반영 점검, recall·precision 채점을 대조해 맞췄다. 저자 코드는 실행하지 않았고 논문 본문과 Hugging Face 데이터셋은 확인하지 못했으므로 SynthTRIPs 재현이 아니다. 판정 LLM 평가와 사람 평가는 하지 않았다.
 
 현재 [페르소나 설정](../data/persona-prototypes.json)은 `persona-design-v1`의 8개 설계 후보다. [계산 코드](../scripts/persona_model.py)는 관측된 선호 축과 프로토타입의 거리를 계산한다. PCA 그림과 HTML 탐색기는 설계값을 표시하며 학습된 사용자 분포·군집 성능·심리 확률을 제공하지 않는다. 향후 군집 모델은 별도 버전으로 채택한다.
 

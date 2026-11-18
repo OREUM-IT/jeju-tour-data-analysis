@@ -391,6 +391,11 @@ def check_agent_data():
 EVALUATION_HARD_CASES = {"walk_minimal", "accessibility_unknown", "date_conflict", "disallowed_id", "empty_result"}
 EVALUATION_HARD_REQUIREMENTS = {"indoor_required", "open_at", "wheelchair", "budget_cap"}
 EVALUATION_AUTHOR_KINDS = {"in_session_llm", "external_llm", "human"}
+# The text rules every query passes before it enters a set, in the order the spec documents them.
+EVALUATION_TEXT_CHECKS = ["length", "single_line", "korean", "request_wording", "no_place_id", "named_places",
+                          "condition_cues", "no_unstated_cues", "no_candidate_names"]
+EVALUATION_CUE_MAPS = ("zone", "theme", "category", "transport", "companion", "walk")
+EVALUATION_CUE_LISTS = ("indoor_required", "rain", "crowd_avoid", "wheelchair", "budget_words", "exclude_places", "visited")
 # Unlike PLACE_ID above, this also finds an ID embedded in a longer string or key, in any letter case.
 PLACE_ID_ANYWHERE = re.compile(r"(?:^|[^a-z0-9])(?:kk|osm|cur|vj|nv|bf|olle|trail|hy|drama|bike|hub)-[a-z0-9]", re.I)
 # Every key the summary may contain besides identifiers taken from the spec. A new summary field must be added here
@@ -409,6 +414,7 @@ EVALUATION_SUMMARY_KEYS = {
     "offProfileSelectors", "fallbackTierItems", "reusedCellItems", "walkMinimalItemsWithRouteExclusion",
     "accessibilityItemsWithListedCandidates", "disallowedIdItemsRankedByPopularity",
     "mode", "promptVersion", "authored", "template", "authorKind", "authoringRecord",
+    "textRules", "minLength", "maxLength", "checks", "textLength",
     "1", "2", "3", "4", "theme", "category", "persona", "date_conflict", "no_candidates",
     "requirements_contradicted:jointly", "empty_cell", "all_routes_minimal_walk", "all_excluded",
     "user_excluded", "route_for_minimal_walk", "verified_fail",
@@ -448,8 +454,33 @@ def check_evaluation_set():
     metrics = unique(spec["metrics"]["definitions"], "id", "evaluation metrics")
     require(isinstance(spec["metrics"]["recallK"], int) and spec["metrics"]["recallK"] > 0
             and {"disallowed_id_rate", "hard_requirement_misjudgement", "recall_at_k", "persona_theme_match",
-                 "confirmation_notice_rate"} <= set(metrics), "Evaluation metrics are incomplete")
-    require(spec["queryAuthoring"]["promptVersion"] and spec["queryAuthoring"]["prompt"], "Query authoring prompt is missing")
+                 "precision_at_k", "confirmation_notice_rate"} <= set(metrics), "Evaluation metrics are incomplete")
+    authoring = spec["queryAuthoring"]
+    require(authoring["promptVersion"] and authoring["prompt"], "Query authoring prompt is missing")
+    rules = authoring["textRules"]
+    checks = [row["id"] for row in rules["checks"]]
+    require(all(isinstance(rules[key], int) for key in ("minLength", "maxLength", "candidateNameMinLength"))
+            and 1 <= rules["minLength"] < rules["maxLength"] <= 400 and rules["candidateNameMinLength"] >= 2
+            and checks == EVALUATION_TEXT_CHECKS and all(row["rule"] for row in rules["checks"]),
+            "Query text rules drifted from the publication contract")
+    cues = authoring["cues"]
+    listed = lambda words: isinstance(words, list) and words and all(isinstance(word, str) and word.strip() == word and word for word in words)
+    require(set(cues) == set(EVALUATION_CUE_MAPS) | set(EVALUATION_CUE_LISTS)
+            and set(cues["zone"]) == set(zones) and set(cues["theme"]) == set(theme_map["themes"])
+            and set(cues["category"]) == set(categories)
+            and all(set(cues[key]) == set(conditions[key]["values"]) for key in ("transport", "companion", "walk"))
+            and all(listed(words) for key in EVALUATION_CUE_MAPS for words in cues[key].values())
+            and all(listed(cues[key]) for key in EVALUATION_CUE_LISTS),
+            "Query cue words must cover every zone, theme, category and condition value")
+    # The method this spec follows is pinned to one commit of the authors' code, and the registry names the same commit.
+    reference = spec["methodReference"]
+    registry = read_json(ROOT / "data/ai-agent-models.json")
+    pinned = {row["key"]: row for row in registry["sources"]}.get(reference["id"])
+    date.fromisoformat(reference["reviewedOn"])
+    require(pinned is not None and re.fullmatch(r"[0-9a-f]{40}", reference["commit"]) and pinned.get("commit") == reference["commit"]
+            and pinned.get("repository") == reference["repository"] and pinned.get("license") == reference["license"]
+            and pinned.get("codeExecuted") is False and reference["scope"],
+            "Evaluation method reference must match the pinned registry source")
 
     report = read_json(ROOT / "reports/evaluation-set-summary.json")
     require(report["kind"] == "jeju-agent-evaluation-set-summary" and not {"items", "places", "candidates", "briefs"} & set(report),
@@ -506,6 +537,13 @@ def check_evaluation_set():
                  else report["contentSha256"]["queries"] is None)
             and re.fullmatch(r"[0-9a-f]{64}", report["contentSha256"]["gold"]),
             "Evaluation summary query counts, hashes or authoring record drifted")
+    lengths = queries["textLength"]
+    require(queries["textRules"] == {"minLength": rules["minLength"], "maxLength": rules["maxLength"], "checks": checks}
+            and set(lengths) == {"authored", "template"} and lengths["authored"]["count"] == queries["authored"]
+            and lengths["template"]["count"] == totals["items"]
+            and all(row["count"] == 0 or rules["minLength"] <= row["min"] <= row["median"] <= row["max"] <= rules["maxLength"]
+                    for row in lengths.values()),
+            "Evaluation summary text rules or query lengths drifted from the spec")
     require(set(totals["byConflict"]) <= {"date_conflict", "no_candidates", "requirements_contradicted:jointly"}
             | {"requirement_contradicted:" + key for key in EVALUATION_HARD_REQUIREMENTS}
             and set(totals["byEmptyMechanism"]) <= {"empty_cell", "all_routes_minimal_walk", "all_excluded"}
@@ -526,7 +564,7 @@ def check_evaluation_set():
 
     vocabulary = {report["kind"], report["schemaVersion"], source["repository"], spec["version"], spec["rulesVersion"], spec["seed"],
                   spec["anchorDate"], persona["version"], theme_map["version"], spec["queryAuthoring"]["promptVersion"],
-                  "template_only", "authored", "none", "local_only"} | EVALUATION_AUTHOR_KINDS
+                  "template_only", "authored", "none", "local_only"} | EVALUATION_AUTHOR_KINDS | set(EVALUATION_TEXT_CHECKS)
     known_keys = (EVALUATION_SUMMARY_KEYS | set(zones) | set(categories) | set(conditions) | set(slots) | set(actions)
                   | set(difficulties) | EVALUATION_HARD_CASES | set(spec["noticeTopics"]) | set(theme_map["themes"])
                   | {row["id"] for row in persona["prototypes"]}

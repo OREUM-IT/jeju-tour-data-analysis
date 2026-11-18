@@ -9,7 +9,7 @@
     "themeMapVersion": "theme-map-v1",
     "personaVersion": "persona-design-v1",
     "specVersion": "evalset-spec-v1",
-    "specSha256": "dabf07d53a856bc6cf74504c0a3861bdcbbb950fc9c633d1f89b41eb2fe56a66",
+    "specSha256": "db3c36093b60109c953cd09cae8c353433d03e0b97833b3ce9ca109b4de816be",
     "rulesVersion": "evalset-rules-v1",
     "seed": "jeju-evalset-v1",
     "anchorDate": "2026-12-07"
@@ -270,6 +270,35 @@
     "authored": 96,
     "template": 0,
     "authorKind": "in_session_llm",
-    "authoringRecord": "local_only"
+    "authoringRecord": "local_only",
+    "textRules": {
+      "minLength": 10,
+      "maxLength": 200,
+      "checks": [
+        "length",
+        "single_line",
+        "korean",
+        "request_wording",
+        "no_place_id",
+        "named_places",
+        "condition_cues",
+        "no_unstated_cues",
+        "no_candidate_names"
+      ]
+    },
+    "textLength": {
+      "authored": {
+        "count": 96,
+        "min": 20,
+        "median": 57,
+        "max": 98
+      },
+      "template": {
+        "count": 96,
+        "min": 28,
+        "median": 56,
+        "max": 87
+      }
+    }
   }
 }

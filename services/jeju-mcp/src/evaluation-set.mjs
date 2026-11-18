@@ -30,6 +30,10 @@ export const SELECTOR_KINDS = Object.freeze(['theme', 'category', 'persona', 'th
 export const AUTHOR_KINDS = Object.freeze(['in_session_llm', 'external_llm', 'human']);
 export const FORBIDDEN_REASONS = Object.freeze(['user_excluded', 'route_for_minimal_walk', 'verified_fail']);
 export const EMPTY_MECHANISMS = Object.freeze(['empty_cell', 'all_routes_minimal_walk', 'all_excluded']);
+/** Text rules for a query, in the order data/evaluation-spec.json documents them. The last one applies to authored text only. */
+export const TEXT_CHECKS = Object.freeze(['length', 'single_line', 'korean', 'request_wording', 'no_place_id', 'named_places', 'condition_cues', 'no_unstated_cues', 'no_candidate_names']);
+const CUE_MAPS = Object.freeze(['zone', 'theme', 'category', 'transport', 'companion', 'walk']);
+const CUE_LISTS = Object.freeze(['indoor_required', 'rain', 'crowd_avoid', 'wheelchair', 'budget_words', 'exclude_places', 'visited']);
 /** Place-ID prefixes of the reference app. Used to keep IDs out of query text and of the committed summary. */
 export const PLACE_ID_PREFIX = /(?:^|[^a-z0-9])(?:kk|osm|cur|vj|nv|bf|olle|trail|hy|drama|bike|hub)-[a-z0-9]/iu;
 const STAY = 'stay';
@@ -168,7 +172,35 @@ export function validateEvaluationSpec(spec, personas, themeMap) {
   ensure(REQUIRED_HARD_CASES.every((id) => hardCases.includes(id)), 'the blueprint must contain every mandatory hard case');
   ensure(isRecord(spec.metrics) && Number.isInteger(spec.metrics.recallK) && spec.metrics.recallK > 0 && Array.isArray(spec.metrics.definitions)
     && spec.metrics.definitions.every((row) => isRecord(row) && text(row.id, 60) && text(row.formula)), 'metrics need recallK and formulas');
-  ensure(isRecord(spec.queryAuthoring) && text(spec.queryAuthoring.promptVersion, 80) && text(spec.queryAuthoring.prompt, 4000), 'queryAuthoring needs a prompt and its version');
+  const reference = spec.methodReference;
+  ensure(isRecord(reference) && text(reference.id, 60) && /^[\w.-]+\/[\w.-]+$/u.test(reference.repository ?? '') && /^[0-9a-f]{40}$/u.test(reference.commit ?? '')
+    && text(reference.license, 40) && text(reference.scope), 'methodReference needs an id, a repository, a full commit, a license and the scope that was reviewed');
+  parseYmd(reference.reviewedOn);
+  const authoring = spec.queryAuthoring;
+  ensure(isRecord(authoring) && text(authoring.promptVersion, 80) && text(authoring.prompt, 4000), 'queryAuthoring needs a prompt and its version');
+  const rules = authoring.textRules;
+  ensure(isRecord(rules) && Number.isInteger(rules.minLength) && Number.isInteger(rules.maxLength) && rules.minLength >= 1 && rules.maxLength > rules.minLength
+    && rules.maxLength <= 400 && Number.isInteger(rules.candidateNameMinLength) && rules.candidateNameMinLength >= 2,
+  'queryAuthoring.textRules needs minLength, maxLength (at most 400) and candidateNameMinLength (at least 2)');
+  ensure(Array.isArray(rules.checks) && JSON.stringify(rules.checks.map((row) => row?.id)) === JSON.stringify(TEXT_CHECKS) && rules.checks.every((row) => text(row.rule)),
+    `queryAuthoring.textRules.checks must document, in order: ${TEXT_CHECKS.join(', ')}`);
+  const cues = authoring.cues;
+  ensure(isRecord(cues) && Object.keys(cues).length === CUE_MAPS.length + CUE_LISTS.length, 'queryAuthoring.cues must hold exactly the known cue groups');
+  const words = (list) => Array.isArray(list) && list.length > 0 && new Set(list).size === list.length
+    && list.every((word) => text(word, 40) && word === word.trim() && /[가-힣]/u.test(word));
+  const cueIds = { zone: zoneIds, theme: themeIds, category: categoryIds, transport: valuesOf('transport'), companion: valuesOf('companion'), walk: valuesOf('walk') };
+  for (const key of CUE_MAPS) {
+    const map = cues[key];
+    ensure(isRecord(map) && Object.keys(map).length === cueIds[key].length && cueIds[key].every((id) => words(map[id])),
+      `queryAuthoring.cues.${key} must list Korean cue words for exactly: ${cueIds[key].join(', ')}`);
+  }
+  for (const key of CUE_LISTS) ensure(words(cues[key]), `queryAuthoring.cues.${key} must be a list of Korean cue words`);
+  // A cue that belongs to one value must not also read as another value, or the unstated-condition check cannot tell them apart.
+  for (const key of ['zone', 'transport', 'companion']) {
+    const owned = Object.entries(cues[key]).flatMap(([id, list]) => list.map((word) => [id, word]));
+    ensure(owned.every(([id, word]) => owned.every(([other, otherWord]) => other === id || !otherWord.includes(word))),
+      `queryAuthoring.cues.${key} uses a cue word that also matches another value`);
+  }
   return { themeIds, zoneIds, categoryIds };
 }
 
@@ -466,6 +498,8 @@ function compile({ catalog, personas, themeMap, spec }) {
     themeLabels: label(personas.themes), zoneLabels: label(spec.zones), categoryLabels: label(spec.categories),
     values: Object.fromEntries(CONDITION_ORDER.map((id) => [id, condition(id).values ?? null])),
     atMs: evaluationInstant(spec),
+    textRules: spec.queryAuthoring.textRules,
+    cues: compileCues(spec.queryAuthoring.cues),
   };
 }
 
@@ -758,16 +792,18 @@ function buildItem({ persona, slot, vector, ctx, used }) {
   ensure(selectorKey(item.selector) === selectorKey(plan.selector) && item.zone === plan.zone, `slot ${slot.id} for ${persona.id}: the drawn conditions do not describe the chosen plan`);
   const expected = { walk_minimal: 'recommend', accessibility_unknown: 'cannot_confirm', date_conflict: 'ask_clarification', disallowed_id: 'recommend', empty_result: 'impossible' }[slot.kind];
   ensure(expected === undefined || expected === item.gold.expectedAction, `slot ${slot.id} for ${persona.id} did not produce its hard case (${item.gold.expectedAction})`);
+  const templateProblems = itemTextProblems(item.query.template, item, ctx, { authored: false });
+  ensure(templateProblems.length === 0, `slot ${slot.id} for ${persona.id}: the template wording breaks the text rules (${templateProblems.join('; ')})`);
   return { item };
 }
 
 const REQUEST_WORDING = /추천|알려|어디|있을까|있나요|찾아|찾고|찾는|좋을까|괜찮을까|부탁|골라/u;
 
-/** Text rules every authored query must satisfy before it is attached to an item. */
-export function checkQueryText(textValue, brief) {
+/** Text rules that need only the text and the writer brief: length, one line, Korean, a request, no place ID, named places. */
+export function checkQueryText(textValue, brief, rules) {
   const problems = [];
   if (typeof textValue !== 'string' || textValue !== textValue.trim()) return ['query text must be a trimmed string'];
-  if (textValue.length < 10 || textValue.length > 400) problems.push('query text must be 10 to 400 characters');
+  if (textValue.length < rules.minLength || textValue.length > rules.maxLength) problems.push(`query text must be ${rules.minLength} to ${rules.maxLength} characters`);
   if (/[\u0000-\u001f\u007f]/u.test(textValue)) problems.push('query text must be a single line without control characters');
   if (!/[가-힣]/u.test(textValue)) problems.push('query text must be Korean');
   if (!REQUEST_WORDING.test(textValue)) problems.push('query text must ask for something (for example 추천해 주세요)');
@@ -776,10 +812,110 @@ export function checkQueryText(textValue, brief) {
   return problems;
 }
 
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+const anyOf = (words) => new RegExp(words.map(escapeRegExp).join('|'), 'u');
+function compileCues(cues) {
+  const compiled = {};
+  for (const key of CUE_MAPS) compiled[key] = Object.fromEntries(Object.entries(cues[key]).map(([id, words]) => [id, anyOf(words)]));
+  for (const key of CUE_LISTS) compiled[key] = anyOf(cues[key]);
+  return compiled;
+}
+const NOT_AFTER_DIGIT = '(?<![0-9])';
+const ANY_CLOCK_TIME = /(?<![0-9])[0-9]{1,2}시(?!간)/u;
+const ANY_CALENDAR_DATE = /[0-9]{1,2}월\s?[0-9]{1,2}일/u;
+const ANY_NIGHT_COUNT = /[0-9]\s?박/u;
+const monthDayCue = (ymd) => { const date = new Date(parseYmd(ymd)); return new RegExp(`${NOT_AFTER_DIGIT}${date.getUTCMonth() + 1}월\\s?${date.getUTCDate()}일`, 'u'); };
+const dayCue = (ymd) => new RegExp(`${NOT_AFTER_DIGIT}${new Date(parseYmd(ymd)).getUTCDate()}일`, 'u');
+/** A clock time as a user says it: 오전/오후 with the 12-hour number, or the 24-hour number from 13시 on. */
+function timeCue(time) {
+  const minutes = minutesOf(time);
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  const tail = minute === 0 ? '(?!\\s?[0-9]|\\s?반)' : `\\s?(?:${minute}분${minute === 30 ? '|반' : ''})`;
+  const spoken = hour === 0 ? `(?:밤|새벽|자정)\\s?12시${tail}|${NOT_AFTER_DIGIT}0시${tail}`
+    : hour < 12 ? `(?:오전|아침|새벽)\\s?${hour}시${tail}`
+      : `(?:오후|저녁|밤|낮)\\s?${hour === 12 ? 12 : hour - 12}시${tail}`;
+  return new RegExp(hour >= 13 ? `${spoken}|${NOT_AFTER_DIGIT}${hour}시${tail}` : spoken, 'u');
+}
+const amountCue = (amount) => new RegExp(amount % 10_000 === 0
+  ? `${NOT_AFTER_DIGIT}${amount / 10_000}만\\s?원|${NOT_AFTER_DIGIT}${escapeRegExp(amount.toLocaleString('en-US'))}\\s?원|${NOT_AFTER_DIGIT}${amount}\\s?원`
+  : `${NOT_AFTER_DIGIT}${escapeRegExp(amount.toLocaleString('en-US'))}\\s?원|${NOT_AFTER_DIGIT}${amount}\\s?원`, 'u');
+
+/** What a query has to say for an item: one cue per stated condition, and per primary theme when the persona selects. */
+function requiredCues(item, ctx) {
+  const cues = [];
+  if (item.selector.source === 'persona') for (const theme of item.selector.themes) cues.push([`persona_interest:${theme}`, ctx.cues.theme[theme]]);
+  for (const condition of item.conditions) {
+    const { type, value } = condition;
+    switch (type) {
+      case 'zone': case 'theme': case 'category': case 'transport': case 'companion': case 'walk': cues.push([type, ctx.cues[type][value]]); break;
+      case 'indoor_required': cues.push([type, ctx.cues.indoor_required], [`${type}:rain`, ctx.cues.rain], [`${type}:date`, monthDayCue(condition.date)]); break;
+      case 'crowd_avoid': case 'wheelchair': cues.push([type, ctx.cues[type]]); break;
+      case 'open_at': cues.push([type, timeCue(value)]); break;
+      case 'budget_cap': cues.push([type, amountCue(value)]); break;
+      case 'trip_dates':
+        cues.push([`${type}:start`, monthDayCue(value.startDate)], [`${type}:end`, dayCue(value.endDate)]);
+        if (value.conflict === 'nights_mismatch') cues.push([`${type}:nights`, new RegExp(`${NOT_AFTER_DIGIT}${value.statedNights}박`, 'u')]);
+        if (value.conflict === 'date_outside_trip') cues.push([`${type}:requested`, monthDayCue(value.requestedDate)]);
+        break;
+      case 'exclude_places': cues.push([type, ctx.cues.exclude_places]); break; // the names themselves are required by checkQueryText
+      default: throw new EvaluationSetError(`condition ${type} has no text cue`);
+    }
+  }
+  return cues;
+}
+
+/** What a query must not say: cues of condition values the item does not state. Themes and categories are left to the writer. */
+function unstatedCues(item, ctx) {
+  const stated = new Map(item.conditions.map((condition) => [condition.type, condition]));
+  const cues = [];
+  for (const type of ['zone', 'transport', 'companion', 'walk']) {
+    for (const [value, pattern] of Object.entries(ctx.cues[type])) if (stated.get(type)?.value !== value) cues.push([`${type}:${value}`, pattern]);
+  }
+  if (!stated.has('indoor_required')) cues.push(['indoor_required', ctx.cues.indoor_required], ['indoor_required:rain', ctx.cues.rain]);
+  if (!stated.has('crowd_avoid')) cues.push(['crowd_avoid', ctx.cues.crowd_avoid]);
+  if (!stated.has('wheelchair')) cues.push(['wheelchair', ctx.cues.wheelchair]);
+  if (!stated.has('open_at')) cues.push(['open_at', ANY_CLOCK_TIME]);
+  if (!stated.has('budget_cap')) cues.push(['budget_cap', ctx.cues.budget_words]);
+  if (!stated.has('exclude_places')) cues.push(['exclude_places', ctx.cues.visited]);
+  if (!stated.has('trip_dates')) cues.push(['trip_dates:nights', ANY_NIGHT_COUNT]);
+  if (!stated.has('trip_dates') && !stated.has('indoor_required')) cues.push(['a calendar date', ANY_CALENDAR_DATE]);
+  return cues;
+}
+
+/**
+ * Every text rule for one item. Cues are looked for outside the place names the user has to say, so a name cannot
+ * stand in for a condition. `authored` adds the rule that the question must not name one of its own candidate places.
+ */
+function itemTextProblems(textValue, item, ctx, { authored }) {
+  const problems = checkQueryText(textValue, item.brief, ctx.textRules);
+  if (typeof textValue !== 'string') return problems;
+  const body = item.brief.namedPlaces.reduce((rest, name) => rest.split(name).join(' '), textValue);
+  for (const [label, pattern] of requiredCues(item, ctx)) if (!pattern.test(body)) problems.push(`query text does not mention the stated condition ${label}`);
+  for (const [label, pattern] of unstatedCues(item, ctx)) if (pattern.test(body)) problems.push(`query text mentions ${label}, which the item does not state`);
+  if (authored) {
+    const wording = item.brief.statements.join('\n');
+    const candidates = [...item.gold.allowedIds, ...item.gold.forbidden.map((entry) => entry.id)];
+    const named = candidates.some((id) => {
+      const name = ctx.placeById.get(id)?.name ?? '';
+      return name.length >= ctx.textRules.candidateNameMinLength && !wording.includes(name) && textValue.includes(name);
+    });
+    if (named) problems.push('query text names one of the item\'s candidate places; the answer must not appear in the question');
+  }
+  return problems;
+}
+
+/** A checker bound to one catalog, persona file, theme map and spec: (text, item, { authored }) => list of broken text rules. */
+export function createQueryChecker(inputs) {
+  const ctx = compile(inputs);
+  return (textValue, item, { authored = true } = {}) => itemTextProblems(textValue, item, ctx, { authored });
+}
+
 const AUTHOR_FIELDS = new Set(['kind', 'model', 'promptVersion', 'seed', 'samplingSeed', 'authoredOn', 'review']);
 
 /** Attach authored texts to their items. Only a fixed, validated author record is kept; nothing else is copied through. */
-function attachQueries(items, authored, spec) {
+function attachQueries(items, authored, ctx) {
+  const { spec } = ctx;
   ensure(isRecord(authored) && authored.schemaVersion === '1.0' && authored.kind === EVALUATION_QUERIES_KIND,
     `authored queries need schemaVersion "1.0" and kind "${EVALUATION_QUERIES_KIND}"`);
   const author = authored.author;
@@ -797,7 +933,7 @@ function attachQueries(items, authored, spec) {
     seen.add(entry.id);
     const item = byItem.get(entry.id);
     ensure(entry.briefSha256 === item.brief.sha256, `authored query ${entry.id} was written for a different brief; write it again`);
-    const problems = checkQueryText(entry.text, item.brief);
+    const problems = itemTextProblems(entry.text, item, ctx, { authored: true });
     ensure(problems.length === 0, `authored query ${entry.id}: ${problems.join('; ')}`);
     item.query = { template: item.query.template, text: entry.text, source: 'authored' };
   }
@@ -806,6 +942,9 @@ function attachQueries(items, authored, spec) {
     samplingSeed: author.samplingSeed ?? null, authoredOn: author.authoredOn ?? null, review: author.review ?? null,
   };
 }
+
+/** The text rules a set was built under, as the set records them: the limits and the names of the checks that ran. */
+const textRulesRecord = (spec) => ({ minLength: spec.queryAuthoring.textRules.minLength, maxLength: spec.queryAuthoring.textRules.maxLength, checks: [...TEXT_CHECKS] });
 
 /** The rule-computed part of an item: everything except the authored text. */
 const goldView = (item) => { const { query, ...rest } = item; return { ...rest, query: { template: query.template } }; };
@@ -829,7 +968,7 @@ export function buildEvaluationSet({ catalog, personas, themeMap, spec, authored
       else dropped.push(result.dropped);
     }
   }
-  const author = authoredQueries === undefined ? null : attachQueries(items, authoredQueries, spec);
+  const author = authoredQueries === undefined ? null : attachQueries(items, authoredQueries, ctx);
   const authored = items.filter((item) => item.query.source === 'authored').length;
   const set = {
     schemaVersion: EVALUATION_SET_SCHEMA_VERSION,
@@ -850,6 +989,7 @@ export function buildEvaluationSet({ catalog, personas, themeMap, spec, authored
     contentSha256: { gold: goldHash(items), queries: queriesHash(items) },
     queryAuthoring: {
       mode: authored > 0 ? 'authored' : 'template_only', promptVersion: spec.queryAuthoring.promptVersion,
+      textRules: textRulesRecord(spec),
       authored, template: items.length - authored, author: authored > 0 ? author : null,
     },
     items,
@@ -929,7 +1069,7 @@ export function validateEvaluationSet(set, { catalog, personas, themeMap, spec }
       && (item.query.source === 'authored') === (item.query.text !== null), `${label} query record is inconsistent`);
     const rebuilt = assembleItem({ persona, slot, vector: personaVector(persona, ctx.themeIds), conditions: item.conditions, generation, ctx });
     ensure(canonicalSha256(goldView(rebuilt)) === canonicalSha256(goldView(item)), `${label} does not match the rules for its conditions`);
-    if (item.query.text !== null) ensure(checkQueryText(item.query.text, item.brief).length === 0, `${label} authored query breaks the text rules`);
+    if (item.query.text !== null) ensure(itemTextProblems(item.query.text, item, ctx, { authored: true }).length === 0, `${label} authored query breaks the text rules`);
   }
   const hardCases = new Set(set.items.map((item) => item.hardCase).filter(Boolean));
   ensure(REQUIRED_HARD_CASES.every((id) => hardCases.has(id)), 'the set must contain every mandatory hard case');
@@ -939,6 +1079,7 @@ export function validateEvaluationSet(set, { catalog, personas, themeMap, spec }
   const authoring = set.queryAuthoring;
   ensure(isRecord(authoring) && authoring.authored === authored && authoring.template === set.items.length - authored
     && authoring.mode === (authored > 0 ? 'authored' : 'template_only') && authoring.promptVersion === spec.queryAuthoring.promptVersion
+    && JSON.stringify(authoring.textRules) === JSON.stringify(textRulesRecord(spec))
     && (authored > 0 ? isRecord(authoring.author) && AUTHOR_KINDS.includes(authoring.author.kind) && text(authoring.author.model, 200) : authoring.author === null),
   'the query authoring record does not match the items');
   const diagnostics = set.diagnostics;
@@ -957,6 +1098,8 @@ export function evaluationBriefs(set, spec) {
     goldSha256: set.contentSha256.gold,
     promptVersion: spec.queryAuthoring.promptVersion,
     prompt: spec.queryAuthoring.prompt,
+    textRules: spec.queryAuthoring.textRules,
+    cues: spec.queryAuthoring.cues,
     briefs: set.items.map((item) => ({ id: item.id, briefSha256: item.brief.sha256, ...(({ sha256, ...brief }) => brief)(item.brief), template: item.query.template })),
   };
 }
@@ -1045,6 +1188,11 @@ export function summarizeEvaluationSet(set) {
       mode: authoring.mode, promptVersion: authoring.promptVersion, authored: authoring.authored, template: authoring.template,
       authorKind: authoring.author === null ? null : authoring.author.kind,
       authoringRecord: authoring.authored > 0 ? 'local_only' : 'none',
+      textRules: { minLength: authoring.textRules.minLength, maxLength: authoring.textRules.maxLength, checks: [...authoring.textRules.checks] },
+      textLength: {
+        authored: distribution(items.filter((item) => item.query.text !== null).map((item) => item.query.text.length)),
+        template: distribution(items.map((item) => item.query.template.length)),
+      },
     },
   };
 }
