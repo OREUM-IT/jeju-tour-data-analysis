@@ -2549,29 +2549,52 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 # 18. Claude Code 작업 인수인계와 재개 절차
 
-기준일: 2026-11-18. 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 구현하고, 현재 분석·설계·데이터·MCP 작업을 하나의 검토 가능한 PR로 이어가는 것이다. 이 문서는 실행 가능한 초기 구현과 아직 필요한 외부 접근을 분리한다. 이전 문서에 남아 있는 과거 상태보다 아래의 확인 시점과 근거를 우선하고, 새 결과가 생기면 해당 근거와 함께 갱신한다.
+기준일: 2026-11-18 (Claude 세션 종료 시점에 갱신). 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 [19 문서](../docs/19-agent-step2-data-foundation.md)의 단계로 구현하는 것이다. 이 문서는 다음 Claude Code 세션이 그대로 이어받을 상태, 재개 절차, 다음 작업 명세를 담는다. 0절이 최신 상태다. 1절 이하는 Codex 단계부터 이어진 기록과 절차에 이번 세션의 변경을 반영한 것이다. 과거 상태보다 확인 시점이 최근인 근거를 우선하고, 새 결과가 생기면 근거와 함께 갱신한다.
+
+## 0. 지금 이어받을 상태 (2026-11-18, Claude 세션 종료 시점)
+
+| 항목 | 상태 |
+|---|---|
+| main | `75fc9f5`(PR #3 병합). PR #1(Codex 설계·인수인계), #2(2단계 데이터 기반·논문 정정), #3(Langflow 연결)이 모두 병합됐다. 이 인수인계 갱신은 별도 PR로 올렸다 |
+| 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · 시각적 빌더 Langflow 연결 ✅(모델 실행 미검증) · **다음은 3단계 평가셋**(11절 명세) |
+| 검사 | 로컬: MCP·HF·Agent 카탈로그 41개 + Gateway 10개 = 51개 통과, `check_repository.py` 8개 항목 PASS. CI: PR #3 [pull_request 실행](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44265260167) 통과 |
+| 데이터 실측 | 원본 앱 장소 981곳(원시 POI 863·앱 생성 118). `verified` 0, 비용 0, 실내 출처 132, 영업시간 출처 466, 동네 산책 테마 대표 후보 7. 집계는 [`reports/agent-catalog-coverage.json`](agent-catalog-coverage.json) |
+| Langflow | 1.13.3에서 jeju-mcp 도구 3개 발견·호출, 서버 등록 API, 시작 흐름 가져오기와 MCP 노드 빌드를 확인했다. 실제 모델 실행·Desktop·Docker·사용자 PC는 미검증 |
+| 사라진 로컬 산출물 | 참고 앱 빌드 사본, `.local` 카탈로그·덤프, `.env.local`, Langflow DB·가상환경은 그 클라우드 세션에만 있었다. 새 세션은 [19 문서](../docs/19-agent-step2-data-foundation.md) 5절과 [20 문서](../docs/20-langflow-agent-builder.md) 3·4절로 다시 만든다 |
+
+**사용자 결정 (2026-11-18)**
+
+- 논문: `2504.09277`은 SynthTRIPs로 평가셋 생성에, LAG는 `2508.05509`로 추론 비교 실험에 쓴다(둘 다 사용).
+- 결과물 전달: 분석 저장소에 새 브랜치 push + PR. 병합은 사용자가 한다. 이번 세션의 PR은 사용자가 바로 병합했다.
+- 시각적 Agent 빌더: Langflow(1.13.0 이상, 로컬). Flowise는 지원 종료로 제외했다.
+- 시각화 커넥터(Mermaid Chart·Figma·Metabase·Grafana Cloud)는 안내만 했고, 사용자가 아직 고르지 않았다.
+
+**사용자에게 아직 받지 못한 답**
+
+- 평가와 Agent 실행에 쓸 모델 공급자와 키(Gemini·Claude·OpenAI·Ollama 중), Langflow를 돌릴 PC의 OS.
+- 평가셋 정답 후보(장소 ID·이름 포함)를 Git에 올려도 되는지. 답이 없으면 `.local`에 두고 집계만 올린다.
 
 ## 1. 바로 이어받을 상태
 
 | 항목 | 확인된 결과 | 아직 확인하지 않은 것 |
 |---|---|---|
-| 분석 저장소 | `OREUM-IT/jeju-tour-data-analysis`; 인수인계 작성 시 main과 `codex/huggingface-mcp-ci`의 기준 커밋은 `ad3c36384117696457d4c6ee547d9659629116fa` | 전체 자료를 포함하는 이번 PR의 최종 head는 이후 커밋이다. PR에서 확인 |
-| CI | [실제 GitHub Actions 실행 성공](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44226883163); MCP·HF 모의 검사 32개와 Gateway 10개, 총 42개 | 실제 HF 운영 서버 연결이나 모델 추론 성공은 이 결과에 포함되지 않음 |
-| 전체 작업 | `codex/ai-agent-model-handoff` 브랜치로 기획 문서, 데이터 카탈로그, 보고서, 시각화, 재생성 스크립트를 검토 | 인수인계 작성 환경의 GitHub API는 403. PR 생성 여부는 실제 GitHub 조회로 확인하며 Git 추적 파일을 인수인계 기준으로 사용 |
+| 분석 저장소 | `OREUM-IT/jeju-tour-data-analysis` main `75fc9f5`(2026-11-18). Codex 단계 기준 커밋은 `ad3c36384117696457d4c6ee547d9659629116fa` | 이후 커밋과 열린 PR은 GitHub에서 확인 |
+| CI | Codex 단계 [실행](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44226883163) 42개에서 Claude 세션 이후 51개(MCP·HF·Agent 카탈로그 41 + Gateway 10)로 늘었다. PR #3 [실행](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44265260167) 통과 | 실제 HF 운영 서버 연결이나 모델 추론 성공은 이 결과에 포함되지 않음 |
+| 전체 작업 | PR #1(`codex/ai-agent-model-handoff`)과 PR #2·#3(`claude/agent-step2-data-foundation`)이 병합됐다 | 열린 PR은 GitHub REST로 확인(3절) |
 | 페르소나 | 9개 테마 + 4개 연속 선호 축, 총 13축의 수작업 프로토타입 8개; 독립 HTML 탐색기 | 실제 관광객 표본·학습·경험적 군집·추천 효과 검증 없음 |
 | CSV | 55파일, 데이터 논리행 합계 210,532, 컬럼 기록 675; 원본 스냅샷 37·제주 추출본 17·파생 집계 1 | 라이선스 공란 8개·개별 조건 미확인 2개가 있어 원본 CSV ZIP은 공개 PR에서 제외. 최신성·중복·전체 Excel 대조도 미완료 |
-| 제주 자체 MCP | `places.search`, `places.get`, `constraints.check`; 기존 JSON의 POI 7,561건 로컬 가져오기와 실제 SDK 통신 검사 | 공개 서버 배포·Vercel 연결·개인별 OAuth·추천 Agent 미완료 |
+| 제주 자체 MCP | `places.search`, `places.get`, `constraints.check`; 기존 JSON의 POI 7,561건 로컬 가져오기와 실제 SDK 통신 검사. Langflow 1.13.3의 MCP 클라이언트로도 호출 확인 | 공개 서버 배포·Vercel 연결·개인별 OAuth·추천 Agent 미완료. 도구는 아직 v1 카탈로그(제약 값 0)를 쓴다. 카탈로그 v2 연결은 4단계 |
 | HF MCP | 프로젝트 설정과 독립 클라이언트, 신규 HF 모의 검사 8개가 위 32개에 포함 | 실제 공개 접속은 현재 클라우드 프록시 403; 연결 성공 미확인 |
 | HF 계정·조직 | 사용자가 다른 계정으로 로그인했다고 보고. 기본 조직 ID 제안은 `oreumit` | 실제 사용자명·조직 ID 가용성·관리자 권한 미확인, 조직 생성 미실행 |
 | 도메인 | 사용자 보고: `oreumit.com`의 Vercel Valid Configuration, Cloudflare NS `dilbert.ns.cloudflare.com`·`irma.ns.cloudflare.com` 저장 | 계정 화면 직접 조회, 실제 DNS Active·전파·TLS·웹 alias 목록 미확인 |
-| 모델 | 기존 앱 코드의 공급자 경로와 후보 모델을 문서화 | 이 작업에서 Ollama 적재·LLM 추론·성능·비용 실측 없음 |
+| 모델 | 기존 앱 코드의 공급자 경로와 후보 모델을 문서화. Langflow 시작 흐름의 Agent 노드는 모델·키가 비어 있다 | 이 작업에서 Ollama 적재·LLM 추론·성능·비용 실측 없음 |
 | 연구 원자료 | `2504.09277` = SynthTRIPs(평가셋 생성 틀), LAG = `2508.05509`(2026-11-18 사용자 결정, [19 문서](../docs/19-agent-step2-data-foundation.md)) | 두 논문 본문 세부·별도 PDF·목록 Excel 1,259항목의 원본 미확보 |
 
 55개 CSV는 7,561건 MCP 카탈로그와 다른 산출물이다. CSV 전체를 MCP에 적재한 상태가 아니다. 210,532는 고유 장소 수가 아니며 파생 수요 통계도 관광객 선호 정답이 아니다. `/readyz`의 `productionReady:false`는 실제 자료 모드에서도 유지한다.
 
 ## 2. 먼저 읽을 파일
 
-1. [README](../README.md)와 이 문서: 전체 산출물·현재 상태.
+1. [README](../README.md)와 이 문서 0절, [19 문서](../docs/19-agent-step2-data-foundation.md), [20 문서](../docs/20-langflow-agent-builder.md): 전체 산출물·현재 상태·Agent 단계·Langflow.
 2. [모델 레지스트리](../docs/17-ai-agent-model-registry.md), [기계 판독 모델 목록](../data/ai-agent-models.json): 기존 코드 기본값, 새 후보, 실행 미검증 상태. 이 목록은 자동 라우터가 아니다.
 3. [HF MCP 설정](../docs/15-huggingface-mcp-setup.md), [HF 조직·CI](../docs/16-huggingface-organization-and-ci.md): 현재 가장 먼저 이어갈 연결 작업.
 4. [기존 서비스 검토](../docs/05-existing-service-review.md), [MCP·Vercel 통합](../docs/10-mcp-server-and-vercel-integration.md): 실제 원본 계약과 제안의 경계.
@@ -2581,49 +2604,33 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 Word/PDF에는 현재 문서 01~18을 편집 순서에 맞춰 포함한다. 문서 수정 후 자동 갱신되지는 않으므로 `scripts/build_report.py --pdf`로 다시 생성한다. 최신 운영 상태는 Markdown·실제 CI·코드에서 읽는다.
 
-## 3. Git와 PR부터 보존
+## 3. Git와 PR 작업 방식
 
-현재 환경의 분석 체크아웃은 `/workspace/jeju-tour-data-analysis`다. 이미 이 경로를 사용 중이면 새 clone이나 worktree를 만들기 전에 상태를 확인한다.
-
-```sh
-cd /workspace/jeju-tour-data-analysis
-git status --short
-git branch --show-current
-git rev-parse HEAD
-git log -5 --oneline
-git diff --stat
-git ls-files CLAUDE.md docs/18-claude-code-handoff.md
-```
-
-이전 기준 SHA로 강제 reset하지 않는다. 인수인계 이후의 변경과 사용자의 미커밋 작업을 보존한다. PR이 열려 있다면 실제 head ref·SHA·base·본문·검사 결과를 먼저 읽고 그 PR을 이어간다. 제목과 본문에는 전체 작업 범위, 42개 검사의 근거, HF 연결 차단, 미배포·미추론·미확보 원자료를 남긴다. 이미 있는 설명을 짧은 새 요약으로 덮어쓰지 않는다.
-
-GitHub CLI와 정상 API 접근이 제공되는 환경에서는 다음 읽기 명령으로 확인할 수 있다. 도구가 없거나 프록시가 거부하면 이 명령을 반복하지 않고 사용 가능한 GitHub 연결/브라우저로 확인한다.
+새 세션은 최신 main에서 시작한다. 기존 체크아웃이 있으면 새 clone 전에 상태를 확인하고, 사용자의 미커밋 작업을 보존한다. 이전 기준 SHA로 강제 reset하지 않는다.
 
 ```sh
-gh pr status --repo OREUM-IT/jeju-tour-data-analysis
-gh pr view <실제-PR-번호> --repo OREUM-IT/jeju-tour-data-analysis \
-  --json number,url,title,body,baseRefName,headRefName,headRefOid,state
-```
-
-`<실제-PR-번호>`는 실제 PR 조회 결과로 바꾼다. 본문 편집 전 현재 내용을 작업용 파일에 그대로 저장하고, 수정 후 대조한다. `gh pr edit`를 사용하면 실제 줄바꿈을 보존한 `--body-file`을 사용한다. 임시 본문 파일은 재개에 필요한 유일한 기록으로 삼지 않고 최종 내용을 PR 자체에 남긴다. PR 생성·업데이트가 이미 승인된 범위지만 자동 merge, 강제 push, 원본 앱 변경까지 승인된 것으로 확대하지 않는다.
-
-PR이 아직 없고 API 접근이 복구되었다면 [준비된 PR 본문](../docs/PR_BODY.md)을 검토하고 아래 명령으로 생성한다. 먼저 `gh pr list --head codex/ai-agent-model-handoff`로 중복 여부를 확인한다.
-
-```sh
-gh pr create --repo OREUM-IT/jeju-tour-data-analysis \
-  --base main --head codex/ai-agent-model-handoff \
-  --title 'Update all AI AGENT MODEL: 제주 관광 Agent 전체 설계와 Claude Code 인수인계' \
-  --body-file docs/PR_BODY.md
-```
-
-새 환경에는 분석 저장소를 새 경로로 clone한 뒤 **실제 전체 작업 PR의 head**를 checkout한다. 기준 main만 checkout하면 아직 merge되지 않은 설계·데이터·보고서가 누락될 수 있다. 기존 경로가 있으면 덮어쓰지 않는다.
-
-```sh
-git clone https://github.com/OREUM-IT/jeju-tour-data-analysis.git jeju-tour-data-analysis
+git clone https://github.com/OREUM-IT/jeju-tour-data-analysis.git   # 체크아웃이 없을 때만
 cd jeju-tour-data-analysis
-git switch <실제-전체-작업-PR-head-브랜치>
-git rev-parse HEAD
+git status --short
+git log -3 --oneline
+git fetch origin main
+git switch -c claude/<작업-이름> origin/main
 ```
+
+- 결과는 새 브랜치 push + PR로 올린다(사용자 결정). main에 직접 push하거나 병합·강제 push하지 않는다. 병합은 사용자가 한다.
+- 같은 브랜치에 커밋을 더하기 전에 그 PR이 이미 병합·종료됐는지 확인한다. 이번 세션에서는 PR #2가 병합된 뒤 같은 브랜치에 올린 커밋이 PR #2에 반영되지 않았고, 사용자가 PR #3으로 따로 병합했다. 병합됐다면 최신 main에서 새 브랜치를 만든다.
+- Claude Code 클라우드 세션에서는 GitHub GraphQL이 막혀 `gh pr create`·`gh pr view`가 403으로 실패한다. REST로 조회·생성·수정한다.
+
+```sh
+gh api "repos/OREUM-IT/jeju-tour-data-analysis/pulls?state=open" --jq '.[] | {number, title, head: .head.ref}'
+gh api repos/OREUM-IT/jeju-tour-data-analysis/pulls/<번호> --jq '{state, merged, head: .head.sha}'
+gh api -X POST repos/OREUM-IT/jeju-tour-data-analysis/pulls \
+  -f title='<제목>' -f head='claude/<작업-이름>' -f base=main -F body=@<본문 파일>
+gh api -X PATCH repos/OREUM-IT/jeju-tour-data-analysis/pulls/<번호> -F body=@<본문 파일>
+```
+
+- CI는 `main`·`codex/**` push와 pull_request에서만 돈다. PR 동기화가 늦거나 PR 전에 확인하려면 `gh api -X POST repos/OREUM-IT/jeju-tour-data-analysis/actions/workflows/ci.yml/dispatches -f ref=<브랜치>`로 한 번 실행하고, 결과 URL을 PR에 남긴다.
+- PR 본문에는 범위, 실측 검증, 미검증 항목을 나눠 적는다. 본문을 고치기 전 현재 내용을 파일로 저장하고 수정 후 대조한다. 이미 있는 설명을 짧은 새 요약으로 덮어쓰지 않고, 병합된 PR에는 검증 기록만 덧붙인다.
 
 ## 4. 무엇이 재사용되고 무엇이 사라질 수 있는가
 
@@ -2634,6 +2641,9 @@ git rev-parse HEAD
 | `.mcp.json`, `.codex/config.toml` | 토큰 없는 프로젝트 설정. 클라이언트 승인·프로젝트 신뢰·네트워크 적용은 새 환경에서 별도 |
 | `services/jeju-mcp/node_modules` | 커밋하지 않음. 잠금파일로 `npm ci` 재생성 |
 | `services/jeju-mcp/.local/catalog.json` | 로컬 가져오기 결과. Git에 없음. 고정 원본을 확보해 재생성 |
+| `services/jeju-mcp/.local/app-places-*.json`, `agent-catalog-*.json` | 제3자 장소 자료라 Git에 없음. [19 문서](../docs/19-agent-step2-data-foundation.md) 5절 순서(참고 앱 사본 빌드 → 덤프 → 내보내기)로 재생성 |
+| `services/langflow/langflow.env`, `.langflow-venv/`, Langflow 설정 폴더(DB) | 비밀번호·암호화 키·전역 변수(토큰)가 들어 있다. Git·이관 대상이 아니다. [20 문서](../docs/20-langflow-agent-builder.md) 3·4절로 다시 만든다 |
+| 참고 앱 빌드 사본 | `git archive`로 고정 커밋을 별도 폴더에 풀어 빌드한 임시 사본. 참고 checkout에는 설치·빌드하지 않는다 |
 | 서비스·Gateway의 `.env.local`, 토큰, OAuth 캐시 | 비밀 설정. 이관용 문서나 ZIP에 넣지 않고 승인된 비밀 저장소/클라이언트로 다시 공급 |
 | `/workspace/scratch/reference-repos/` | 현재 환경에 있는 읽기 전용 참고 clone. 새 환경에서는 존재를 보장하지 않으므로 고정 커밋으로 재확보 |
 | `/workspace/scratch/jeju-research/`, npm 캐시, 설치된 보고서 도구 | 조사·빌드 편의 자산. 코드의 필수 외부 입력으로 의존하지 않음 |
@@ -2669,7 +2679,7 @@ git -C "$JEJU_REFERENCE_ROOT/jeju-tour-flutter" status --porcelain
 
 ### 의존성과 필요한 검사
 
-아래는 분석 저장소 루트 기준이다. 설치된 Node는 이번 클라우드에서 `24.22.1`, Python은 `3.12.14`였다. 새 환경의 버전을 확인하고 잠금 의존성을 사용한다.
+아래는 분석 저장소 루트 기준이다. 설치된 Node는 Codex 클라우드에서 `24.22.1`, Python은 `3.12.14`였다. Claude 세션 클라우드에서는 Node `22.23.5`, Python `3.13.18`이었고 같은 검사가 통과했다. 새 환경의 버전을 확인하고 잠금 의존성을 사용한다.
 
 ```sh
 node --version
@@ -2684,7 +2694,7 @@ npm --prefix services/jeju-mcp test
 node --test examples/ollama-tunnel/gateway.test.mjs
 ```
 
-현재 기대값은 32 + 10 = 42개다. HF 8개는 32개에 포함되므로 따로 더하지 않는다. npm 캐시가 쓰기 불가한 경우 작업용 `--cache /workspace/scratch/npm-cache`를 추가한다. SDK `1.32.1`, zod `4.6.7`, MCP 프로토콜 `2025-11-25` 기준을 유지한다. v2 업그레이드는 별도 변경이다.
+현재 기대값은 41 + 10 = 51개다(서비스 24·HF 8·Agent 카탈로그 9 + Gateway 10). 저장소 검사 `python3 scripts/check_repository.py`는 8개 항목이다. npm 캐시가 쓰기 불가한 경우 작업용 `--cache /workspace/scratch/npm-cache`를 추가한다. SDK `1.32.1`, zod `4.6.7`, MCP 프로토콜 `2025-11-25` 기준을 유지한다. v2 업그레이드는 별도 변경이다.
 
 ### 장소 가져오기와 서버 시작
 
@@ -2739,11 +2749,21 @@ python3 scripts/build_data_source_catalog.py --source /workspace/scratch/referen
 
 ## 8. 다음 작업 순서와 완료 기준
 
-추가(2026-11-18): Agent 구현은 [19 문서](../docs/19-agent-step2-data-foundation.md)의 단계적 절차를 따른다. 1·2단계(진단·근거 등급 카탈로그)는 완료했고 다음은 3단계 평가셋이다. 아래 연결·계정 작업은 그와 병행할 수 있다.
+### 8.1 Agent 단계 (우선)
 
 | 순서 | 할 일 | 완료 기준 |
 |---|---|---|
-| 1 | 전체 작업 PR·head·본문·검사 결과 보존 | 설계·카탈로그·보고서·서비스·인수인계가 의도한 PR에 포함되고 비밀/캐시/원본 CSV ZIP이 제외됨. 성공한 CI와 미검증 항목을 본문에 구분 |
+| 1 | 3단계 평가셋(SynthTRIPs 방식), 11절 명세 | 생성기·테스트·집계 보고서가 PR로 올라가고, 질의마다 근거 사실·조건·기대 동작·정답 규칙이 있다 |
+| 2 | 기준선 채점: 기존 Gemini 비서와 Langflow 흐름 | 같은 평가셋으로 허용 ID 위반·필수 조건 오판·재현율·지연을 기록. 모델 키·전송 범위는 사용자 승인 후 |
+| 3 | 4단계 도구: 카탈로그 v2 기반 MCP 도구(테마 랭킹, 근거 등급 조건 검사, 영업시간) | `verified`가 아닌 값으로 pass하지 않는 테스트, 기존 3개 도구 호환 유지 |
+| 4 | 5단계 Agent 루프와 LAG(`2508.05509`) 비교 | 같은 평가셋에서 허용 ID 위반 0, 필수 조건 오판 0. LAG 원문 세부 확인 전 `method=lag` 표기 금지 |
+| 5 | 6단계 비교·연결 | 비교 결과와 되돌리기 절차. 원본 앱 변경·운영 배포는 별도 승인 |
+
+### 8.2 연결·계정·자료 (병행)
+
+| 순서 | 할 일 | 완료 기준 |
+|---|---|---|
+| 1 | 전체 작업 PR·head·본문·검사 결과 보존 (PR #1~#3 병합으로 완료) | 설계·카탈로그·보고서·서비스·인수인계가 의도한 PR에 포함되고 비밀/캐시/원본 CSV ZIP이 제외됨. 성공한 CI와 미검증 항목을 본문에 구분 |
 | 2 | 실제 실행 환경의 HF 네트워크 허용과 클라이언트 기능 확인 | draft 저장과 런타임 적용을 구분. 허용 정책 적용 후 한 번의 실제 `list`가 성공. 현재 대화/Claude Code에서 도구가 실제 발견됨 |
 | 3 | 새 HF 계정으로 무료 `oreumit` 조직 생성·연결 | 실제 계정명, 생성된 URL, Members의 admin 확인. 이미 같은 이름이 있으면 소유권 확인. 다른 계정으로 임의 생성하지 않음 |
 | 4 | HF 읽기 도구 실제 호출과 수동 연결 CI | 공개 목록·모델/데이터셋 검색 성공. 조직 권한 확인과 별도로 기록. main의 수동 smoke 실행 URL·head SHA·결과 보존 |
@@ -2752,7 +2772,7 @@ python3 scripts/build_data_source_catalog.py --source /workspace/scratch/referen
 | 7 | 사용자 장비의 실제 모델 검증 | 정확한 태그/digest·라이선스·RAM/VRAM·양자화·한국어·JSON·도구 왕복·지연 확인. 모델 레지스트리에 관측 결과 기록 |
 | 8 | 보호된 호스트·Preview 통합 설계 구체화 | DNS·TLS·Access·서비스 인증과 상시 호스트 확인. 기존 서비스 계약을 보존한 별도 Preview/변경안. 운영 배포는 아직 실행 대상이 아님 |
 
-2~4를 우선 진행하되, 외부 접근이 막히면 이미 가진 데이터의 정제 설계와 원문 확보 준비를 병행할 수 있다. 사용자에게 이미 승인된 전체 작업을 다시 승인받기 위해 멈추지 않는다. 실제 도구·권한·자료가 없을 때만 누락된 전제와 필요한 최소 화면 작업을 구체적으로 전달한다.
+8.1을 우선한다. 8.2의 2~4는 외부 접근이 열리면 병행하고, 막히면 이미 가진 데이터의 정제 설계와 원문 확보 준비를 병행할 수 있다. 사용자에게 이미 승인된 전체 작업을 다시 승인받기 위해 멈추지 않는다. 실제 도구·권한·자료가 없을 때만 누락된 전제와 필요한 최소 화면 작업을 구체적으로 전달한다.
 
 HF 공개 호출 명령은 다음과 같다. 프록시 설정이 제공된 Node 24 환경에서 사용한다.
 
@@ -2769,7 +2789,7 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 ## 9. 이미 승인된 범위와 접근 경계
 
-사용자는 클라우드 설정, 기획·시각화·보고서·데이터 정리, 실행 가능한 읽기 전용 MCP, HF 새 계정의 조직 생성·MCP 연결·CI, 전체 작업 PR 및 Claude Code 인수인계를 요청했다. 같은 범위의 가역적인 구현·검증·PR 작업에 포괄적인 재확인을 요구하지 않는다. 브라우저 도구가 제공되면 이미 승인된 계정 화면 작업을 이어갈 수 있지만, 올바른 계정·대상 리소스를 먼저 확인해야 한다.
+사용자는 클라우드 설정, 기획·시각화·보고서·데이터 정리, 실행 가능한 읽기 전용 MCP, HF 새 계정의 조직 생성·MCP 연결·CI, 전체 작업 PR 및 Claude Code 인수인계를 요청했다. 2026-11-18 Claude 세션에서는 Agent 구축의 단계적 진행, 논문 정정(둘 다 사용), 새 브랜치 push + PR, Langflow 사용을 결정했고 PR 병합은 사용자가 했다. 같은 범위의 가역적인 구현·검증·PR 작업에 포괄적인 재확인을 요구하지 않는다. 모델 공급자 호출(과금·데이터 전송)과 평가 정답 후보의 Git 공개는 아직 승인되지 않았다. 브라우저 도구가 제공되면 이미 승인된 계정 화면 작업을 이어갈 수 있지만, 올바른 계정·대상 리소스를 먼저 확인해야 한다.
 
 현재 세션에는 브라우저 제어, 임의 HF connector 등록, 실행 환경 네트워크 apply/Publish 도구가 없었다. 환경 상태·진단 조회와 draft 저장은 가능했다. 새 세션에서 도구를 다시 확인하되, 설정 파일 작성이나 웹 브라우저 로그인만으로 도구 권한을 얻었다고 주장하지 않는다. 보호 경로의 전역 설정·프로젝트 신뢰를 바꾸어 자동 활성화를 강제하지 않는다.
 
@@ -2793,8 +2813,47 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 | `.local` 출력 또는 `.env.local`이 이미 있음 | 덮어쓰기 방지가 정상 작동. 파일을 지우거나 토큰을 재생성하지 않고 기존 산출물의 목적·출처를 확인 |
 | 모델 CLI·GPU·11434가 없음 | 해당 클라우드에서 미실행. 사용자 Windows/Mac에서 모델 실행이 불가능하다는 근거는 아님 |
 | 도메인 조회가 타임아웃/403 | 도메인 미등록·NS 미설정·TLS 실패를 뜻하지 않음. 사용자 보고와 실제 권한 있는 조회를 분리 |
+| `gh pr create`·`gh pr view`가 GraphQL 403 | Claude Code 클라우드 세션 정책이며 인증 문제가 아니다. `gh api` REST로 PR을 조회·생성·수정(3절) |
+| push했는데 PR head가 안 바뀜 | 그 PR이 이미 병합·종료됐는지 먼저 확인. 병합됐다면 최신 main에서 새 브랜치·새 PR |
+| 브랜치 push 뒤 CI가 돌지 않음 | CI는 main·`codex/**` push와 pull_request에서만 실행된다. `workflow_dispatch`로 한 번 실행 |
+| Langflow `SSRFProtectionError`(127.0.0.1) | 로컬 MCP 연결 차단. `LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1`로 다시 시작. 사설망 전체를 열지 않는다 |
+| Langflow 전역 변수 저장이 HTTP 500 "Fernet key" | `LANGFLOW_SECRET_KEY` 형식 오류. 줄을 지워 자동 생성하거나 Fernet 형식 키를 넣는다 |
+| 참고 앱 서버 시작 시 `public-service-data.json.gz` 없음 | 사본에서 `scripts/copy-migrations.cjs`와 `copy-public-service.cjs`를 먼저 실행([19 문서](../docs/19-agent-step2-data-foundation.md) 5절) |
+| `arxiv.org`·배포 앱 직접 접속이 403 | 작업 공간 네트워크 허용 목록 밖이다. 웹 조회 도구로 읽고 우회하지 않는다 |
 
 차단이 유지되는 동안 같은 네트워크 호출·CI를 반복해 성공을 기대하지 않는다. 설정 적용, 새 도구, 계정 권한, 새 원자료처럼 전제가 바뀐 뒤 제한된 검사를 재개한다. 마지막 결과에는 완료한 변경, 실제 검증, 아직 막힌 작업과 그 정확한 전제를 각각 남긴다.
+
+## 11. 다음 작업 명세: 3단계 평가셋 (SynthTRIPs 방식)
+
+아래는 사용자 결정(SynthTRIPs를 평가셋 생성에 사용)을 따르는 제안이다. 구현 중 바뀌면 이 절과 [19 문서](../docs/19-agent-step2-data-foundation.md)를 함께 고친다.
+
+**목적.** 기존 Gemini 비서, Langflow 흐름, 이후의 코드 Agent와 LAG 변형을 같은 조건으로 채점할 평가셋을 만든다. 합성 질의는 실제 관광객 응답이나 만족도를 대신하지 않는다.
+
+**입력.** `services/jeju-mcp/.local/agent-catalog-b0602a1.json`(19 문서 5절로 재생성), [`data/persona-prototypes.json`](../data/persona-prototypes.json)(8개), [`data/theme-category-map.json`](../data/theme-category-map.json), 근거 등급 정책(`verified`만 필수 조건 pass, 현재 `verified` 0).
+
+**생성 순서.**
+
+1. 조건 묶음을 만든다. 페르소나 1개에 조건 1~4개를 붙인다. 조건 후보는 권역, 분류·테마, 이동수단(렌터카·대중교통), 동행(아이·부모님), 걷기 강도, 실내 필요(비 예보), 혼잡 회피, 방문 시각, 휠체어, 예산이다.
+2. 조건에 맞는 카탈로그 사실을 먼저 찾는다. 후보가 0이면 버리거나, "불가 안내"가 정답인 사례로 남긴다.
+3. 정답은 LLM이 아니라 규칙으로 계산한다. 후보 ID 집합(테마 가중치 0.5 이상·권역·분류), 필수 조건별 기대 판정(`verified`가 없으면 `unknown`이고 "확인 필요"로 안내), 기대 동작(`recommend`·`ask_clarification`·`cannot_confirm`·`impossible`)을 함께 저장한다.
+4. LLM은 그 사실만 보고 한국어 질의 문장을 쓴다. 생성 모델·프롬프트·시드를 기록한다. 세션 안의 Claude가 써도 되지만 모델 표기를 남긴다.
+5. 난이도는 단순·복합·충돌로 나눈다. [17 문서](../docs/17-ai-agent-model-registry.md)의 어려운 사례(거의 안 걸음, 알 수 없는 접근성, 날짜 충돌, 허용되지 않은 ID, 빈 검색 결과)를 반드시 넣는다. 첫 목표는 약 100문항(페르소나당 12문항 안팎)이다.
+
+**산출물 위치.** Git에는 생성기 코드·테스트, 조건·난이도 명세, 장소 이름·ID 없는 집계 보고서를 넣는다. 질의와 정답 후보(장소 ID·이름 포함) 전체는 `.local`에 두고, Git 공개는 사용자 승인 뒤에 한다.
+
+**채점 지표.** 허용되지 않은 ID 사용률(목표 0), 필수 조건 오판(`unknown`을 통과로 말함, 목표 0), 정답 후보 재현율@k, 추천 장소의 페르소나 테마 일치도, "확인 필요" 고지율, 지연·비용.
+
+**완료 기준.** 같은 시드로 같은 결과가 나오고, 정답 규칙에 단위 테스트가 있고, `check_repository.py`가 집계 보고서에 장소 ID가 없는지 검사하고, PR 본문에 실측과 미검증이 나뉘어 있다.
+
+## 12. 새 Claude Code 세션 시작 프롬프트
+
+```text
+OREUM-IT/jeju-tour-data-analysis 저장소에서 이어서 작업해 줘.
+1) CLAUDE.md와 docs/18-claude-code-handoff.md의 0절·3절·11절을 먼저 읽어 줘.
+2) 최신 main에서 claude/agent-step3-evaluation 브랜치를 만들어 줘.
+3) docs/19 5절대로 .local 카탈로그를 다시 만들고, 11절 명세대로 3단계 평가셋 생성기·테스트·집계 보고서를 만들어 줘.
+4) 결과는 새 브랜치 push + PR로 올려 줘. 원본 앱 저장소는 읽기 전용이야. 모델 API 호출과 정답 후보의 Git 공개는 먼저 물어봐 줘.
+```
 
 # 19. AI Agent 1·2단계: 진단과 근거 등급 데이터 기반
 
