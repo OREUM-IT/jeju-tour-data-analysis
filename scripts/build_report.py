@@ -46,6 +46,7 @@ CHAPTERS = [
     ("16-huggingface-organization-and-ci.md", "16. Hugging Face 조직·계정·CI 운영"),
     ("17-ai-agent-model-registry.md", "17. AI AGENT MODEL 전체 목록과 선정 기준"),
     ("18-claude-code-handoff.md", "18. Claude Code 작업 인수인계와 재개 절차"),
+    ("19-survey-revision-v03.md", "19. 설문 개정: 기본정보·선택 통화·활동 선호"),
 ]
 PAGE_BREAK = '\n```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```\n'
 

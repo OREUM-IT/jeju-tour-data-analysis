@@ -2,6 +2,8 @@
 
 기준일: 2026-11-18. 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 구현하고, 현재 분석·설계·데이터·MCP 작업을 하나의 검토 가능한 PR로 이어가는 것이다. 이 문서는 실행 가능한 초기 구현과 아직 필요한 외부 접근을 분리한다. 이전 문서에 남아 있는 과거 상태보다 아래의 확인 시점과 근거를 우선하고, 새 결과가 생기면 해당 근거와 함께 갱신한다.
 
+**설문 후속 개정:** [v0.3 변경 명세](19-survey-revision-v03.md)를 우선 적용한다. B01~B04 연령대·성별·국적·표시 통화가 추가되어 총 27문항이며 가입정보 확인·수정 절차를 설계했다. 보행 분·거리 입력은 제거했다. Word 외화란은 빈칸, 부록 수치는 가정 환율이며 계정·실시간 환율·Vercel 연동은 아직 구현하지 않았다. `scripts/build_questionnaire.py`로 설문 파일을 재생성한다. 노트북은 기본정보의 선호 점수 분리와 환산 예제 8개 검사를 포함한다.
+
 ## 1. 바로 이어받을 상태
 
 | 항목 | 확인된 결과 | 아직 확인하지 않은 것 |
@@ -30,7 +32,7 @@
 6. [페르소나 설계](08-persona-clustering.md), [Ollama·LAG 계획](09-ollama-lag-feasibility.md), [다중 공급자·DB](11-multi-provider-tunnels-database-and-cost.md).
 7. [도메인 절차](12-domain-tunnel-and-ollama-runbook.md), [후속 배치와 MCP 상태](13-next-steps-and-mcp-implementation.md), [서버 실행 안내](../services/jeju-mcp/README.md).
 
-Word/PDF에는 현재 문서 01~18을 편집 순서에 맞춰 포함한다. 문서 수정 후 자동 갱신되지는 않으므로 `scripts/build_report.py --pdf`로 다시 생성한다. 최신 운영 상태는 Markdown·실제 CI·코드에서 읽는다.
+종합 Word/PDF에는 현재 문서 01~19를 편집 순서에 맞춰 포함한다. 문서 수정 후 자동 갱신되지는 않으므로 `scripts/build_report.py --pdf`로 다시 생성한다. 별도 설문 Word/PDF와 구분하고 최신 운영 상태는 Markdown·실제 CI·코드에서 읽는다.
 
 ## 3. Git와 PR부터 보존
 

@@ -30,6 +30,7 @@
 16. [Hugging Face 조직·계정·CI 설정과 검증 상태](docs/16-huggingface-organization-and-ci.md)
 17. [AI AGENT MODEL 전체 목록·역할·선정 기준·실행 상태](docs/17-ai-agent-model-registry.md)
 18. [Claude Code 상세 인수인계·재현·다음 작업](docs/18-claude-code-handoff.md)
+19. [설문 v0.3: 기본정보·표시 통화·걷기 질문 개정](docs/19-survey-revision-v03.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 
@@ -39,8 +40,8 @@ Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·�
 
 ## 보고서
 
-- [설문지 Word](reports/jeju-tour-questionnaire.docx) · [PDF](reports/jeju-tour-questionnaire.pdf): 핵심 10문항·조건부 10문항·선택적 선호 3문항, 응답란을 포함한 8페이지 문항 검토용 초안.
-- [설문→프로필 예제 노트북](reports/jeju-survey-to-profile.ipynb) · [설문 파일 다운로드 ZIP](reports/jeju-survey-downloads.zip): 표준 Python으로 실행하는 제한된 변환 예제와 6개 핵심 검사. 전체 설문·추천 엔진 구현과 구분합니다. ZIP은 설문 Word·PDF·노트북 3개만 포함하며 원본 데이터는 포함하지 않습니다.
+- [설문지 Word](reports/jeju-tour-questionnaire.docx) · [PDF](reports/jeju-tour-questionnaire.pdf): v0.3 기본정보 4문항·핵심 10문항·조건부 10문항·선택적 선호 3문항. 가입정보 확인·수정, 원화와 선택 통화 병기 서식, 보행 수치 질문 제거를 반영했습니다. 외화 응답란은 정적 빈칸이며 부록 환산 예시는 가정 환율입니다. `python3 scripts/build_questionnaire.py`로 재생성합니다(`python-docx`, `soffice`, Noto Sans CJK 필요).
+- [설문→프로필 예제 노트북](reports/jeju-survey-to-profile.ipynb) · [설문 파일 다운로드 ZIP](reports/jeju-survey-downloads.zip): 표준 Python 변환·통화 표시 예제와 8개 검사. 기본정보를 13축 선호 점수와 분리합니다. 전체 설문·추천 엔진 및 실시간 환율 연동은 미구현입니다. ZIP은 설문 Word·PDF·노트북 3개만 포함하며 원본 데이터는 포함하지 않습니다.
 - [페르소나 탐색기 — 응답을 바꾸며 유형 비교](reports/persona-explorer.html): 파일을 내려받아 브라우저에서 열 수 있는 독립 HTML. 외부 통신·사용자 입력 저장 없음.
 - [8개 설계 후보의 특성 히트맵](reports/assets/persona-prototypes-heatmap.png)
 - [설계 후보의 2차원 지도](reports/assets/persona-prototypes-map.png)
