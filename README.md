@@ -5,6 +5,7 @@
 ## 현재 상태
 
 - **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. 다음은 SynthTRIPs 방식 평가셋(3단계)입니다.
+- **시각적 Agent 빌더:** 사용자 결정으로 [Langflow](docs/20-langflow-agent-builder.md)를 씁니다(Flowise는 2026-08-31 지원 종료). Langflow 1.13.3에서 jeju-mcp 도구 3개 발견·호출과 [시작 흐름](services/langflow/jeju-tour-agent.flow.json) 가져오기·MCP 노드 빌드를 확인했습니다. 실제 모델로 Agent를 돌리는 검증은 모델 키가 필요해 남아 있습니다.
 - **다른 Claude Code 세션의 시작점:** [CLAUDE.md](CLAUDE.md) → [상세 인수인계·재개 절차](docs/18-claude-code-handoff.md) → [전체 AI AGENT MODEL 목록](docs/17-ai-agent-model-registry.md). 모델별 구현·실행·평가 상태는 [JSON 레지스트리](data/ai-agent-models.json)에서도 관리합니다.
 - 상세 설계와 읽기 전용 MCP 초기 구현 단계입니다. 장소 검색·상세·조건 검사 3개 도구를 로컬 검증했습니다. 전체 추천 Agent·학습 모델·운영 통합은 후속 작업입니다.
 - 기존 서비스: <https://jeju-tour-six.vercel.app/>. 관련 OREUM-IT 저장소의 소스 검토 결과는 아래 문서에 기록합니다.
@@ -32,6 +33,7 @@
 17. [AI AGENT MODEL 전체 목록·역할·선정 기준·실행 상태](docs/17-ai-agent-model-registry.md)
 18. [Claude Code 상세 인수인계·재현·다음 작업](docs/18-claude-code-handoff.md)
 19. [AI Agent 1·2단계: 구축 가능성 진단·근거 등급 카탈로그·테마 매핑](docs/19-agent-step2-data-foundation.md)
+20. [Langflow로 Agent 흐름 만들기: 설치·jeju-mcp 연결·보안](docs/20-langflow-agent-builder.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 

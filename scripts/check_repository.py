@@ -286,6 +286,7 @@ def forbidden_name(name):
     path = PurePosixPath(name.replace("\\", "/"))
     return (any(part in {".git", ".local", "node_modules", "__pycache__", ".aws", ".ssh"} for part in path.parts)
             or any(part == ".env" or part.startswith(".env.") for part in path.parts)
+            or path.suffix.lower() == ".env"
             or path.suffix.lower() in {".pyc", ".pem", ".p12", ".pfx", ".key"}
             or path.name in {"id_rsa", "id_ed25519", ".netrc"})
 
@@ -386,6 +387,39 @@ def check_agent_data():
     require(not any(PLACE_ID.match(text) for text in strings(report)), "Coverage report must not contain place IDs")
 
 
+def check_langflow():
+    """The committed Langflow starter flow and settings example carry no credentials and keep safe defaults."""
+    path = ROOT / "services/langflow/jeju-tour-agent.flow.json"
+    text = path.read_text(encoding="utf-8")
+    flow = read_json(path)
+    version = tuple(int(part) for part in re.findall(r"\d+", flow["last_tested_version"])[:3])
+    require(version >= (1, 13, 0), "Langflow flows must be tested on 1.13.0 or newer (earlier releases are unpatched)")
+    nodes = {node["data"]["type"]: node for node in flow["data"]["nodes"]}
+    require({"ChatInput", "Agent", "MCPTools", "ChatOutput"} <= set(nodes), "Starter flow is missing a core node")
+    mcp = nodes["MCPTools"]["data"]["node"]
+    template = mcp["template"]
+    require(template["mcp_server"]["value"] == {"name": "jeju-mcp", "config": {}} and not template["headers"]["value"]
+            and mcp.get("tool_mode") is True, "MCP node must reference jeju-mcp by name without inline headers")
+    tools = sorted(row["name"] for row in template["tools_metadata"]["value"])
+    require(tools == ["constraints.check", "places.get", "places.search"], "MCP node tool list drifted from jeju-mcp")
+    require(any(edge["source"] == nodes["MCPTools"]["id"] and edge["data"]["targetHandle"]["fieldName"] == "tools"
+                for edge in flow["data"]["edges"]), "MCP tools must be wired into the agent")
+    for node in flow["data"]["nodes"]:
+        for field in node["data"]["node"].get("template", {}).values():
+            if isinstance(field, dict) and (field.get("password") or field.get("name") == "api_key"):
+                require(field.get("value") in ("", None), "Starter flow contains a credential value")
+    require(not re.search(r"Bearer (?!\{\{JEJU_MCP_TOKEN\}\})\S", text), "Starter flow contains a literal bearer credential")
+    settings = {}
+    for line in (ROOT / "services/langflow/langflow.env.example").read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            key, value = line.split("=", 1)
+            settings[key] = value
+    require(settings.get("LANGFLOW_AUTO_LOGIN") == "false" and settings.get("LANGFLOW_HOST") == "127.0.0.1"
+            and settings.get("LANGFLOW_SSRF_ALLOWED_HOSTS") == "127.0.0.1"
+            and settings.get("LANGFLOW_SUPERUSER_PASSWORD") == "REPLACE_WITH_A_STRONG_PASSWORD"
+            and "LANGFLOW_SECRET_KEY" not in settings, "Langflow settings example lost a safe default or holds a secret")
+
+
 def main():
     checks = [
         ("JSON syntax", lambda: [read_json(path) for path in sorted((ROOT / "data").glob("*.json"))]),
@@ -393,6 +427,7 @@ def main():
         ("persona definitions and exported metadata", check_personas),
         ("model registry references and status structure", check_model_registry),
         ("agent theme map and aggregate coverage report", check_agent_data),
+        ("Langflow starter flow and settings example", check_langflow),
         ("publication boundaries and archives", check_deliverables),
     ]
     failed = False

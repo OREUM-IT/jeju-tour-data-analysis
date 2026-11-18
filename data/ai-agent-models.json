@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "registryVersion": "2026-11-18.2",
+  "registryVersion": "2026-11-18.3",
   "updatedOn": "2026-11-18",
   "purpose": "제주 관광 Agent 모델·실행 엔진·추천 방법·호스트의 인수인계용 상태 목록",
   "documentation": "docs/17-ai-agent-model-registry.md",
@@ -31,12 +31,14 @@
     {"key":"local-mcp-artifacts","kind":"local_artifact_observed","paths":["services/jeju-mcp/package.json","services/jeju-mcp/src/server.mjs","services/jeju-mcp/src/tools.mjs","docs/13-next-steps-and-mcp-implementation.md"]},
     {"key":"local-hf-configuration","kind":"local_artifact_observed","paths":[".codex/config.toml",".mcp.json","services/jeju-mcp/scripts/huggingface-client.mjs","docs/15-huggingface-mcp-setup.md"]},
     {"key":"synthtrips-paper","kind":"official_source_reviewed","url":"https://arxiv.org/abs/2504.09277","arxivId":"2504.09277","title":"SynthTRIPs: A Knowledge-Grounded Framework for Benchmark Query Generation for Personalized Tourism Recommenders","reviewedOn":"2026-11-18","reviewedScope":"abstract_and_html_summary","fullTextReviewed":false,"mechanismVerified":false,"note":"처음 LAG 논문으로 지정된 식별자. 확인 결과 관광 추천기 평가용 합성 질의 생성 틀이며 LAG를 정의하지 않는다."},
+    {"key":"local-langflow-artifacts","kind":"local_artifact_observed","paths":["services/langflow/jeju-tour-agent.flow.json","services/langflow/build_starter_flow.py","services/langflow/langflow.env.example","docs/20-langflow-agent-builder.md"]},
     {"key":"lag-logic-augmented-generation","kind":"official_source_reviewed","url":"https://arxiv.org/abs/2508.05509","arxivId":"2508.05509","title":"LAG: Logic-Augmented Generation from a Cartesian Perspective","reviewedOn":"2026-11-18","reviewedScope":"abstract","fullTextReviewed":false,"mechanismVerified":false,"selectedBy":"user_decision_2026-11-18"}
   ],
   "hosts": [
     {"key":"existing-vercel-app","kind":"application_host","referenceUrl":"https://jeju-tour-six.vercel.app","deployedCommit":null,"configurationVerifiedAgainstAccount":false,"inferenceDaemonHostedHere":false,"note":"기존 서버 API의 외부 모델 호출 위치다. Vercel 함수에 Ollama 데몬을 상주시킨다는 뜻이 아니다."},
     {"key":"proposed-agent-worker","kind":"planned_application_host","publicEndpoint":null,"deployed":false,"note":"공급자 라우터·큐·취소·공유 사용량 관리의 제안 위치. 현재 운영 Worker가 있다는 뜻이 아니다."},
     {"key":"user-ollama-host","kind":"unverified_local_inference_host","os":null,"cpuOrAppleChip":null,"ramGiB":null,"gpu":null,"vramOrUnifiedMemoryGiB":null,"freeDiskGiB":null,"ollamaVersion":null,"privateBaseUrlExample":"http://127.0.0.1:11434","connected":false,"note":"Windows/Mac 사양 답변과 설치·모델 적재 확인 대기. 예시 loopback은 해당 사용자 호스트 내부 주소다."},
+    {"key":"local-langflow","kind":"local_agent_orchestration_host","version":"1.13.3","bind":"127.0.0.1:7860","mcpToolDiscoveryVerified":true,"agentRunWithModelVerified":false,"productionHost":false,"sourceRefs":["local-langflow-artifacts"],"note":"사용자 결정(2026-11-18)으로 쓰는 시각적 Agent 흐름 편집·실행 위치. jeju-mcp는 Streamable HTTP와 전역 변수 토큰으로 연결한다. 1.13.0 미만은 미수정 취약점 때문에 쓰지 않는다."},
     {"key":"analysis-workspace","kind":"development_workspace","productionHost":false,"note":"문서·데이터 검증·MCP 개발 환경. 이 환경의 자원을 사용자 PC나 운영 호스트 자원으로 간주하지 않는다."},
     {"key":"huggingface-official-mcp","kind":"external_research_tool_host","endpoint":"https://huggingface.co/mcp","liveConnectionVerified":false,"blocker":"현재 런타임의 Hugging Face HTTPS 접근 정책 미적용/프록시 차단. 설정 초안 저장과 적용은 별개다."}
   ],
