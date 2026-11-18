@@ -4,9 +4,11 @@
 
 ## 0. 지금 이어받을 상태 (2026-11-18, Claude 세션 종료 시점)
 
+**이후 추가된 운영·보안 설계:** `main@725737f`를 기준으로 [21 Linux Docker](21-linux-docker-production.md)와 [22 탈옥 방어](22-jailbreak-and-prompt-injection-defense.md)를 추가했다. 사용자 지정 논문 `2403.17336`은 저자 공식 GitHub README로 서지·공격 평가 연구임을 확인했으며 PDF 본문은 403으로 미확보다. [합성 보안 평가 14개](../data/agent-security-cases.json)는 아직 실행하지 않았다. Gateway·최종 답변 검증기·벡터 DB·운영 컨테이너는 미구현이다. 현재 로컬 구성은 유지하며 3단계 평가셋에 정상·공격 사례와 실제 부작용 계측을 함께 설계한다. 기존 설문 v0.3 등 `codex/ai-agent-model-handoff`의 추가 커밋은 이 새 브랜치에 자동 병합하지 않았다.
+
 | 항목 | 상태 |
 |---|---|
-| main | `75fc9f5`(PR #3 병합). PR #1(Codex 설계·인수인계), #2(2단계 데이터 기반·논문 정정), #3(Langflow 연결)이 모두 병합됐다. 이 인수인계 갱신은 별도 PR로 올렸다 |
+| main | 이번 설계의 기준은 `725737f`(PR #4 병합). PR #1(Codex 설계·인수인계), #2(2단계 데이터 기반·논문 정정), #3(Langflow 연결), #4(Claude 인수인계)가 병합됐다. 운영·보안 설계는 `codex/production-agent-security`에서 별도 검토한다 |
 | 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · 시각적 빌더 Langflow 연결 ✅(모델 실행 미검증) · **다음은 3단계 평가셋**(11절 명세) |
 | 검사 | 로컬: MCP·HF·Agent 카탈로그 41개 + Gateway 10개 = 51개 통과, `check_repository.py` 8개 항목 PASS. CI: PR #3 [pull_request 실행](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44265260167) 통과 |
 | 데이터 실측 | 원본 앱 장소 981곳(원시 POI 863·앱 생성 118). `verified` 0, 비용 0, 실내 출처 132, 영업시간 출처 466, 동네 산책 테마 대표 후보 7. 집계는 [`reports/agent-catalog-coverage.json`](../reports/agent-catalog-coverage.json) |
@@ -53,7 +55,7 @@
 6. [페르소나 설계](08-persona-clustering.md), [Ollama·LAG 계획](09-ollama-lag-feasibility.md), [다중 공급자·DB](11-multi-provider-tunnels-database-and-cost.md).
 7. [도메인 절차](12-domain-tunnel-and-ollama-runbook.md), [후속 배치와 MCP 상태](13-next-steps-and-mcp-implementation.md), [서버 실행 안내](../services/jeju-mcp/README.md).
 
-Word/PDF에는 현재 문서 01~18을 편집 순서에 맞춰 포함한다. 문서 수정 후 자동 갱신되지는 않으므로 `scripts/build_report.py --pdf`로 다시 생성한다. 최신 운영 상태는 Markdown·실제 CI·코드에서 읽는다.
+Word/PDF에는 현재 문서 01~22를 편집 순서에 맞춰 포함한다. 문서 수정 후 자동 갱신되지는 않으므로 `scripts/build_report.py --pdf`로 다시 생성한다. 최신 운영 상태는 Markdown·실제 CI·코드에서 읽는다.
 
 ## 3. Git와 PR 작업 방식
 

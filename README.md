@@ -4,6 +4,7 @@
 
 ## 현재 상태
 
+- **운영·보안 설계 추가:** [Linux Docker 전환안](docs/21-linux-docker-production.md)과 [탈옥·프롬프트 주입 방어](docs/22-jailbreak-and-prompt-injection-defense.md)를 정리했습니다. 도구 실행 전 권한·예산 검사와 최종 장소 ID·필수 조건 검증을 제안합니다. [합성 평가 명세 14개](data/agent-security-cases.json)는 미실행이며 운영 방어가 구현·검증된 상태는 아닙니다. 현재 자료는 JSON 카탈로그, PostgreSQL + pgvector는 향후 검색 저장소 후보입니다.
 - **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. 다음은 SynthTRIPs 방식 평가셋(3단계)이며, 작업 명세와 새 Claude Code 세션 시작 프롬프트는 [인수인계 11·12절](docs/18-claude-code-handoff.md)에 있습니다.
 - **시각적 Agent 빌더:** 사용자 결정으로 [Langflow](docs/20-langflow-agent-builder.md)를 씁니다(Flowise는 2026-08-31 지원 종료). Langflow 1.13.3에서 jeju-mcp 도구 3개 발견·호출과 [시작 흐름](services/langflow/jeju-tour-agent.flow.json) 가져오기·MCP 노드 빌드를 확인했습니다. 실제 모델로 Agent를 돌리는 검증은 모델 키가 필요해 남아 있습니다.
 - **다른 Claude Code 세션의 시작점:** [CLAUDE.md](CLAUDE.md) → [상세 인수인계·재개 절차](docs/18-claude-code-handoff.md) → [전체 AI AGENT MODEL 목록](docs/17-ai-agent-model-registry.md). 모델별 구현·실행·평가 상태는 [JSON 레지스트리](data/ai-agent-models.json)에서도 관리합니다.
@@ -34,6 +35,8 @@
 18. [Claude Code 상세 인수인계·재현·다음 작업](docs/18-claude-code-handoff.md)
 19. [AI Agent 1·2단계: 구축 가능성 진단·근거 등급 카탈로그·테마 매핑](docs/19-agent-step2-data-foundation.md)
 20. [Langflow로 Agent 흐름 만들기: 설치·jeju-mcp 연결·보안](docs/20-langflow-agent-builder.md)
+21. [Linux Docker 운영 배치·인증·영속성·배포 검증](docs/21-linux-docker-production.md)
+22. [탈옥·프롬프트 주입 방어·벡터 검색 경계·합성 평가](docs/22-jailbreak-and-prompt-injection-defense.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 
