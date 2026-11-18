@@ -80,7 +80,17 @@ node --env-file=.env.local src/server.mjs
 
 카탈로그 결과는 외부 데이터다. 향후 LLM 연결에서는 결과의 설명문을 지시로 실행하지 않고, 출력 장소 ID·제약·근거를 별도 검증해야 한다. 현재 도구는 셸·SQL·원격 URL 호출·코스 저장·모델 호출을 수행하지 않는다.
 
-## 5. oreumit.com의 다음 연결
+## 5. Agent 카탈로그와 평가셋 (로컬 전용 산출물)
+
+MCP 도구와 별개인 오프라인 스크립트다. 서버를 띄우지 않고, 모델을 호출하지 않는다. 출력에는 제3자 장소 자료가 들어 있어 `.local`에만 쓰며 기존 파일을 덮어쓰지 않는다.
+
+- Agent 카탈로그 v2(근거 등급): `scripts/dump-app-places.mjs` → `scripts/export-agent-catalog.mjs`. 절차는 [19 문서](../../docs/19-agent-step2-data-foundation.md) 5절.
+- 3단계 평가셋: `scripts/build-evaluation-set.mjs`. 카탈로그 v2, 페르소나, 테마 매핑, [평가 명세](../../data/evaluation-spec.json)로 96문항의 정답을 규칙으로 계산한다. `--report`는 이름·ID 없는 집계만 쓰고, `--check`는 다시 만든 결과가 파일과 같은지 비교한다. 절차와 규칙은 [23 문서](../../docs/23-agent-step3-evaluation-set.md).
+- 채점: `src/evaluation-scoring.mjs`의 `createScorer`가 구조화 응답을 문항과 대조한다. 자유 문장은 읽지 않는다.
+
+`npm test`는 이 스크립트들을 합성 값으로 검사한다. 실제 카탈로그나 평가셋 파일은 테스트에 필요 없다.
+
+## 6. oreumit.com의 다음 연결
 
 1. 사용자가 저장한 Cloudflare nameserver의 전파와 `Active`, 기존 웹 HTTPS를 확인한다.
 2. 이 서버를 상시 실행할 호스트를 정한다. 현재 Codex 작업공간은 개발·검증 환경이며 24시간 운영 호스트로 배포 완료된 상태가 아니다.

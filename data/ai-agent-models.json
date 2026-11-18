@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "registryVersion": "2026-11-18.3",
+  "registryVersion": "2026-11-18.4",
   "updatedOn": "2026-11-18",
   "purpose": "제주 관광 Agent 모델·실행 엔진·추천 방법·호스트의 인수인계용 상태 목록",
   "documentation": "docs/17-ai-agent-model-registry.md",
@@ -134,7 +134,7 @@
     {"key":"legacy-deterministic-recommendation","kind":"recommendation_method","status":"reference_source_observed","isLanguageModel":false,"sourceRefs":["reference-app"],"note":"기존 설문·규칙 후보 평가·키워드 대체 경로. 새 모델의 사실성·필수 제약 검증을 대체하지 않는다."},
     {"key":"persona-prototype-matching","kind":"designed_matching_method","status":"local_artifact_observed","isLanguageModel":false,"version":"persona-design-v1","sourceRefs":["local-persona-artifacts"],"learnedFromUserResponses":false,"prototypeCount":8,"note":"테마 cosine·관측된 스칼라 거리의 설계 가중치 매칭. 군집 학습이나 심리 유형 확률이 아니다."},
     {"key":"paper-lag","kind":"paper_method","status":"definition_and_reproduction_pending","isLanguageModel":false,"sourceRefs":["lag-logic-augmented-generation"],"implementationVerified":false,"reproductionVerified":false,"plannedUse":"5단계 에이전트 추론 비교 실험","note":"사용자 결정(2026-11-18)으로 LAG는 2508.05509 Logic-Augmented Generation이다. RAG 오타로 바꾸지 않는다. 원문 세부·재현 실험을 확인하기 전 결과에 method=lag를 붙이지 않는다."},
-    {"key":"synthtrips-evaluation-generation","kind":"evaluation_method","status":"planned","isLanguageModel":false,"sourceRefs":["synthtrips-paper"],"plannedUse":"3단계 페르소나·조건별 제주 평가 질의 생성","note":"추천·추론 방법이 아니다. 합성 질의는 실제 관광객 응답이나 만족도를 대신하지 않는다."},
+    {"key":"synthtrips-evaluation-generation","kind":"evaluation_method","status":"generator_implemented_baseline_scoring_pending","isLanguageModel":false,"sourceRefs":["synthtrips-paper"],"plannedUse":"3단계 페르소나·조건별 제주 평가 질의 생성","implementedOn":"2026-11-18","paperReproductionVerified":false,"note":"추천·추론 방법이 아니다. 합성 질의는 실제 관광객 응답이나 만족도를 대신하지 않는다. 논문의 순서(페르소나+조건→지식베이스 사실→LLM 질의 작성)만 가져왔고 정답은 규칙으로 계산한다(docs/23). 논문 본문 세부는 미확인이라 재현이라고 부르지 않는다."},
     {"key":"retrieval-baselines","kind":"comparison_methods","status":"planned","isLanguageModel":false,"candidates":["rules+BM25","hybrid RAG"],"note":"LAG와 구분된 비교 실험. embedding/reranker를 이미 선택했다는 뜻이 아니다."}
   ],
   "toolConnections": [
