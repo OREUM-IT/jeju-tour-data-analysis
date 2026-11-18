@@ -39,6 +39,8 @@ Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·�
 
 ## 보고서
 
+- [설문지 Word](reports/jeju-tour-questionnaire.docx) · [PDF](reports/jeju-tour-questionnaire.pdf): 핵심 10문항·조건부 10문항·선택적 선호 3문항, 응답란을 포함한 8페이지 문항 검토용 초안.
+- [설문→프로필 예제 노트북](reports/jeju-survey-to-profile.ipynb) · [설문 파일 다운로드 ZIP](reports/jeju-survey-downloads.zip): 표준 Python으로 실행하는 제한된 변환 예제와 6개 핵심 검사. 전체 설문·추천 엔진 구현과 구분합니다. ZIP은 설문 Word·PDF·노트북 3개만 포함하며 원본 데이터는 포함하지 않습니다.
 - [페르소나 탐색기 — 응답을 바꾸며 유형 비교](reports/persona-explorer.html): 파일을 내려받아 브라우저에서 열 수 있는 독립 HTML. 외부 통신·사용자 입력 저장 없음.
 - [8개 설계 후보의 특성 히트맵](reports/assets/persona-prototypes-heatmap.png)
 - [설계 후보의 2차원 지도](reports/assets/persona-prototypes-map.png)
