@@ -25,9 +25,10 @@
 | 관측 | arXiv `2504.09277`의 제목은 *SynthTRIPs: A Knowledge-Grounded Framework for Benchmark Query Generation for Personalized Tourism Recommenders*(SIGIR 2025)다. 페르소나와 예산·계절·인기도·지속가능성 같은 조건을 묶고, 지식베이스에서 맞는 사실을 찾은 뒤 LLM으로 관광 질의를 합성한다. 추천기 **평가용 벤치마크 생성 틀**이며 LAG라는 방법은 나오지 않는다. |
 | 관측 | 제목이 LAG인 논문은 arXiv `2508.05509` *LAG: Logic-Augmented Generation from a Cartesian Perspective*다. 복합 질문을 논리 의존 순서의 하위 질문으로 나눠 앞선 답으로 다음 검색을 이끌고, 답할 수 없는 하위 질문에서 추론을 멈춘다. |
 | 사용자 결정 (2026-11-18) | 둘 다 쓴다. SynthTRIPs는 3단계 평가셋 생성 틀로, LAG(`2508.05509`)는 5단계 Agent 추론의 비교 실험으로 쓴다. |
-| 한계 | 두 논문 모두 초록·HTML 요약 수준으로 확인했다. 본문의 세부 절차·수치·코드는 검토하지 않았다. 재현 전에는 결과에 `method=lag`를 붙이지 않는다. |
+| 한계 | 두 논문 모두 초록·HTML 요약 수준으로 확인했다. 본문의 세부 절차·수치는 검토하지 않았다. 재현 전에는 결과에 `method=lag`를 붙이지 않는다. |
+| 관측 (3단계에서 추가) | SynthTRIPs는 저자 공식 코드 저장소 `ashmibanerjee/synthTRIPS-code`를 커밋 `9562f53`으로 읽어 3단계 평가셋과 대조했다([23 문서](23-agent-step3-evaluation-set.md) 2절). 코드를 실행하지 않았고 논문 본문은 여전히 미확인이다. LAG의 코드는 확인하지 않았다. |
 
-[모델 레지스트리](../data/ai-agent-models.json)의 출처를 `synthtrips-paper`와 `lag-logic-augmented-generation`으로 나눴다. `paper-lag` 방법은 후자를 가리키고, 평가 방법 `synthtrips-evaluation-generation`을 추가했다.
+[모델 레지스트리](../data/ai-agent-models.json)의 출처를 `synthtrips-paper`와 `lag-logic-augmented-generation`으로 나눴다. `paper-lag` 방법은 후자를 가리키고, 평가 방법 `synthtrips-evaluation-generation`을 추가했다. 3단계에서 저자 코드 출처 `synthtrips-code`를 더했다.
 
 ## 3. 단계적 절차
 
@@ -35,7 +36,7 @@
 |---|---|---|
 | 1. 진단 | 저장소·원본 앱·테스트·논문 확인 | 이 문서 1·2절 (완료) |
 | 2. 데이터 기반 | 앱과 같은 장소 목록을 근거 등급과 함께 카탈로그로, 테마↔분류 매핑 | 이 문서 4~8절 (완료) |
-| 3. 평가셋 | SynthTRIPs 방식으로 8개 페르소나 × 조건(날짜·이동수단·동행·걷기·실내·혼잡·예산 미정)의 제주 질의와 정답 후보 집합 생성 | 질의마다 근거가 된 카탈로그 사실·난이도·기대 동작(추천/확인 요청/불가 안내)이 있다 |
+| 3. 평가셋 | SynthTRIPs 방식으로 8개 페르소나 × 조건(날짜·이동수단·동행·걷기·실내·혼잡·예산 미정)의 제주 질의와 정답 후보 집합 생성 | 질의마다 근거가 된 카탈로그 사실·난이도·기대 동작(추천/확인 요청/불가 안내)이 있다 ([23 문서](23-agent-step3-evaluation-set.md), 완료) |
 | 4. 도구 | 페르소나 매칭, 후보 랭킹, 근거 등급 조건 검사, 날씨·혼잡, 일정 검증을 MCP 도구로 | 도구마다 스키마·단위 테스트와 `unknown`을 통과로 바꾸지 않는 검사 |
 | 5. Agent 루프 | 프로필 확인→후보→일정→검증→설명. 후보 ID 밖 장소 금지 유지. LAG 방식을 비교 실험으로. 시각적 편집은 [Langflow](20-langflow-agent-builder.md)(사용자 결정) | 3단계 평가셋에서 허용되지 않은 ID 0건, 필수 조건 위반 0건 |
 | 6. 비교·연결 | 기존 Gemini 비서와 같은 평가셋으로 채점 후 앱 Preview에 기능 플래그로 연결 | 비교 결과와 되돌리기 절차. 운영 배포는 별도 승인 |
@@ -125,5 +126,7 @@ node scripts/export-agent-catalog.mjs --places .local/app-places-b0602a1.json \
 - 로컬 검증은 Node 22.23.5에서 했다. CI는 Node 24.22.1에서 같은 테스트를 실행한다.
 
 ## 10. 다음: 3단계 평가셋 제안
+
+아래 제안은 [23 문서](23-agent-step3-evaluation-set.md)에서 구현했다. 실제 조건·정답 규칙·집계는 그 문서를 따른다.
 
 SynthTRIPs의 순서를 제주에 맞춘다. 페르소나 8개와 조건 묶음을 만들고, 조건에 맞는 카탈로그 사실을 먼저 찾는다. 맞는 사실이 없는 조합은 버리거나 '불가 안내'가 정답인 사례로 남긴다. 그다음 LLM이 그 사실에 근거해 자연어 질의를 쓴다. 정답 후보 집합은 LLM이 아니라 근거 등급 규칙으로 계산한다. 난이도는 단순·복합·충돌로 나누고, [모델 레지스트리 문서](17-ai-agent-model-registry.md)의 어려운 사례(거의 안 걸음, 알 수 없는 접근성, 날짜 충돌, 허용되지 않은 ID, 빈 검색 결과)를 반드시 넣는다. 합성 질의는 실제 관광객 응답을 대신하지 않으며, 사용자 평가와 분리해 기록한다.

@@ -11,6 +11,7 @@
 | 기존 서비스 https://jeju-tour-six.vercel.app/ | 직접 화면 미확인 | HTTPS 연결이 네트워크 정책에서 403으로 차단. 정상 작동/실제 화면 검증을 주장하지 않음 |
 | OREUM-IT의 관련 저장소 | 소스 검토 | 정확한 커밋·파일·발견 사항은 기존 서비스 검토 문서 참조 |
 | https://arxiv.org/abs/2504.09277 | 초록·HTML 요약 확인 (2026-11-18 웹 조회) | 제목 SynthTRIPs(SIGIR 2025). 페르소나·조건별 관광 질의를 지식베이스에 맞춰 LLM으로 합성하는 평가셋 생성 틀이며 LAG를 정의하지 않음. 본문 세부·수치 미검토. 3단계 평가셋 근거 |
+| https://github.com/ashmibanerjee/synthTRIPS-code | 커밋 `9562f53de177e8c441a7094329eff21dbb7ab9a1`(MIT)의 추적 파일 52개를 읽음 (2026-11-18, 실행하지 않음) | SynthTRIPs 저자 공식 코드. 설정 생성, 지식베이스 조건 필터로 정답 도시 결정, 질의 생성 지시문(노트북), 생성 질의 검증, 추천 LLM 벤치마크를 확인. 지식베이스와 질의 생성·판정·벤치마크 프롬프트 템플릿은 저장소에 없고(README는 Hugging Face 데이터셋을 받으라고 함) 미확인. 질의 생성 지시문은 예시 노트북에서 읽음. 대조 결과와 반영 내용은 [23 문서](23-agent-step3-evaluation-set.md) 2절 |
 | https://arxiv.org/abs/2508.05509 | 초록 확인 (2026-11-18 웹 검색) | LAG: Logic-Augmented Generation. 사용자 결정으로 5단계 Agent 추론 비교 실험 후보. 본문 세부·재현 미검토. [19 문서](19-agent-step2-data-foundation.md) |
 | https://arxiv.org/abs/2403.17336 | 저자 공식 GitHub README 확인, 논문 본문 403 미확보 | Don’t Listen To Me(USENIX Security 2024). 탈옥 공격 평가 연구이며 우리 운영 통제의 효과 검증 근거는 아님. 고정 출처·확인 범위와 별도 방어 제안은 [22 문서](22-jailbreak-and-prompt-injection-defense.md) |
 | 사용자 언급 별도 PDF | 파일 미수신 | 링크 논문과 같은 논문인지도 확인되지 않음 |

@@ -163,9 +163,14 @@ export async function writeCatalogExclusive(outputPath, catalog) {
   const serialized = `${JSON.stringify(catalog, null, 2)}\n`;
   if (Buffer.byteLength(serialized) > MAX_SOURCE_BYTES) throw new Error('Canonical catalog exceeds the 32 MiB loader limit.');
   await mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
+  // The check above is lexical. Resolve the directory so that a symlink inside .local cannot redirect the write elsewhere.
+  const target = path.join(await realpath(path.dirname(output)), path.basename(output));
+  if (!target.split(path.sep).includes('.local')) {
+    throw new Error('Output must be a .json file inside a .local directory, not a tracked data copy.');
+  }
   let handle;
   try {
-    handle = await open(output, 'wx', 0o600);
+    handle = await open(target, 'wx', 0o600);
   } catch (error) {
     if (error.code === 'EEXIST') throw new Error('Output already exists; choose a new versioned filename. It was not overwritten.');
     throw error;
@@ -175,7 +180,7 @@ export async function writeCatalogExclusive(outputPath, catalog) {
     await handle.sync();
   } catch (error) {
     await handle.close();
-    await unlink(output); // Only this call's newly created, incomplete output is removed.
+    await unlink(target); // Only this call's newly created, incomplete output is removed.
     throw error;
   }
   await handle.close();

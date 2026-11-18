@@ -1,0 +1,305 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-agent-evaluation-set-summary",
+  "source": {
+    "repository": "OREUM-IT/jeju-tour",
+    "commit": "b0602a175c1d08959b7187da2b29ac450b52e0ba",
+    "placesContentSha256": "e3c47e843b708adf1e70b0205c4b367c37214d3c2763ab73316a68619d44156a",
+    "rawSha256": "646505a2a65cbf9dbe8d49d526e866bed3d61d7e95907f5e31621e8611bd91c6",
+    "themeMapVersion": "theme-map-v1",
+    "personaVersion": "persona-design-v1",
+    "specVersion": "evalset-spec-v1",
+    "specSha256": "508c71ec17bfdf2395e30e479cb330128c0dbe6e7fc084edf936963721ce04f2",
+    "rulesVersion": "evalset-rules-v1",
+    "seed": "jeju-evalset-v1",
+    "anchorDate": "2026-12-07"
+  },
+  "contentSha256": {
+    "gold": "b982194547edc386b1bfb5d9588cbe607dc99fbf960072b9b20221904f21217d",
+    "queries": "2cae2850b1653c87798976574f34fabf804c94d2fc110dd1dd8b20a735824bc9"
+  },
+  "totals": {
+    "items": 96,
+    "requestedItems": 96,
+    "droppedItems": 0,
+    "byPersona": {
+      "P01": 12,
+      "P02": 12,
+      "P03": 12,
+      "P04": 12,
+      "P05": 12,
+      "P06": 12,
+      "P07": 12,
+      "P08": 12
+    },
+    "bySlot": {
+      "C1": 8,
+      "C2": 8,
+      "C3": 8,
+      "C4": 8,
+      "H1": 8,
+      "H2": 8,
+      "H3": 8,
+      "H4": 8,
+      "H5": 8,
+      "S1": 8,
+      "S2": 8,
+      "S3": 8
+    },
+    "byDifficulty": {
+      "simple": 24,
+      "compound": 55,
+      "conflict": 17
+    },
+    "byExpectedAction": {
+      "recommend": 48,
+      "ask_clarification": 8,
+      "cannot_confirm": 32,
+      "impossible": 8
+    },
+    "byHardCase": {
+      "walk_minimal": 8,
+      "accessibility_unknown": 8,
+      "date_conflict": 8,
+      "disallowed_id": 8,
+      "empty_result": 8
+    },
+    "byStatedConditions": {
+      "1": 24,
+      "2": 21,
+      "3": 35,
+      "4": 16
+    },
+    "byConditionType": {
+      "zone": 72,
+      "theme": 71,
+      "category": 9,
+      "transport": 9,
+      "companion": 7,
+      "walk": 9,
+      "indoor_required": 6,
+      "crowd_avoid": 8,
+      "open_at": 9,
+      "wheelchair": 8,
+      "budget_cap": 9,
+      "trip_dates": 8,
+      "exclude_places": 10
+    },
+    "bySelectorSource": {
+      "category": 9,
+      "persona": 16,
+      "theme": 71
+    },
+    "byTheme": {
+      "art": 12,
+      "cafe": 9,
+      "coast": 9,
+      "culture": 11,
+      "learning": 6,
+      "local_food": 10,
+      "nature": 12,
+      "neighborhood": 12,
+      "outdoor": 10
+    },
+    "byCategory": {
+      "cafe": 1,
+      "food": 2,
+      "herit": 2,
+      "leisure": 2,
+      "sea": 2
+    },
+    "byZone": {
+      "E": 7,
+      "JC": 13,
+      "NE": 6,
+      "S": 11,
+      "SE": 11,
+      "SW": 10,
+      "W": 7,
+      "W2": 7,
+      "none": 24
+    },
+    "byConflict": {
+      "date_conflict": 8,
+      "no_candidates": 8,
+      "requirement_contradicted:indoor_required": 1
+    },
+    "byEmptyMechanism": {
+      "all_excluded": 2,
+      "all_routes_minimal_walk": 1,
+      "empty_cell": 5
+    }
+  },
+  "gold": {
+    "allowedSetSize": {
+      "count": 96,
+      "min": 0,
+      "median": 13,
+      "max": 243
+    },
+    "relevantSetSize": {
+      "count": 96,
+      "min": 0,
+      "median": 10,
+      "max": 201
+    },
+    "itemsWithEmptyAllowedSet": 8,
+    "itemsWithEmptyRelevantSet": 9,
+    "itemsWithVerifiedPass": 0,
+    "hardRequirements": {
+      "budget_cap": {
+        "items": 9,
+        "itemsExpectingUnknown": 9,
+        "candidateVerdicts": {
+          "pass": 0,
+          "fail": 0,
+          "unknown": 176
+        },
+        "candidateSignals": {
+          "supports": {
+            "verified": 0,
+            "reported": 0,
+            "inferred": 0
+          },
+          "contradicts": {
+            "verified": 0,
+            "reported": 0,
+            "inferred": 0
+          },
+          "none": 176
+        }
+      },
+      "indoor_required": {
+        "items": 6,
+        "itemsExpectingUnknown": 6,
+        "candidateVerdicts": {
+          "pass": 0,
+          "fail": 0,
+          "unknown": 305
+        },
+        "candidateSignals": {
+          "supports": {
+            "verified": 0,
+            "reported": 114,
+            "inferred": 184
+          },
+          "contradicts": {
+            "verified": 0,
+            "reported": 0,
+            "inferred": 7
+          },
+          "none": 0
+        }
+      },
+      "open_at": {
+        "items": 9,
+        "itemsExpectingUnknown": 9,
+        "candidateVerdicts": {
+          "pass": 0,
+          "fail": 0,
+          "unknown": 705
+        },
+        "candidateSignals": {
+          "supports": {
+            "verified": 0,
+            "reported": 233,
+            "inferred": 11
+          },
+          "contradicts": {
+            "verified": 0,
+            "reported": 79,
+            "inferred": 6
+          },
+          "none": 376
+        }
+      },
+      "wheelchair": {
+        "items": 8,
+        "itemsExpectingUnknown": 8,
+        "candidateVerdicts": {
+          "pass": 0,
+          "fail": 0,
+          "unknown": 67
+        },
+        "candidateSignals": {
+          "supports": {
+            "verified": 0,
+            "reported": 18,
+            "inferred": 0
+          },
+          "contradicts": {
+            "verified": 0,
+            "reported": 0,
+            "inferred": 0
+          },
+          "none": 49
+        }
+      }
+    },
+    "noticeRequiredItems": 48,
+    "noticeTopics": {
+      "companion_suitability_unknown": 7,
+      "cost_unknown": 9,
+      "crowd_not_guaranteed": 8,
+      "hours_unverified": 9,
+      "indoor_unverified": 6,
+      "transit_access_unknown": 2,
+      "walking_distance_unknown": 8,
+      "wheelchair_unverified": 8
+    },
+    "forbiddenPlaces": {
+      "total": 28,
+      "byReason": {
+        "route_for_minimal_walk": 14,
+        "user_excluded": 14
+      },
+      "items": 16
+    }
+  },
+  "generation": {
+    "offProfileSelectors": 1,
+    "fallbackTierItems": 7,
+    "reusedCellItems": 8,
+    "walkMinimalItemsWithRouteExclusion": 5,
+    "accessibilityItemsWithListedCandidates": 8,
+    "disallowedIdItemsRankedByPopularity": 8
+  },
+  "queries": {
+    "mode": "authored",
+    "promptVersion": "evalset-query-prompt-v1",
+    "authored": 96,
+    "template": 0,
+    "authorKind": "in_session_llm",
+    "authoringRecord": "local_only",
+    "textRules": {
+      "minLength": 10,
+      "maxLength": 200,
+      "candidateNameMinLength": 2,
+      "checks": [
+        "length",
+        "single_line",
+        "korean",
+        "request_wording",
+        "no_place_id",
+        "named_places",
+        "condition_cues",
+        "no_unstated_cues",
+        "no_candidate_names"
+      ]
+    },
+    "textLength": {
+      "authored": {
+        "count": 96,
+        "min": 20,
+        "median": 57,
+        "max": 98
+      },
+      "template": {
+        "count": 96,
+        "min": 28,
+        "median": 56,
+        "max": 87
+      }
+    }
+  }
+}

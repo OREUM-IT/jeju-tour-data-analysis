@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "registryVersion": "2026-11-18.3",
+  "registryVersion": "2026-11-18.5",
   "updatedOn": "2026-11-18",
   "purpose": "제주 관광 Agent 모델·실행 엔진·추천 방법·호스트의 인수인계용 상태 목록",
   "documentation": "docs/17-ai-agent-model-registry.md",
@@ -31,6 +31,7 @@
     {"key":"local-mcp-artifacts","kind":"local_artifact_observed","paths":["services/jeju-mcp/package.json","services/jeju-mcp/src/server.mjs","services/jeju-mcp/src/tools.mjs","docs/13-next-steps-and-mcp-implementation.md"]},
     {"key":"local-hf-configuration","kind":"local_artifact_observed","paths":[".codex/config.toml",".mcp.json","services/jeju-mcp/scripts/huggingface-client.mjs","docs/15-huggingface-mcp-setup.md"]},
     {"key":"synthtrips-paper","kind":"official_source_reviewed","url":"https://arxiv.org/abs/2504.09277","arxivId":"2504.09277","title":"SynthTRIPs: A Knowledge-Grounded Framework for Benchmark Query Generation for Personalized Tourism Recommenders","reviewedOn":"2026-11-18","reviewedScope":"abstract_and_html_summary","fullTextReviewed":false,"mechanismVerified":false,"note":"처음 LAG 논문으로 지정된 식별자. 확인 결과 관광 추천기 평가용 합성 질의 생성 틀이며 LAG를 정의하지 않는다."},
+    {"key":"synthtrips-code","kind":"official_source_reviewed","repository":"ashmibanerjee/synthTRIPS-code","commit":"9562f53de177e8c441a7094329eff21dbb7ab9a1","url":"https://github.com/ashmibanerjee/synthTRIPS-code/tree/9562f53de177e8c441a7094329eff21dbb7ab9a1","license":"MIT","reviewedOn":"2026-11-18","reviewedScope":"all_52_tracked_files_read","codeExecuted":false,"datasetReviewed":false,"note":"SynthTRIPs 저자 공식 코드 저장소. 설정 생성, 지식베이스 조건 필터(정답 도시), 질의 생성 지시문(노트북), 생성 질의 검증, 추천 LLM 벤치마크 코드를 읽었다. 실행·재현하지 않았다. 지식베이스와 질의 생성·판정·벤치마크 프롬프트 템플릿은 저장소에 없고(README는 Hugging Face 데이터셋 ashmib/synthTRIPS를 받으라고 한다) 확인하지 못했다. 질의 생성 지시문은 예시 노트북에서 읽었다. 페르소나 설명문의 출처 이름은 코드에 없다. 저장소가 참조하는 일부 파일(query_generation/parsers.py, preference_kg_map.json, tests/eval/benchmarking/parser.py)도 저장소에 없다."},
     {"key":"local-langflow-artifacts","kind":"local_artifact_observed","paths":["services/langflow/jeju-tour-agent.flow.json","services/langflow/build_starter_flow.py","services/langflow/langflow.env.example","docs/20-langflow-agent-builder.md"]},
     {"key":"lag-logic-augmented-generation","kind":"official_source_reviewed","url":"https://arxiv.org/abs/2508.05509","arxivId":"2508.05509","title":"LAG: Logic-Augmented Generation from a Cartesian Perspective","reviewedOn":"2026-11-18","reviewedScope":"abstract","fullTextReviewed":false,"mechanismVerified":false,"selectedBy":"user_decision_2026-11-18"}
   ],
@@ -134,7 +135,7 @@
     {"key":"legacy-deterministic-recommendation","kind":"recommendation_method","status":"reference_source_observed","isLanguageModel":false,"sourceRefs":["reference-app"],"note":"기존 설문·규칙 후보 평가·키워드 대체 경로. 새 모델의 사실성·필수 제약 검증을 대체하지 않는다."},
     {"key":"persona-prototype-matching","kind":"designed_matching_method","status":"local_artifact_observed","isLanguageModel":false,"version":"persona-design-v1","sourceRefs":["local-persona-artifacts"],"learnedFromUserResponses":false,"prototypeCount":8,"note":"테마 cosine·관측된 스칼라 거리의 설계 가중치 매칭. 군집 학습이나 심리 유형 확률이 아니다."},
     {"key":"paper-lag","kind":"paper_method","status":"definition_and_reproduction_pending","isLanguageModel":false,"sourceRefs":["lag-logic-augmented-generation"],"implementationVerified":false,"reproductionVerified":false,"plannedUse":"5단계 에이전트 추론 비교 실험","note":"사용자 결정(2026-11-18)으로 LAG는 2508.05509 Logic-Augmented Generation이다. RAG 오타로 바꾸지 않는다. 원문 세부·재현 실험을 확인하기 전 결과에 method=lag를 붙이지 않는다."},
-    {"key":"synthtrips-evaluation-generation","kind":"evaluation_method","status":"planned","isLanguageModel":false,"sourceRefs":["synthtrips-paper"],"plannedUse":"3단계 페르소나·조건별 제주 평가 질의 생성","note":"추천·추론 방법이 아니다. 합성 질의는 실제 관광객 응답이나 만족도를 대신하지 않는다."},
+    {"key":"synthtrips-evaluation-generation","kind":"evaluation_method","status":"generator_implemented_baseline_scoring_pending","isLanguageModel":false,"sourceRefs":["synthtrips-paper","synthtrips-code"],"plannedUse":"3단계 페르소나·조건별 제주 평가 질의 생성","implementedOn":"2026-11-18","codeReviewedOn":"2026-11-18","paperReproductionVerified":false,"note":"추천·추론 방법이 아니다. 합성 질의는 실제 관광객 응답이나 만족도를 대신하지 않는다. 저자 코드(synthtrips-code, 커밋 고정)에서 확인한 순서(페르소나+조건 조합→지식베이스 조건 필터로 정답→LLM은 질의 문장만 작성)와 점검 항목(질의 200자 상한, 정답 이름 금지, 조건 반영 점검, recall·precision 채점)에 맞췄고 정답은 규칙으로 계산한다(docs/23). 코드를 실행·재현하지 않았고 논문 본문 세부는 미확인이라 재현이라고 부르지 않는다. 판정 LLM 평가와 사람 평가는 실행하지 않았다."},
     {"key":"retrieval-baselines","kind":"comparison_methods","status":"planned","isLanguageModel":false,"candidates":["rules+BM25","hybrid RAG"],"note":"LAG와 구분된 비교 실험. embedding/reranker를 이미 선택했다는 뜻이 아니다."}
   ],
   "toolConnections": [

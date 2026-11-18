@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections
 import csv
 from datetime import date
+import hashlib
 import json
 import math
 from pathlib import Path, PurePosixPath
@@ -387,6 +388,219 @@ def check_agent_data():
     require(not any(PLACE_ID.match(text) for text in strings(report)), "Coverage report must not contain place IDs")
 
 
+EVALUATION_HARD_CASES = {"walk_minimal", "accessibility_unknown", "date_conflict", "disallowed_id", "empty_result"}
+EVALUATION_HARD_REQUIREMENTS = {"indoor_required", "open_at", "wheelchair", "budget_cap"}
+EVALUATION_AUTHOR_KINDS = {"in_session_llm", "external_llm", "human"}
+# The text rules every query passes before it enters a set, in the order the spec documents them.
+EVALUATION_TEXT_CHECKS = ["length", "single_line", "korean", "request_wording", "no_place_id", "named_places",
+                          "condition_cues", "no_unstated_cues", "no_candidate_names"]
+EVALUATION_CUE_MAPS = ("zone", "theme", "category", "transport", "companion", "walk")
+EVALUATION_CUE_LISTS = ("indoor_required", "rain", "crowd_avoid", "wheelchair", "exclude_places", "visited")
+# Condition kinds with extra words a query must not use unless it states that kind.
+EVALUATION_UNSTATED_KINDS = ("zone", "transport", "companion", "walk", "indoor_required", "crowd_avoid", "open_at", "wheelchair",
+                             "budget_cap", "exclude_places", "trip_dates")
+# The reference method caps a query at 200 characters; the spec may be stricter, never looser.
+EVALUATION_MAX_QUERY_LENGTH = 200
+# Unlike PLACE_ID above, this also finds an ID embedded in a longer string or key, in any letter case.
+PLACE_ID_ANYWHERE = re.compile(r"(?:^|[^a-z0-9])(?:kk|osm|cur|vj|nv|bf|olle|trail|hy|drama|bike|hub)-[a-z0-9]", re.I)
+# Every key the summary may contain besides identifiers taken from the spec. A new summary field must be added here
+# on purpose: the list is the publication contract of the aggregate report.
+EVALUATION_SUMMARY_KEYS = {
+    "schemaVersion", "kind", "source", "contentSha256", "totals", "gold", "generation", "queries",
+    "repository", "commit", "placesContentSha256", "rawSha256", "themeMapVersion", "personaVersion", "specVersion",
+    "specSha256", "rulesVersion", "seed", "anchorDate",
+    "items", "requestedItems", "droppedItems", "byPersona", "bySlot", "byDifficulty", "byExpectedAction", "byHardCase",
+    "byStatedConditions", "byConditionType", "bySelectorSource", "byTheme", "byCategory", "byZone", "byConflict",
+    "byEmptyMechanism",
+    "allowedSetSize", "relevantSetSize", "count", "min", "median", "max", "itemsWithEmptyAllowedSet",
+    "itemsWithEmptyRelevantSet", "itemsWithVerifiedPass", "hardRequirements", "itemsExpectingUnknown",
+    "candidateVerdicts", "candidateSignals", "pass", "fail", "unknown", "supports", "contradicts", "none", "verified",
+    "reported", "inferred", "noticeRequiredItems", "noticeTopics", "forbiddenPlaces", "total", "byReason",
+    "offProfileSelectors", "fallbackTierItems", "reusedCellItems", "walkMinimalItemsWithRouteExclusion",
+    "accessibilityItemsWithListedCandidates", "disallowedIdItemsRankedByPopularity",
+    "mode", "promptVersion", "authored", "template", "authorKind", "authoringRecord",
+    "textRules", "minLength", "maxLength", "candidateNameMinLength", "checks", "textLength",
+    "1", "2", "3", "4", "theme", "category", "persona", "date_conflict", "no_candidates",
+    "requirements_contradicted:jointly", "empty_cell", "all_routes_minimal_walk", "all_excluded",
+    "user_excluded", "route_for_minimal_walk", "verified_fail",
+}
+
+
+def check_evaluation_set():
+    """Step-3 evaluation spec rules and the aggregate-only evaluation set summary (no place ID, name or query text)."""
+    persona = read_json(ROOT / "data/persona-prototypes.json")
+    theme_map = read_json(ROOT / "data/theme-category-map.json")
+    spec = read_json(ROOT / "data/evaluation-spec.json")
+    require(spec["version"] and spec["provenance"] and spec["seed"] and spec["rulesVersion"]
+            and spec["personaVersion"] == persona["version"] and spec["themeMapVersion"] == theme_map["version"],
+            "Evaluation spec/persona/theme map version drift")
+    date.fromisoformat(spec["anchorDate"])
+    require(finite(spec["themeThreshold"], 0, 1) and spec["themeThreshold"] > 0 and finite(spec["personaFloor"], 0, 1),
+            "Invalid evaluation thresholds")
+    zones = unique(spec["zones"], "id", "evaluation zones")
+    categories = unique(spec["categories"], "id", "evaluation categories")
+    require(set(categories) == set(theme_map["appCategories"]) - {"stay"}, "Evaluation categories must be the non-stay app categories")
+    conditions = unique(spec["conditions"], "id", "evaluation conditions")
+    require(all(row["kind"] in {"filter", "context", "preference", "hard_requirement"} and row["label"] and row["evidence"]
+                and row["rule"] for row in conditions.values()), "Every evaluation condition needs a kind, its evidence and its rule")
+    require({key for key, row in conditions.items() if row["kind"] == "hard_requirement"} == EVALUATION_HARD_REQUIREMENTS,
+            "Hard requirements changed without updating the publication contract")
+    actions = [row["id"] for row in spec["expectedActions"]]
+    require(actions == ["impossible", "ask_clarification", "cannot_confirm", "recommend"] and all(row["when"] for row in spec["expectedActions"]),
+            "Expected actions must stay in precedence order")
+    difficulties = unique(spec["difficulties"], "id", "evaluation difficulties")
+    require(set(difficulties) == {"simple", "compound", "conflict"}, "Difficulty levels drifted")
+    require(set(unique(spec["hardCases"], "id", "evaluation hard cases")) == EVALUATION_HARD_CASES, "Mandatory hard cases drifted")
+    slots = unique(spec["blueprint"]["slots"], "id", "evaluation blueprint slots")
+    require(spec["blueprint"]["itemsPerPersona"] == len(slots)
+            and EVALUATION_HARD_CASES <= {slot.get("hardCase") for slot in slots.values()}
+            and all(set(sum(slot["extras"], [])) <= set(conditions) for slot in slots.values()),
+            "Blueprint must cover every mandatory hard case with known conditions")
+    metrics = unique(spec["metrics"]["definitions"], "id", "evaluation metrics")
+    require(isinstance(spec["metrics"]["recallK"], int) and spec["metrics"]["recallK"] > 0
+            and {"disallowed_id_rate", "hard_requirement_misjudgement", "recall_at_k", "persona_theme_match",
+                 "precision_at_k", "confirmation_notice_rate"} <= set(metrics), "Evaluation metrics are incomplete")
+    authoring = spec["queryAuthoring"]
+    require(authoring["promptVersion"] and authoring["prompt"], "Query authoring prompt is missing")
+    rules = authoring["textRules"]
+    checks = [row["id"] for row in rules["checks"]]
+    require(set(rules) == {"minLength", "maxLength", "candidateNameMinLength", "checks"}
+            and all(isinstance(rules[key], int) and not isinstance(rules[key], bool)
+                    for key in ("minLength", "maxLength", "candidateNameMinLength"))
+            and 1 <= rules["minLength"] < rules["maxLength"] <= EVALUATION_MAX_QUERY_LENGTH
+            and 2 <= rules["candidateNameMinLength"] <= 4
+            and checks == EVALUATION_TEXT_CHECKS and all(row["rule"] for row in rules["checks"]),
+            "Query text rules drifted from the publication contract")
+    cues = authoring["cues"]
+    listed = lambda words: isinstance(words, list) and words and all(isinstance(word, str) and word.strip() == word and word for word in words)
+    require(set(cues) == set(EVALUATION_CUE_MAPS) | set(EVALUATION_CUE_LISTS)
+            and set(cues["zone"]) == set(zones) and set(cues["theme"]) == set(theme_map["themes"])
+            and set(cues["category"]) == set(categories)
+            and all(set(cues[key]) == set(conditions[key]["values"]) for key in ("transport", "companion", "walk"))
+            and all(listed(words) for key in EVALUATION_CUE_MAPS for words in cues[key].values())
+            and all(listed(cues[key]) for key in EVALUATION_CUE_LISTS),
+            "Query cue words must cover every zone, theme, category and condition value")
+    unstated = authoring["unstatedWords"]
+    matching = authoring["cueMatching"]
+    all_cues = [word for key in EVALUATION_CUE_MAPS for words in cues[key].values() for word in words]
+    all_cues += [word for key in EVALUATION_CUE_LISTS for word in cues[key]]
+    require(set(unstated) == set(EVALUATION_UNSTATED_KINDS) and all(listed(words) for words in unstated.values())
+            and set(matching) == {"wordStart", "ignoredPhrases", "note"} and matching["note"]
+            and set(matching["wordStart"]) <= set(EVALUATION_CUE_MAPS) | set(EVALUATION_CUE_LISTS)
+            and len(set(matching["wordStart"])) == len(matching["wordStart"])
+            and isinstance(matching["ignoredPhrases"], list)
+            and (not matching["ignoredPhrases"] or listed(matching["ignoredPhrases"]))
+            and not set(matching["ignoredPhrases"]) & set(all_cues),
+            "Unstated-condition words or cue matching options drifted from the publication contract")
+    # The method this spec follows is pinned to one commit of the authors' code, and the registry names the same commit.
+    reference = spec["methodReference"]
+    registry = read_json(ROOT / "data/ai-agent-models.json")
+    pinned = {row["key"]: row for row in registry["sources"]}.get(reference["id"])
+    date.fromisoformat(reference["reviewedOn"])
+    require(pinned is not None and re.fullmatch(r"[0-9a-f]{40}", reference["commit"]) and pinned.get("commit") == reference["commit"]
+            and isinstance(reference["repository"], str) and pinned.get("repository") == reference["repository"]
+            and pinned.get("license") == reference["license"] and pinned.get("reviewedOn") == reference["reviewedOn"]
+            and pinned.get("codeExecuted") is False and reference["scope"],
+            "Evaluation method reference must match the pinned registry source")
+
+    report = read_json(ROOT / "reports/evaluation-set-summary.json")
+    require(report["kind"] == "jeju-agent-evaluation-set-summary" and not {"items", "places", "candidates", "briefs"} & set(report),
+            "Evaluation summary must stay aggregate-only")
+    source = report["source"]
+    coverage = read_json(ROOT / "reports/agent-catalog-coverage.json")
+    require(all(source[key] == coverage["source"][key] for key in
+                ("repository", "commit", "placesContentSha256", "rawSha256", "themeMapVersion", "personaVersion")),
+            "Evaluation summary and catalog coverage report come from different catalogs")
+    def plain_numbers(value):
+        # JavaScript prints 1.0 as 1, so integral floats are folded before hashing to keep both sides identical.
+        if isinstance(value, dict):
+            return {key: plain_numbers(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [plain_numbers(item) for item in value]
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        return value
+
+    canonical = json.dumps(plain_numbers(spec), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    require(source["specVersion"] == spec["version"] and source["rulesVersion"] == spec["rulesVersion"]
+            and source["seed"] == spec["seed"] and source["anchorDate"] == spec["anchorDate"]
+            and source["specSha256"] == hashlib.sha256(canonical).hexdigest(),
+            "Evaluation summary was not generated from the committed spec; rebuild it")
+    totals = report["totals"]
+    require(totals["items"] > 0 and totals["items"] + totals["droppedItems"] == totals["requestedItems"]
+            == len(persona["prototypes"]) * len(slots), "Evaluation summary item counts drift")
+    for key in ("byPersona", "bySlot", "byDifficulty", "byExpectedAction", "byStatedConditions", "bySelectorSource", "byZone"):
+        require(sum(totals[key].values()) == totals["items"], f"Evaluation summary totals drift: {key}")
+    require(set(totals["byPersona"]) <= {row["id"] for row in persona["prototypes"]} and set(totals["bySlot"]) <= set(slots)
+            and set(totals["byExpectedAction"]) == set(actions) and set(totals["byDifficulty"]) == set(difficulties)
+            and set(totals["byZone"]) <= set(zones) | {"none"} and set(totals["byCategory"]) <= set(categories)
+            and set(totals["byTheme"]) <= set(theme_map["themes"]) and set(totals["byConditionType"]) == set(conditions),
+            "Evaluation summary uses identifiers the spec does not define")
+    require(set(totals["byHardCase"]) == EVALUATION_HARD_CASES and all(count >= 1 for count in totals["byHardCase"].values()),
+            "Every mandatory hard case must be present in the evaluation set")
+    require(all(1 <= int(key) <= 4 for key in totals["byStatedConditions"]), "Items must state 1 to 4 conditions")
+    gold = report["gold"]
+    require(gold["itemsWithEmptyAllowedSet"] == totals["byExpectedAction"]["impossible"], "Impossible must mean an empty candidate set")
+    require(set(gold["hardRequirements"]) <= EVALUATION_HARD_REQUIREMENTS and set(gold["noticeTopics"]) <= set(spec["noticeTopics"]),
+            "Evaluation summary requirement or notice identifiers drifted")
+    if all(row["verified"] == 0 for key, row in coverage["hardRequirementReadiness"].items() if key != "note"):
+        require(gold["itemsWithVerifiedPass"] == 0 and all(
+            row["candidateVerdicts"]["pass"] == 0 and row["candidateVerdicts"]["fail"] == 0
+            and row["itemsExpectingUnknown"] == row["items"] for row in gold["hardRequirements"].values()),
+            "A hard requirement was judged without verified evidence in the catalog")
+    queries = report["queries"]
+    authored = queries["authored"] > 0
+    require(queries["authored"] + queries["template"] == totals["items"] and queries["promptVersion"] == spec["queryAuthoring"]["promptVersion"]
+            and queries["mode"] == ("authored" if authored else "template_only")
+            and queries["authoringRecord"] == ("local_only" if authored else "none")
+            and (queries["authorKind"] in EVALUATION_AUTHOR_KINDS if authored else queries["authorKind"] is None)
+            and (re.fullmatch(r"[0-9a-f]{64}", report["contentSha256"]["queries"] or "") if authored
+                 else report["contentSha256"]["queries"] is None)
+            and re.fullmatch(r"[0-9a-f]{64}", report["contentSha256"]["gold"]),
+            "Evaluation summary query counts, hashes or authoring record drifted")
+    lengths = queries["textLength"]
+    require(queries["textRules"] == {"minLength": rules["minLength"], "maxLength": rules["maxLength"],
+                                     "candidateNameMinLength": rules["candidateNameMinLength"], "checks": checks}
+            and set(lengths) == {"authored", "template"} and lengths["authored"]["count"] == queries["authored"]
+            and lengths["template"]["count"] == totals["items"]
+            and all(row["count"] == 0 or rules["minLength"] <= row["min"] <= row["median"] <= row["max"] <= rules["maxLength"]
+                    for row in lengths.values()),
+            "Evaluation summary text rules or query lengths drifted from the spec")
+    require(set(totals["byConflict"]) <= {"date_conflict", "no_candidates", "requirements_contradicted:jointly"}
+            | {"requirement_contradicted:" + key for key in EVALUATION_HARD_REQUIREMENTS}
+            and set(totals["byEmptyMechanism"]) <= {"empty_cell", "all_routes_minimal_walk", "all_excluded"}
+            and set(totals["bySelectorSource"]) <= {"theme", "category", "persona"}
+            and set(gold["forbiddenPlaces"]["byReason"]) <= {"user_excluded", "route_for_minimal_walk", "verified_fail"},
+            "Evaluation summary uses a conflict, mechanism, selector or exclusion reason the rules do not define")
+
+    def walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                yield key, True
+                yield from walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from walk(item)
+        elif isinstance(value, str):
+            yield value, False
+
+    vocabulary = {report["kind"], report["schemaVersion"], source["repository"], spec["version"], spec["rulesVersion"], spec["seed"],
+                  spec["anchorDate"], persona["version"], theme_map["version"], spec["queryAuthoring"]["promptVersion"],
+                  "template_only", "authored", "none", "local_only"} | EVALUATION_AUTHOR_KINDS | set(EVALUATION_TEXT_CHECKS)
+    known_keys = (EVALUATION_SUMMARY_KEYS | set(zones) | set(categories) | set(conditions) | set(slots) | set(actions)
+                  | set(difficulties) | EVALUATION_HARD_CASES | set(spec["noticeTopics"]) | set(theme_map["themes"])
+                  | {row["id"] for row in persona["prototypes"]}
+                  | {"requirement_contradicted:" + key for key in EVALUATION_HARD_REQUIREMENTS})
+    for text, is_key in walk(report):
+        require(not re.search(r"[\u3131-\u318e\uac00-\ud7a3]", text) and not PLACE_ID_ANYWHERE.search(text),
+                "Evaluation summary must not contain place names, place IDs or query text")
+        if is_key:
+            require(text in known_keys, "Evaluation summary has a key outside its publication contract")
+        else:
+            require(text in vocabulary or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", text),
+                    "Evaluation summary values must be known identifiers or hashes")
+
+
 def check_langflow():
     """The committed Langflow starter flow and settings example carry no credentials and keep safe defaults."""
     path = ROOT / "services/langflow/jeju-tour-agent.flow.json"
@@ -427,6 +641,7 @@ def main():
         ("persona definitions and exported metadata", check_personas),
         ("model registry references and status structure", check_model_registry),
         ("agent theme map and aggregate coverage report", check_agent_data),
+        ("evaluation spec and aggregate evaluation set summary", check_evaluation_set),
         ("Langflow starter flow and settings example", check_langflow),
         ("publication boundaries and archives", check_deliverables),
     ]

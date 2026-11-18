@@ -5,7 +5,7 @@
 ## 현재 상태
 
 - **운영·보안 설계 추가:** [Linux Docker 전환안](docs/21-linux-docker-production.md)과 [탈옥·프롬프트 주입 방어](docs/22-jailbreak-and-prompt-injection-defense.md)를 정리했습니다. 도구 실행 전 권한·예산 검사와 최종 장소 ID·필수 조건 검증을 제안합니다. [합성 평가 명세 14개](data/agent-security-cases.json)는 미실행이며 운영 방어가 구현·검증된 상태는 아닙니다. 현재 자료는 JSON 카탈로그, PostgreSQL + pgvector는 향후 검색 저장소 후보입니다.
-- **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. 다음은 SynthTRIPs 방식 평가셋(3단계)이며, 작업 명세와 새 Claude Code 세션 시작 프롬프트는 [인수인계 11·12절](docs/18-claude-code-handoff.md)에 있습니다.
+- **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. [3단계 평가셋](docs/23-agent-step3-evaluation-set.md)도 만들었습니다. 8개 페르소나 × 12개 슬롯 96문항의 정답을 규칙으로 계산하는 생성기·채점 함수·테스트와 이름·ID 없는 [집계 보고서](reports/evaluation-set-summary.json)가 있고, 질의와 정답 후보는 `.local`에만 둡니다. 다음은 기준선 채점이며, 작업 명세와 새 Claude Code 세션 시작 프롬프트는 [인수인계 11·12절](docs/18-claude-code-handoff.md)에 있습니다.
 - **시각적 Agent 빌더:** 사용자 결정으로 [Langflow](docs/20-langflow-agent-builder.md)를 씁니다(Flowise는 2026-08-31 지원 종료). Langflow 1.13.3에서 jeju-mcp 도구 3개 발견·호출과 [시작 흐름](services/langflow/jeju-tour-agent.flow.json) 가져오기·MCP 노드 빌드를 확인했습니다. 실제 모델로 Agent를 돌리는 검증은 모델 키가 필요해 남아 있습니다.
 - **다른 Claude Code 세션의 시작점:** [CLAUDE.md](CLAUDE.md) → [상세 인수인계·재개 절차](docs/18-claude-code-handoff.md) → [전체 AI AGENT MODEL 목록](docs/17-ai-agent-model-registry.md). 모델별 구현·실행·평가 상태는 [JSON 레지스트리](data/ai-agent-models.json)에서도 관리합니다.
 - 상세 설계와 읽기 전용 MCP 초기 구현 단계입니다. 장소 검색·상세·조건 검사 3개 도구를 로컬 검증했습니다. 전체 추천 Agent·학습 모델·운영 통합은 후속 작업입니다.
@@ -37,6 +37,7 @@
 20. [Langflow로 Agent 흐름 만들기: 설치·jeju-mcp 연결·보안](docs/20-langflow-agent-builder.md)
 21. [Linux Docker 운영 배치·인증·영속성·배포 검증](docs/21-linux-docker-production.md)
 22. [탈옥·프롬프트 주입 방어·벡터 검색 경계·합성 평가](docs/22-jailbreak-and-prompt-injection-defense.md)
+23. [AI Agent 3단계: SynthTRIPs 방식 평가셋 생성기·정답 규칙·채점 지표](docs/23-agent-step3-evaluation-set.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 
@@ -55,8 +56,9 @@ Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·�
 - [Word 보고서](reports/jeju-personal-tour-agent-design.docx)
 - [PDF 열람본](reports/jeju-personal-tour-agent-design.pdf)
 - [Windows·macOS Ollama 연결 시험 안내](examples/ollama-tunnel/README.md) · [인증 Gateway 예제 ZIP](reports/ollama-tunnel-starter.zip): 모의 서버 테스트를 갖춘 연결 시험용 예제. 운영 Agent·MCP 서버 구현과 구분.
-- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트·Agent 카탈로그 41개 테스트와 로컬 SDK 연결 확인. 기존 자료 7,561건 가져오기 검증. 공개 배포는 미완료.
+- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트·Agent 카탈로그·평가셋 62개 테스트와 로컬 SDK 연결 확인. 기존 자료 7,561건 가져오기 검증. 공개 배포는 미완료.
 - [Agent 카탈로그 커버리지](reports/agent-catalog-coverage.json): 앱 장소 981곳의 속성·근거 등급·테마별 개수만 담은 집계. 카탈로그 본체는 `.local` 전용입니다.
+- [평가셋 집계](reports/evaluation-set-summary.json): 96문항의 난이도·기대 동작·필수 조건 판정 개수와 정답 해시만 담은 집계. 질의와 정답 후보는 `.local` 전용입니다.
 - [확정 목록 CSV](data/confirmed-data-catalog.csv) · [실측 인벤토리 CSV](data/raw-data-inventory.csv) · [컬럼 사전 CSV](data/raw-data-columns.csv): 원본 CSV 파일은 공개 PR에 포함하지 않습니다.
 - [Codex Hugging Face 설정](.codex/config.toml) · [Claude Code 설정](.mcp.json): 공개 모델·데이터셋·논문 조회용. 현재 클라우드 도메인 허용 초안의 적용 및 실제 연결 검증은 남아 있습니다.
 - 시각화 재생성: `python3 scripts/build_persona_assets.py` (`numpy`, `matplotlib`, `Noto Sans CJK` 폰트 필요)

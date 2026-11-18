@@ -50,6 +50,7 @@ CHAPTERS = [
     ("20-langflow-agent-builder.md", "20. Langflow로 Agent 흐름 만들기"),
     ("21-linux-docker-production.md", "21. Linux Docker 운영 배치와 검증 절차"),
     ("22-jailbreak-and-prompt-injection-defense.md", "22. 탈옥·프롬프트 주입 방어와 평가 설계"),
+    ("23-agent-step3-evaluation-set.md", "23. AI Agent 3단계: 평가셋 생성기와 정답 규칙"),
 ]
 PAGE_BREAK = '\n```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```\n'
 
@@ -261,15 +262,15 @@ lang: ko-KR
 
 **확인 범위**
 
-원본 웹·Flutter와 공식 Ollama·MCP 고정 소스 문서를 읽었다. 기존 저장소의 CSV 55개를 실제 검사해 카탈로그·컬럼 사전·로컬 묶음을 만들었다. 원본 ZIP은 재배포 조건 검토 전이므로 공개 Git에서 제외한다. 배포 사이트는 네트워크 차단으로 직접 확인하지 못했다. 읽기 전용 MCP 3개 도구와 기존 자료 7,561건을 이용한 로컬 연결을 검증했다. 서비스·HF 클라이언트·Agent 카탈로그 41개와 Gateway 10개 검사가 로컬에서 통과했고, 기반 커밋 ad3c363의 main GitHub Actions 성공을 확인했다. 원본 앱과 같은 장소 981곳의 근거 등급을 실측했으며 verified 값과 비용 값은 0건이다. HF 실연결·조직 생성은 미완료다. 도메인·네임서버 저장은 사용자 보고이며 DNS 활성화·공개 연결은 미검증이다. 두 논문은 초록 수준으로 확인했고 본문 세부와 별도 PDF·Excel 원본은 미확인이다. Ollama 모델·LAG·운영 앱 통합은 아직 실행하지 않았다. 신규 문항·점수·목표는 검증 전 제안이다.
+원본 웹·Flutter와 공식 Ollama·MCP 고정 소스 문서를 읽었다. 기존 저장소의 CSV 55개를 실제 검사해 카탈로그·컬럼 사전·로컬 묶음을 만들었다. 원본 ZIP은 재배포 조건 검토 전이므로 공개 Git에서 제외한다. 배포 사이트는 네트워크 차단으로 직접 확인하지 못했다. 읽기 전용 MCP 3개 도구와 기존 자료 7,561건을 이용한 로컬 연결을 검증했다. 서비스·HF 클라이언트·Agent 카탈로그·평가셋 62개와 Gateway 10개 검사가 로컬에서 통과했고, 기반 커밋 ad3c363의 main GitHub Actions 성공을 확인했다. 원본 앱과 같은 장소 981곳의 근거 등급을 실측했으며 verified 값과 비용 값은 0건이다. 3단계 평가셋 96문항의 정답을 규칙으로 계산했고 필수 조건 판정은 모두 unknown이다. SynthTRIPs 저자 공식 코드(커밋 9562f53)를 읽어 생성 순서와 질의 문장 규칙·채점 지표를 대조했으며 코드는 실행하지 않았다. 기준선 채점과 모델 공급자 호출은 하지 않았다. HF 실연결·조직 생성은 미완료다. 도메인·네임서버 저장은 사용자 보고이며 DNS 활성화·공개 연결은 미검증이다. 두 논문의 본문 세부와 별도 PDF·Excel 원본은 미확인이다(논문 자체는 초록 수준으로만 확인). Ollama 모델·LAG·운영 앱 통합은 아직 실행하지 않았다. 신규 문항·점수·목표는 검증 전 제안이다.
 
 **이번 산출물**
 
-기존 서비스 분석, 문항·8개 페르소나 설계 후보·13개 취향 축·시각화, 추천·데이터 계획, Ollama 기능·Cloud 차이, MCP 버전·도구·인증·작업 큐, Claude·OpenAI 동시 지원·다중 터널·DB 위치·계정/비용, 도메인·관리 MCP·장비 연결 안내, oreumit.com 다음 단계·배치도·MCP 초기 구현, 기존 Vercel 앱의 호환·단계별 전환·롤백 설계, LAG 재현·모델 비교·평가 계획, 확정 CSV 목록, Hugging Face MCP·조직·CI 안내, 전체 AI AGENT MODEL 레지스트리와 Claude Code 인수인계, Agent 구축 가능성 진단과 근거 등급 장소 카탈로그·테마 매핑, Langflow 1.13.3과 jeju-mcp 연결·시작 흐름. 페르소나 시각화에는 실제 관광객 표본이나 학습된 군집을 사용하지 않았다.
+기존 서비스 분석, 문항·8개 페르소나 설계 후보·13개 취향 축·시각화, 추천·데이터 계획, Ollama 기능·Cloud 차이, MCP 버전·도구·인증·작업 큐, Claude·OpenAI 동시 지원·다중 터널·DB 위치·계정/비용, 도메인·관리 MCP·장비 연결 안내, oreumit.com 다음 단계·배치도·MCP 초기 구현, 기존 Vercel 앱의 호환·단계별 전환·롤백 설계, LAG 재현·모델 비교·평가 계획, 확정 CSV 목록, Hugging Face MCP·조직·CI 안내, 전체 AI AGENT MODEL 레지스트리와 Claude Code 인수인계, Agent 구축 가능성 진단과 근거 등급 장소 카탈로그·테마 매핑, Langflow 1.13.3과 jeju-mcp 연결·시작 흐름, 3단계 평가셋 생성기·정답 규칙·채점 함수와 집계. 페르소나 시각화에는 실제 관광객 표본이나 학습된 군집을 사용하지 않았다.
 """
     contents = "# 보고서 구성\n\n" + "\n".join(f"- {title}" for _, title in CHAPTERS)
     contents += "\n\n문항과 추천 계산은 3장, 페르소나 설계·시각화는 4장, Ollama·Vercel 구성은 6장, MCP 서버 구축은 7장에 정리했다. Claude·OpenAI·터널·DB·계정/비용은 8장, 도메인·관리 MCP·장비 연결은 9장, 네임서버 저장 후 단계·MCP 구현 결과는 10장, 구현 공통 절차는 11장, 연구·데이터 미확인 항목은 13장을 기준으로 관리한다.\n"
-    contents += "\n확정 CSV의 출처·품질·재생성은 14장, HF MCP와 계정·CI는 15~16장, 전체 모델의 역할·검증 단계는 17장, 다른 Claude Code 세션의 시작 순서와 다음 구현은 18장, Agent 단계 진행과 근거 등급 카탈로그는 19장, Langflow 연결과 보안 기준은 20장을 따른다.\n"
+    contents += "\n확정 CSV의 출처·품질·재생성은 14장, HF MCP와 계정·CI는 15~16장, 전체 모델의 역할·검증 단계는 17장, 다른 Claude Code 세션의 시작 순서와 다음 구현은 18장, Agent 단계 진행과 근거 등급 카탈로그는 19장, Langflow 연결과 보안 기준은 20장, Docker 운영 배치는 21장, 탈옥·프롬프트 주입 방어는 22장, 평가셋 생성기와 정답 규칙은 23장을 따른다.\n"
     parts = [cover, contents]
     for filename, title in CHAPTERS:
         parts.extend(["# " + title, source_body(filename)])
