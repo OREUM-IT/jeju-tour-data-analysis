@@ -1,0 +1,23 @@
+flowchart TD
+  U[사용자 · Vercel에 등록된 대표 웹 주소]
+  V[기존 Vercel 웹·서버 API]
+  C[Cloudflare Access + Named Tunnel]
+  M[상시 호스트 · 제주 MCP 서버<br/>mcp.oreumit.com/mcp → localhost:8788/mcp]
+  D[(기존 PostgreSQL 또는 관리형 DB<br/>현재 배포 정보 확인 후 연결)]
+  W[후속 구현 · Agent Gateway/Worker<br/>영속 작업 · 모델 라우터 · 검증]
+  O[OpenAI API]
+  A[Anthropic API]
+  P[Windows · 로컬 Ollama]
+  Q[Mac · 로컬 Ollama]
+  U --> V
+  V -->|1차 · 인증된 짧은 도구 호출| C
+  C -->|Access 인증 + MCP 서비스 인증| M
+  M -->|초기 · 검증한 카탈로그 파일| K[기존 장소 ID·출처·미확인 상태]
+  M -.->|후속 DB 어댑터| D
+  V -.->|2차 · 비동기 작업| W
+  W -.->|공유 도구 호출| C
+  W -.-> O
+  W -.-> A
+  W -.->|사설 연결 또는 인증 Gateway| P
+  W -.->|사설 연결 또는 인증 Gateway| Q
+  W -.->|작업·사용량·결과| D

@@ -1,0 +1,13 @@
+digraph NextSteps {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.3", ranksep="0.3", fontname="Noto Sans CJK KR", fontsize=18, labelloc=t, label="네임서버 저장 후 · 단계별 진행 기준\nDNS 저장은 사용자 확인 · 각 연결은 검증 후 다음 단계로"];
+  node [shape=box, style="rounded,filled", fillcolor="#eef5f7", color="#8aa7ac", fontname="Noto Sans CJK KR", fontsize=13, margin="0.18,0.14", width=6.5];
+  edge [color="#506974", arrowsize=0.75];
+  a [label="1  DNS 전파 확인\nCloudflare Active · 기존 웹 HTTPS · Vercel 정상", fillcolor="#dceee1"];
+  b [label="2  MCP 서버 로컬 검증\n초기화 · 도구 목록/호출 · 인증 · 근거 없는 조건은 미확인", fillcolor="#dceaf7"];
+  c [label="3  상시 호스트 + 고정 터널\nAccess 정책 먼저 → Named Tunnel → mcp.oreumit.com/mcp", fillcolor="#efe8f7"];
+  d [label="4  외부 MCP 연결 검증\n정상 서비스 인증 성공 · 무인증/잘못된 Origin 차단"];
+  e [label="5  기존 Vercel Preview 연결\n서버 전용 호출 · 기존 로그인/검색/코스 저장 확인", fillcolor="#dceee1"];
+  f [label="6  Windows·Mac Ollama 연결\n로컬 추론 → 인증 Gateway → 장비별 상태·시간·동시성 제한", fillcolor="#f8edce"];
+  g [label="7  통합 Agent 후속 구현\n모델 라우터 · 영속 작업 · 취소 · 비용 · 제한된 사용자 실험", fillcolor="#f8edce"];
+  a -> b -> c -> d -> e -> f -> g;
+}

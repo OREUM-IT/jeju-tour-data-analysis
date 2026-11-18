@@ -1,0 +1,29 @@
+flowchart TB
+  subgraph Existing[기존 Vercel 앱 유지]
+    UI[React 설문·대화·코스빌더]
+    BFF[Express BFF: 인증·한도·작업 어댑터]
+    Legacy[기존 Gemini / 규칙 추천: 허용된 대체 경로]
+    UI -->|동일 출처 HTTPS| BFF
+    BFF -. 기능 플래그 / 정책 .-> Legacy
+  end
+  subgraph New[신규 외부 Agent 서비스: 배포 전 제안]
+    Gateway[Agent Gateway: 대상·권한 검증]
+    Jobs[(영속 작업 DB / 큐 / lease)]
+    Worker[Worker = 모델 호출 주체 + MCP client]
+    MCP[HTTP MCP 서버: SDK 1.32.1 / 2025-11-25]
+    Gateway --> Jobs
+    Jobs --> Worker
+    Worker -->|결과·상태| Jobs
+    Worker -->|초기화 + tools/call / 별도 audience| MCP
+  end
+  subgraph Private[사설 추론·데이터]
+    Ollama[Ollama: 모델 추론 / 외부 무인증 공개 금지]
+    Data[출처 스냅샷·기존 조회 API·허용된 경로/기상]
+  end
+  BFF -->|TLS + 짧은 위임 토큰| Gateway
+  Worker <-->|chat / 도구 결과 메시지| Ollama
+  MCP -->|도구별 인증·쿼터·근거| Data
+  Jobs -. 본인 작업 조회 .-> Gateway
+  Gateway -. 검증 결과 .-> BFF
+  BFF -. 기존 응답 호환·사용자 적용 .-> UI
+  LAG[LAG 어댑터: 논문 확인 후 확정] -. 원문 재현 게이트 .-> Worker

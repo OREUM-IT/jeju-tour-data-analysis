@@ -1,0 +1,14 @@
+# Local runtime data, credentials, dependencies, and Python caches.
+.env
+.env.*
+!.env.example
+!.env.*.example
+.local/
+node_modules/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Original-source CSV redistribution terms have not all been verified.
+# Build locally from the pinned reference checkout; publish metadata only.
+/reports/jeju-data-snapshot-bundle.zip

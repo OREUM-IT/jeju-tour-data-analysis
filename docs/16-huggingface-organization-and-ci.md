@@ -9,13 +9,13 @@
 | Codex MCP 설정 | 프로젝트 `.codex/config.toml`에 공식 HTTPS 서버·읽기 도구 3개·시간 제한 설정 |
 | Claude Code MCP 설정 | 프로젝트 `.mcp.json`에 공식 files preset 설정 |
 | 독립 MCP 클라이언트 | 모델·데이터셋·논문 검색/읽기 명령과 로컬 허용 목록 구현 |
-| 자동 CI | `.github/workflows/ci.yml` 구현. PR·main·codex 브랜치에서 로컬 검사 |
+| 자동 CI | `.github/workflows/ci.yml` 구현. 기반 커밋 `ad3c363`의 main·전용 브랜치 GitHub Actions 성공 확인. 이번 PR에서 문서·메타데이터 검사도 추가 |
 | 실제 HF 연결 CI | `.github/workflows/huggingface-mcp-smoke.yml` 구현. main에서 수동 익명 조회 |
 | 로컬 확인 | 잠금 의존성 재설치 후 MCP·HF 클라이언트 32개 + Gateway 10개 = **42개 통과**. actionlint 1.7.7 통과 |
 | HF 조직 생성·계정 연결 | 로그인한 브라우저의 조작 도구와 인증된 HF 접근이 없어 미실행 |
 | 실제 HF 응답 | 클라우드의 해당 도메인 접속은 프록시 403. 실제 연결 성공 미확인 |
 
-이 문서의 로컬 테스트 성공을 GitHub Actions 실행 성공이나 HF 조직 연결 성공으로 표시하지 않는다. 공개 MCP 조회는 조직 생성 전에도 가능한 별도 기능이다.
+기반 커밋의 [main 실행](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44226883163)과 [전용 브랜치 실행](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44226628447)은 GitHub 공식 실행 페이지에서 성공을 확인했다. 이 CI 성공은 로컬 fixture 검사 결과이며 HF 조직 생성·공개 HF 실연결 성공을 뜻하지 않는다. 공개 MCP 조회는 조직 생성 전에도 가능한 별도 기능이다.
 
 ## 2. 조직 생성과 계정 확인
 
@@ -48,7 +48,7 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs datasets "
 
 ### 자동 로컬 검사
 
-[CI 워크플로](../.github/workflows/ci.yml)는 서비스·Gateway·MCP 설정·워크플로 변경 시 실행한다. main 또는 `codex/**` 브랜치 push, PR, 수동 실행을 지원한다.
+[CI 워크플로](../.github/workflows/ci.yml)는 서비스·Gateway·MCP 설정·워크플로·문서·데이터·설계·보고서·스크립트 변경 시 실행한다. main 또는 `codex/**` 브랜치 push, PR, 수동 실행을 지원한다. 문서와 메타데이터 검사는 원본 CSV 체크아웃 없이 `python3 scripts/check_repository.py`로 재현한다.
 
 - Ubuntu 24.04, Node.js **24.22.1**.
 - 공식 `actions/checkout` v6.1.0, `actions/setup-node` v6.5.0의 실제 release commit SHA 고정.
@@ -71,13 +71,13 @@ CI에는 HF_TOKEN·조직 쓰기 권한·모델 실행·데이터 업로드가 �
 - [HF 조직 생성](https://huggingface.co/organizations/new)
 - [HF MCP 계정 설정](https://huggingface.co/settings/mcp)
 
-검증된 전용 브랜치를 main에 반영한 뒤 자동 CI와 수동 연결 검사의 실제 결과를 확인한다. GitHub API가 필요한 실행 조회·PR 생성·수동 dispatch에는 `api.github.com` 네트워크 접근과 해당 GitHub 계정 권한이 필요하다. Git 읽기·push 권한이 GitHub API 접근을 자동으로 보장하지 않는다.
+기반 MCP·CI 커밋 `ad3c36384117696457d4c6ee547d9659629116fa`는 이미 main에 반영되어 자동 CI에 성공했다. 이번 전체 설계·모델 인수인계 변경은 별도 PR 대상으로 검토하며 자동으로 main에 병합하지 않는다. 수동 HF 연결 워크플로의 실제 실행은 아직 확인하지 않았다. GitHub API가 필요한 실행 조회·PR 생성·수동 dispatch에는 `api.github.com` 네트워크 접근과 해당 GitHub 계정 권한이 필요하다. Git 읽기·push 권한이 GitHub API 접근을 자동으로 보장하지 않는다.
 
 HF Space 자동 배포·모델 업로드·사설 데이터 동기화는 CI와 별도 배포 작업이다. 실제 조직·대상 저장소·역할·비용을 확인한 다음 추가한다. 비공개 자료를 CI에서 읽게 될 때는 보호된 GitHub Environment와 읽기 전용 HF Trusted Publisher(OIDC) 또는 최소 범위 Secret을 검토한다. 현재 워크플로는 이 권한을 요구하지 않는다.
 
 ## 6. 연결 장애 기록
 
-현재 환경 `ccarenv_b64_Y2NhcmVudl9jMWQ5OTM1MjM1NjQ4MTkxYTM5MDJlNjQ1MWYzYTkyYQ`에는 브라우저 제어·런타임 네트워크 설정 적용·환경 게시 도구가 제공되지 않는다. 상태 조회와 설정 초안 저장은 가능하다. 공개 HF MCP 접속과 GitHub REST API 접속은 현재 프록시에서 거부되며, 허용 설정 초안의 저장과 실제 런타임 반영을 구분한다.
+이번 작업 환경에는 브라우저 제어·런타임 네트워크 설정 적용·환경 게시 도구가 제공되지 않는다. 상태 조회와 설정 초안 저장은 가능하다. 공개 HF MCP 접속과 GitHub REST API 접속은 현재 프록시에서 거부되며, 허용 설정 초안의 저장과 실제 런타임 반영을 구분한다. 다음 세션에서는 도구와 접근 상태를 다시 조회한다.
 
 ## 7. 공식 근거
 

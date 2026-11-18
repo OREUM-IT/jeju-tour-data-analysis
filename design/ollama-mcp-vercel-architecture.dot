@@ -1,0 +1,35 @@
+digraph Architecture {
+  graph [rankdir=TB, bgcolor="white", pad="0.25", nodesep="0.35", ranksep="0.55", fontname="Noto Sans CJK KR", fontsize=19, labelloc=t, label="기존 Vercel 앱에 Ollama·MCP 연결\n제안 설계 · 신규 서버와 운영 연동은 아직 미실행"];
+  node [shape=box, style="rounded,filled", color="#8aa7ac", fillcolor="#eef5f7", fontname="Noto Sans CJK KR", fontsize=13, margin="0.18,0.13"];
+  edge [color="#506974", fontname="Noto Sans CJK KR", fontsize=10, arrowsize=0.8];
+  subgraph cluster_vercel {
+    label="기존 Vercel 영역 · 현재 icn1 / maxDuration 120 설정"; color="#85a99b"; bgcolor="#f2f8f4"; fontsize=14;
+    ui [label="기존 React 화면\n설문 · 대화 · 코스빌더", fillcolor="#dceee1"];
+    bff [label="기존 Express API + 신규 BFF 어댑터\n로그인 · 요청 검증 · 할당량 · 작업 조회", fillcolor="#dceee1"];
+    legacy [label="기존 Gemini / 규칙 추천\n허용된 정책에서만 대체", fillcolor="#f8f0df"];
+    ui -> bff [label="동일 출처 HTTPS"];
+    bff -> legacy [style=dashed, label="기능 플래그 / 복귀"];
+  }
+  subgraph cluster_agent {
+    label="신규 외부 Agent 서비스 · 상시 실행 / 영속 상태"; color="#829cb8"; bgcolor="#f5f8fb"; fontsize=14;
+    gate [label="인증된 Agent Gateway\n작업 접수 · 소유권 · 대상 토큰 검증"];
+    jobs [shape=cylinder, label="작업 DB + 큐\nlease · 멱등성 · 진행 · 결과"];
+    worker [label="Agent Worker\n모델 호출 주체 + MCP 클라이언트\n필수 제약 · 출처 · 결과 검증"];
+    mcp [label="제주 HTTP MCP 서버\n초기 SDK 1.32.1 / 2025-11-25\n승인 도구 · 요청별 인증 · 제한"];
+    gate -> jobs [label="검증 후 영속 접수"];
+    jobs -> worker [label="작업 lease"];
+    worker -> jobs [label="상태 / 결과", constraint=false];
+    worker -> mcp [label="초기화 · tools/list · tools/call\nMCP용 별도 audience"];
+  }
+  subgraph cluster_private {
+    label="사설 추론 / 승인된 데이터 경계"; color="#bea770"; bgcolor="#fcf9ef"; fontsize=14;
+    ollama [label="Ollama + 승인 모델\n사설 바인딩 · 관리 API 비공개\n실제 자원·한국어·도구 성능 검증 필요", fillcolor="#f8edce"];
+    data [label="검증된 데이터와 기존 조회 API\n출처·자료 버전 · 기상 · 경로\n공급자별 권한·쿼터", fillcolor="#f8edce"];
+  }
+  lag [label="LAG 어댑터\n논문 원문·재현 검토 후 확정", style="rounded,dashed", fillcolor="white", color="#a38d9e"];
+  bff -> gate [label="TLS · 짧은 위임 토큰\n동기 짧은 요청 / 비동기 202"];
+  worker -> ollama [dir=both, label="chat / 도구 결과 메시지"];
+  mcp -> data [label="조회·검증만 허용"];
+  lag -> worker [style=dashed, label="구현 전 게이트"];
+  gate -> bff [style=dashed, label="본인 작업 조회 / 검증 결과", constraint=false];
+}
