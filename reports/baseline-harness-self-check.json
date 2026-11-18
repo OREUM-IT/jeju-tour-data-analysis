@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-baseline-summary",
+  "mode": "oracle_self_check",
+  "resultType": "scorer_self_check_not_model_quality",
+  "system": "oracle_self_check",
+  "planSha256": "d357ff6f38f32f711010e67674eb23a37aa69cc622418b075f4af7e36fc9c276",
+  "binding": {
+    "goldSha256": "b982194547edc386b1bfb5d9588cbe607dc99fbf960072b9b20221904f21217d",
+    "queriesSha256": null,
+    "specSha256": "508c71ec17bfdf2395e30e479cb330128c0dbe6e7fc084edf936963721ce04f2",
+    "catalogSha256": "adbbe3fd09025873e75cb9e5d9d663a7300db2a27e3d734433cbdddbe6531ca9",
+    "personasSha256": "5255d010b8f6e7b95e21211004e0d7c5339a7a042355d53870d62ce377eacbe5",
+    "themeMapSha256": "eaf3e91ab4a9e2a40340771a533d9c930d2ce566b265cfa52f704ce341cd65b0"
+  },
+  "provenanceSha256": "9d0508593ad914da13764341210a1c81e9725c18048ad616aa4f7d83d4560965",
+  "runSha256": "61fe0ad91ba0012a84e5ac8e39c19e21575f97248c67c20e80f46d237e62309b",
+  "startedAt": "2026-11-18T22:47:01.015Z",
+  "completedAt": "2026-11-18T22:47:01.015Z",
+  "wording": {
+    "templateItems": 96,
+    "writtenItems": 0,
+    "identicalWrittenItems": 0,
+    "distinctWrittenItems": 0
+  },
+  "groups": [
+    {
+      "system": "oracle_self_check",
+      "variant": "template",
+      "plannedCases": 96,
+      "successfulResponses": 96,
+      "failedCases": 0,
+      "completionRate": 1,
+      "errors": {
+        "timeout": 0,
+        "transport_error": 0,
+        "invalid_output": 0,
+        "not_executed": 0
+      },
+      "actionAccuracyAllCases": 1,
+      "unexpectedImpossible": {
+        "count": 0,
+        "applicableCases": 88,
+        "measuredCases": 88,
+        "rate": 0
+      },
+      "metrics": {
+        "items": 96,
+        "actionAccuracy": 1,
+        "disallowedIds": {
+          "returnedIds": 331,
+          "rate": 0,
+          "itemsWithViolation": 0,
+          "byReason": {
+            "notInCatalog": 0,
+            "outsideCandidates": 0,
+            "userExcluded": 0,
+            "routeForMinimalWalk": 0,
+            "verifiedFail": 0
+          }
+        },
+        "hardRequirementMisjudgement": {
+          "applicableItems": 32,
+          "passOnUnknownItems": 0,
+          "failOnUnknownItems": 0,
+          "contradictsVerifiedItems": 0,
+          "rate": 0
+        },
+        "recallAtK": {
+          "k": 5,
+          "scoredItems": 79,
+          "mean": 1
+        },
+        "precisionAtK": {
+          "k": 5,
+          "scoredItems": 79,
+          "mean": 1
+        },
+        "personaThemeMatch": {
+          "scoredItems": 79,
+          "mean": 0.7095526133842661
+        },
+        "confirmationNotice": {
+          "requiredItems": 48,
+          "given": 48,
+          "rate": 1,
+          "topicCoverage": {
+            "scoredItems": 48,
+            "mean": 1
+          }
+        },
+        "latencyMs": {
+          "measuredItems": 0,
+          "p50": null,
+          "p95": null
+        },
+        "costUsd": {
+          "measuredItems": 0,
+          "total": null
+        }
+      }
+    }
+  ],
+  "securityEvaluation": "not_executed"
+}

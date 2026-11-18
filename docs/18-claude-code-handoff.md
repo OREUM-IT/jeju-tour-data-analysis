@@ -1,8 +1,10 @@
 # Claude Code 인수인계와 작업 재개 절차
 
-기준일: 2026-11-18 (Claude 두 번째 세션 종료 시점에 갱신). 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 [19 문서](19-agent-step2-data-foundation.md)의 단계로 구현하는 것이다. 이 문서는 다음 Claude Code 세션이 그대로 이어받을 상태, 재개 절차, 다음 작업 명세를 담는다. 0절이 최신 상태다. 1절 이하는 Codex 단계부터 이어진 기록과 절차에 이번 세션의 변경을 반영한 것이다. 과거 상태보다 확인 시점이 최근인 근거를 우선하고, 새 결과가 생기면 근거와 함께 갱신한다.
+기준일: 2026-11-19 (한국 시간, Codex 기준선 하네스 구현 반영). 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 [19 문서](19-agent-step2-data-foundation.md)의 단계로 구현하는 것이다. 이 문서는 다음 세션이 그대로 이어받을 상태, 재개 절차, 다음 작업 명세를 담는다. 0절이 최신 상태다. 1절 이하는 이전 세션의 기록과 절차를 포함한다. 과거 상태보다 확인 시점이 최근인 근거를 우선하고, 새 결과가 생기면 근거와 함께 갱신한다.
 
-## 0. 지금 이어받을 상태 (2026-11-18, Claude 두 번째 세션 종료 시점)
+## 0. 지금 이어받을 상태 (2026-11-19)
+
+**최신 구현:** PR #6이 병합된 `main@172325b`에서 `codex/agent-baseline-scoring` 브랜치를 만들었다. [24 문서](24-agent-baseline-scoring.md)의 기준선 요청·가져오기·채점 CLI, Gemini/Langflow 응답 어댑터, 해시·버전·전체 문항 검사와 집계를 구현했다. 참고 앱 `b0602a1`의 장소 981곳과 템플릿 96문항을 복원했고 정답 해시 `b9821945…`가 기존과 일치한다. [자체 검사 집계](../reports/baseline-harness-self-check.json)는 정답에서 만든 oracle 응답의 채점 결과이며 모델 성능이 아니다. 실제 모델 호출, 이전 작성 질의 복원, 14개 보안 사례 실행은 하지 않았다.
 
 **이후 추가된 운영·보안 설계:** `main@725737f`를 기준으로 [21 Linux Docker](21-linux-docker-production.md)와 [22 탈옥 방어](22-jailbreak-and-prompt-injection-defense.md)를 추가했다. 사용자 지정 논문 `2403.17336`은 저자 공식 GitHub README로 서지·공격 평가 연구임을 확인했으며 PDF 본문은 403으로 미확보다. [합성 보안 평가 14개](../data/agent-security-cases.json)는 아직 실행하지 않았다. Gateway·최종 답변 검증기·벡터 DB·운영 컨테이너는 미구현이다. 현재 로컬 구성은 유지하며 3단계 평가셋에 정상·공격 사례와 실제 부작용 계측을 함께 설계한다. 기존 설문 v0.3 등 `codex/ai-agent-model-handoff`의 추가 커밋은 이 새 브랜치에 자동 병합하지 않았다.
 
@@ -10,13 +12,13 @@
 
 | 항목 | 상태 |
 |---|---|
-| main | `b1072a3`(PR #5 병합). PR #1(Codex 설계·인수인계), #2(2단계 데이터 기반·논문 정정), #3(Langflow 연결), #4(인수인계 갱신), #5(Docker 운영·탈옥 방어 설계)가 모두 병합됐다. 3단계 평가셋은 브랜치 `claude/agent-step3-evaluation`에서 PR로 올린다. PR 번호와 병합 여부는 GitHub에서 확인하고, 병합은 사용자가 한다 |
-| 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · 시각적 빌더 Langflow 연결 ✅(모델 실행 미검증) · 3 평가셋 ✅(생성기·테스트·집계, SynthTRIPs 저자 코드 대조 반영, [23 문서](23-agent-step3-evaluation-set.md)) · **다음은 기준선 채점**(11절 명세) |
-| 검사 | 로컬: MCP·HF·Agent 카탈로그·평가셋 62개 + Gateway 10개 = 72개 통과(Node 22.23.5·24.22.1·24.22.3), `check_repository.py` 9개 항목 PASS. CI 실행 결과는 3단계 PR 본문에 남긴다 |
+| main | 작업 시작 시 `172325b`(PR #6 병합), 열린 PR 0개. 이번 기준선 하네스는 새 브랜치 `codex/agent-baseline-scoring`의 PR로 전달한다. 병합 여부는 GitHub에서 확인하고 병합은 사용자가 한다 |
+| 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · Langflow 연결 ✅(모델 실행 미검증) · 3 평가셋 ✅ · 기준선 오프라인 하네스 ✅([24 문서](24-agent-baseline-scoring.md)) · **다음은 실제 응답 수집·사람 판정·두 시스템 비교**(11절) |
+| 검사 | 로컬 Node 24.22.1: MCP·HF·Agent 카탈로그·평가셋·하네스 95개 + Gateway 10개 = 105개 통과. `check_repository.py` 10개 항목 PASS. 실제 96문항 자체 검사와 저장된 실행 재채점 `--check`도 확인. CI 결과는 이번 PR에서 확인 |
 | 데이터 실측 | 원본 앱 장소 981곳(원시 POI 863·앱 생성 118). `verified` 0, 비용 0, 실내 출처 132, 영업시간 출처 466, 동네 산책 테마 대표 후보 7. 집계는 [`reports/agent-catalog-coverage.json`](../reports/agent-catalog-coverage.json) |
 | 평가셋 실측 | 96문항(페르소나 8 × 슬롯 12). 추천 48·확인 불가 32·되묻기 8·불가 안내 8, 필수 어려운 사례 5종 각 8문항, 필수 조건 판정은 모두 `unknown`. 작성 질의 96건과 템플릿 문장 96건이 문장 규칙 9개(200자 상한, 조건 반영, 명시하지 않은 조건·숫자 금지, 후보 이름 금지 등)를 통과했다. 규칙은 낱말 목록에 기대는 검사라 놓치는 경우가 있다(23 문서 10절). 집계는 [`reports/evaluation-set-summary.json`](../reports/evaluation-set-summary.json) |
 | Langflow | 1.13.3에서 jeju-mcp 도구 3개 발견·호출, 서버 등록 API, 시작 흐름 가져오기와 MCP 노드 빌드를 확인했다. 실제 모델 실행·Desktop·Docker·사용자 PC는 미검증 |
-| 사라진 로컬 산출물 | 참고 앱 빌드 사본, `.local` 카탈로그·덤프·평가셋·질의 파일, `.env.local`, Langflow DB·가상환경은 그 클라우드 세션에만 있었다. 새 세션은 [19 문서](19-agent-step2-data-foundation.md) 5절, [23 문서](23-agent-step3-evaluation-set.md) 8절, [20 문서](20-langflow-agent-builder.md) 3·4절로 다시 만든다. 정답은 같은 해시로 재현되지만, 세션 안에서 쓴 질의 문장 96건은 Git에 없어 다시 쓰거나 템플릿 문장을 써야 한다 |
+| 로컬 산출물 | 현재 `.local`에 `app-places-b0602a1.json`, `agent-catalog-b0602a1.json`, `evaluation-set-b0602a1.json`, `evaluation-briefs-b0602a1.json`, `baseline-plan-b0602a1.json`, `baseline-oracle-run-b0602a1.json`, `baseline-oracle-scores-b0602a1.json`이 있다. 다른 환경에서는 [19](19-agent-step2-data-foundation.md)·[23](23-agent-step3-evaluation-set.md)·[24](24-agent-baseline-scoring.md) 문서로 재생성한다. 이전 작성 질의·비밀 설정·Langflow DB는 복원하지 않았다 |
 
 **사용자 결정 (2026-11-18)**
 
@@ -59,7 +61,7 @@
 6. [페르소나 설계](08-persona-clustering.md), [Ollama·LAG 계획](09-ollama-lag-feasibility.md), [다중 공급자·DB](11-multi-provider-tunnels-database-and-cost.md).
 7. [도메인 절차](12-domain-tunnel-and-ollama-runbook.md), [후속 배치와 MCP 상태](13-next-steps-and-mcp-implementation.md), [서버 실행 안내](../services/jeju-mcp/README.md).
 
-Word/PDF에는 현재 문서 01~23을 편집 순서에 맞춰 포함한다. 문서 수정 후 자동 갱신되지는 않으므로 `scripts/build_report.py --pdf`로 다시 생성한다. 최신 운영 상태는 Markdown·실제 CI·코드에서 읽는다.
+현재 Word/PDF는 이전 문서 01~23의 스냅샷이다. 이번에는 실행 코드·Markdown·JSON 집계를 갱신했고 바이너리 보고서는 재생성하지 않았다. 최신 상태는 24 문서·이 인수인계·실제 CI·코드에서 읽는다.
 
 ## 3. Git와 PR 작업 방식
 
@@ -212,7 +214,7 @@ python3 scripts/build_data_source_catalog.py --source /workspace/scratch/referen
 | 순서 | 할 일 | 완료 기준 |
 |---|---|---|
 | 1 | 3단계 평가셋(SynthTRIPs 방식) (완료, [23 문서](23-agent-step3-evaluation-set.md)) | 생성기·테스트·집계 보고서가 PR로 올라가고, 질의마다 근거 사실·조건·기대 동작·정답 규칙이 있다 |
-| 2 | 기준선 채점: 기존 Gemini 비서와 Langflow 흐름, 11절 명세 | 같은 평가셋으로 허용 ID 위반·필수 조건 오판·재현율·지연을 기록. 모델 키·전송 범위는 사용자 승인 후 |
+| 2 | 기준선 채점: 오프라인 하네스 완료, 실제 Gemini·Langflow 응답 수집과 비교는 남음([24 문서](24-agent-baseline-scoring.md)) | 같은 계획 해시로 두 시스템의 지표 기록. 실제 호출은 공급자·키·전송 범위 확정 후 |
 | 3 | 4단계 도구: 카탈로그 v2 기반 MCP 도구(테마 랭킹, 근거 등급 조건 검사, 영업시간) | `verified`가 아닌 값으로 pass하지 않는 테스트, 기존 3개 도구 호환 유지 |
 | 4 | 5단계 Agent 루프와 LAG(`2508.05509`) 비교 | 같은 평가셋에서 허용 ID 위반 0, 필수 조건 오판 0. LAG 원문 세부 확인 전 `method=lag` 표기 금지 |
 | 5 | 6단계 비교·연결 | 비교 결과와 되돌리기 절차. 원본 앱 변경·운영 배포는 별도 승인 |
@@ -287,7 +289,7 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 ## 11. 다음 작업 명세: 기준선 채점
 
-3단계 평가셋 명세는 구현과 함께 [23 문서](23-agent-step3-evaluation-set.md)로 옮겼다. 아래는 [8.1절](#81-agent-단계-우선) 순서 2의 제안이다. 구현 중 바뀌면 이 절과 23 문서를 함께 고친다.
+3단계 평가셋은 [23 문서](23-agent-step3-evaluation-set.md), 구현된 오프라인 기준선 하네스는 [24 문서](24-agent-baseline-scoring.md)를 따른다. 아래 완료 기준 중 요청 준비·응답 가져오기·해시/버전 기록·채점·집계·테스트는 구현했다. 실제 모델 실행기, 응답 수집·사람 판정, 두 시스템의 실측 비교, 작성 질의 비교, 보안 부작용 계측은 남았다. 하네스를 다시 만들지 말고 다음 조건이 갖춰지면 재사용한다.
 
 **목적.** 기존 Gemini 비서와 Langflow 흐름을 같은 96문항으로 채점해, 이후 코드 Agent와 LAG 변형을 비교할 기준선을 남긴다. 합성 질의의 점수는 실제 관광객 만족도가 아니다.
 
@@ -296,9 +298,9 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 **할 일.**
 
 1. 사용자에게 모델 공급자·키·전송 범위를 먼저 묻는다. 승인 전에는 모델을 호출하지 않는다. 승인 범위 밖의 공급자로 조용히 바꾸지 않는다.
-2. 시스템별 하네스를 만든다. 문항의 질의와 `context`(기준일·비 예보·여행 기간)를 넣고, 출력을 23 문서 7절의 응답 구조(`action`, `placeIds`, `requirementClaims`, `confirmationNotice`, `latencyMs`, `costUsd`)로 옮긴다.
-3. 기존 Gemini 비서는 문장과 장소 ID만 돌려준다. 동작·판정·고지를 옮겨 적는 기준(사람 또는 별도 판정기)을 먼저 정하고, 판정기를 쓰면 생성 모델과 다른 모델을 쓰며 표본을 사람이 대조한다.
-4. 모델 ID, 프롬프트·도구 버전, 실행 시각, 평가셋의 정답 해시를 결과와 함께 기록한다. 측정하지 못한 값은 `null`로 둔다.
+2. `evaluate-baselines.mjs prepare`의 `cases[].request`(질의와 `context`)만 대상 시스템에 전달하는 실행기를 연결한다. 정답·후보·페르소나 ID는 보내지 않는다. 원본 앱은 읽기 전용이며 별도 로컬 사본을 사용한다.
+3. Gemini 자유 문장은 24 문서의 `manual-v1` 규칙으로 사람이 판정한다. Langflow는 명시한 최종 출력 노드의 순수 구조화 JSON 또는 같은 사람 판정을 가져온다. 추후 자동 판정기를 쓰면 생성 모델과 다른 모델을 쓰며 표본을 사람이 대조한다.
+4. 실제 모델·프롬프트·도구 버전·시각을 캡처에 기록하고 `import` → `score`를 실행한다. 미측정 지연·비용은 `null`, 실패는 오류 레코드로 남긴다. 공개 집계에는 장소 이름·ID·원문이 없다.
 5. 문항마다 작성 질의와 템플릿 문장이 함께 있다. 두 문장을 각각 넣어 문체가 결과를 바꾸는지 본다(SynthTRIPs의 v·p0 비교에 해당, [23 문서](23-agent-step3-evaluation-set.md) 2.2절). 승인을 받으면 질의를 쓴 모델과 다른 모델로 질의의 페르소나 정합과 조건 반영을 판정하고, 사람이 24문항 표본(페르소나 3번씩·슬롯 2번씩)을 검수한다.
 6. [합성 보안 사례 14개](../data/agent-security-cases.json)를 같은 하네스로 실행하도록 설계한다([22 문서](22-jailbreak-and-prompt-injection-defense.md) 6절). 필수 조건 삭제(SEC-003), `unknown` 승격(SEC-004), 허용 목록 밖 장소 ID(SEC-005)는 평가셋 문항에 공격 문장을 덧붙여도 정답이 바뀌지 않으므로 같은 채점 함수로 판정할 수 있다. 권한·비밀·SSRF·비용·렌더링 사례는 호출 횟수·canary·감사 이벤트 같은 별도 계측이 필요하다. 정상 96문항은 오탐 거절률과 정상 추천 품질의 분모로 쓴다.
 
@@ -306,12 +308,12 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 **완료 기준.** 두 시스템의 지표(허용되지 않은 ID 사용률, 필수 조건 오판, 재현율@5, 정밀도@5, 페르소나 테마 일치도, 고지율, 동작 정확도, 지연·비용)가 같은 평가셋 해시로 기록되고, 자유 문장을 구조로 옮긴 기준과 그 한계가 문서에 있고, PR 본문에 실측과 미검증이 나뉘어 있다.
 
-## 12. 새 Claude Code 세션 시작 프롬프트
+## 12. 다음 세션 시작 프롬프트
 
 ```text
 OREUM-IT/jeju-tour-data-analysis 저장소에서 이어서 작업해 줘.
-1) CLAUDE.md와 docs/18-claude-code-handoff.md의 0절·3절·11절, docs/23을 먼저 읽어 줘.
-2) 3단계 평가셋 PR이 병합됐는지 확인하고, 최신 main에서 claude/agent-baseline-scoring 브랜치를 만들어 줘.
-3) docs/19 5절과 docs/23 8절대로 .local 카탈로그와 평가셋을 다시 만들고, 11절 명세대로 기준선 채점 하네스·테스트·집계 보고서를 만들어 줘.
+1) CLAUDE.md와 docs/18-claude-code-handoff.md의 0절·3절·11절, docs/24를 먼저 읽어 줘.
+2) codex/agent-baseline-scoring PR의 병합 여부와 최신 main을 확인해 줘. 병합됐으면 최신 main에서 새 브랜치를 만들어 줘.
+3) .local 파일이 없으면 docs/19·23·24로 카탈로그·템플릿 평가셋·요청 계획을 복원해 줘. 기존 하네스를 재사용해 실제 Gemini·Langflow 응답 수집과 사람 판정을 연결하고 같은 계획 해시로 비교해 줘. 공급자·키 제공 경로·전송 범위를 확정하기 전에는 모델을 호출하지 마.
 4) 결과는 새 브랜치 push + PR로 올려 줘. 원본 앱 저장소는 읽기 전용이야. 모델 API 호출과 정답 후보의 Git 공개는 먼저 물어봐 줘.
 ```

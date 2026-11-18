@@ -1,5 +1,7 @@
 # AI Agent 3단계: SynthTRIPs 방식 평가셋 생성기와 정답 규칙
 
+2026-11-19 후속: [24 문서](24-agent-baseline-scoring.md)의 오프라인 기준선 하네스를 구현하고 템플릿 96문항으로 채점기 자체 검사를 실행했다. 실제 Gemini·Langflow 모델 비교는 아직 없으며, 아래 작성 질의·검토 기록은 2026-11-18 세션의 결과다.
+
 기준일: 2026-11-18 (한국 시간). 이 문서는 Claude Code 세션의 실측(관측), 사용자 결정, 제안을 나눠 기록한다. 실측은 이 문서의 명령으로 다시 확인할 수 있다. 모델 공급자 API 호출, 기준선 채점, 실제 관광객 평가는 하지 않았다. 질의와 정답 후보(장소 ID·이름 포함) 전체는 `services/jeju-mcp/.local/`에만 있고 Git에는 집계만 있다. 생성 순서와 점검 항목은 SynthTRIPs 저자 공식 코드를 읽어 대조했다(2절). 코드를 실행하거나 재현하지는 않았다.
 
 ## 1. 결과 요약
@@ -211,7 +213,7 @@
 
 문항(`.local` 파일의 `items[]`)은 `id`, `personaId`, `slot`, `hardCase`, `difficulty`, `statedConditions`, `selector`, `zone`, `conditions`, `context`(기준일·비 예보·여행 기간), `generation`(선택 단계·칸 재사용·빈 결과 방식), `facts`(근거 사실 집계), `gold`, `brief`, `query`를 가진다. `gold`에는 `expectedAction`, `conflicts`, `allowedIds`, `relevantIds`, `confirmedIds`, `forbidden`(제외 이유 포함), `hardRequirements`(기대 판정·판정 수·신호 수), `notice`, `candidates`(후보별 판정·신호·페르소나 테마 일치도), `ruleTrace`(적용한 규칙)가 있다.
 
-`validateEvaluationSet`은 문항을 페르소나·슬롯·조건에서 다시 조립해 저장된 값과 비교하고, 조건 값이 명세에 있는지, 해시·문항 수·작성 기록이 맞는지 대조한다. 평가셋 파일을 읽어 채점하는 하네스는 먼저 이 함수를 불러야 한다. 지금은 생성 직후와 테스트에서만 부른다.
+`validateEvaluationSet`은 문항을 페르소나·슬롯·조건에서 다시 조립해 저장된 값과 비교하고, 조건 값이 명세에 있는지, 해시·문항 수·작성 기록이 맞는지 대조한다. 평가셋 파일을 읽어 채점하는 하네스는 먼저 이 함수를 불러야 한다. 생성 직후·테스트 및 [기준선 하네스](24-agent-baseline-scoring.md)의 계획 생성·채점에서 호출한다.
 
 채점 대상 시스템의 출력은 각자의 하네스가 다음 구조로 바꿔 넣는다. `placeId`가 없는 판정은 응답이 돌려준 모든 장소에 대한 말로 본다.
 

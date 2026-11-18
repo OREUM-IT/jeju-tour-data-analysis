@@ -2,6 +2,8 @@
 
 이 저장소는 제주 관광 Agent의 설계·자료 검토·읽기 전용 MCP 초기 구현이다. 먼저 [인수인계](docs/18-claude-code-handoff.md) 0절(최신 상태)·3절(Git·PR 방식)·11절(다음 작업)을 읽고 현재 Git 상태와 열린 PR을 확인한다. 모델의 역할·근거·미검증 상태는 [모델 레지스트리](docs/17-ai-agent-model-registry.md)와 [JSON](data/ai-agent-models.json)을 따른다.
 
+2026-11-19: [기준선 채점 하네스](docs/24-agent-baseline-scoring.md)가 구현됐다. `evaluate-baselines.mjs`의 prepare/import/score/self-check를 재사용한다. 공개 자체 검사 보고서는 oracle 응답이므로 모델 품질로 표시하지 않는다. 이전 작성 질의는 복원되지 않아 현재 `.local` 평가셋은 템플릿 96문항이다. 실제 모델 호출·자료 전송은 아직 승인되지 않았으며 원본 앱·운영 배포는 수정하지 않는다.
+
 - 기존 작업을 보존한다. 분석 저장소의 전체 작업 PR과 그 본문을 이어서 관리하고, 이미 승인된 브라우저 조작·무료 HF 조직 생성·MCP 연결·CI·PR 작업에 다시 포괄 승인을 묻지 않는다. 실행 도구·인증이 없으면 필요한 접근만 구체적으로 설명한다.
 - `OREUM-IT/jeju-tour`와 `jeju-tour-flutter`는 고정 커밋의 읽기 전용 참고 대상이다. 원본 앱·운영 배포·DB·DNS·참고 저장소에 임의 수정, push, 삭제를 하지 않는다. 분석 저장소의 PR 작업과 구분한다.
 - 논문 `2504.09277`은 SynthTRIPs(관광 추천기 평가용 합성 질의 생성 틀)이며 LAG가 아니다. 사용자 결정(2026-11-18)에 따라 SynthTRIPs는 평가셋 생성에, LAG는 `2508.05509` Logic-Augmented Generation으로서 Agent 추론 비교 실험에 쓴다. 두 논문 모두 본문 세부·재현 전에는 구현·성능을 주장하지 않고, LAG를 RAG나 GraphRAG로 재정의하지 않는다. 8개 페르소나는 수작업 설계이며 실제 관광객 군집·소속 확률이 아니다.
@@ -9,7 +11,7 @@
 - 평가셋은 [23 문서](docs/23-agent-step3-evaluation-set.md)와 [명세](data/evaluation-spec.json)를 따른다. 정답은 규칙으로만 계산하고 LLM이 정답을 쓰거나 고치지 않는다. 질의 문장 규칙(200자 상한, 조건 반영, 명시하지 않은 조건·숫자 금지, 후보 장소 이름 금지)은 끄거나 느슨하게 하지 않는다. 낱말 목록에 기대는 검사라 통과가 질의 품질을 보증하지는 않는다. SynthTRIPs 대조의 근거는 저자 코드 커밋 `9562f53`을 읽은 것이며 실행·재현이 아니다. 질의·정답 후보·질의 작성 기록은 `.local`에만 두며, Git 공개와 모델 공급자 API 호출은 사용자 승인 뒤에 한다. 명세나 규칙을 바꾸면 집계 보고서를 다시 만들고 `--check`로 재현성을 확인한다.
 - 시각적 Agent 빌더는 Langflow 1.13.0 이상만 쓴다([20 문서](docs/20-langflow-agent-builder.md)). `127.0.0.1`에서만 실행하고, SSRF 허용 목록은 `127.0.0.1`만, MCP는 Streamable HTTP만 쓴다. 토큰·모델 키는 Langflow 전역 변수로만 넣고 흐름 JSON에는 넣지 않는다. Flowise는 지원이 끝나 쓰지 않는다.
 - Docker 운영 전환은 [21 문서](docs/21-linux-docker-production.md)의 별도 설정·검증 게이트를 따른다. 현재 로컬 바인딩·SSRF 예외를 그대로 운영 네트워크에 확대하지 않는다. [22 문서](docs/22-jailbreak-and-prompt-injection-defense.md)의 도구 실행 정책·최종 결과 검증은 미구현이며 합성 보안 사례도 미실행이다. MCP의 안전한 도구 출력만으로 Agent의 최종 답변이 안전하다고 표시하지 않는다.
-- MCP 모의 검사, 실제 HF 연결, 모델 추론, 운영 배포의 성공을 구분한다. 기존 성공한 72개 테스트(MCP·HF·Agent 카탈로그·평가셋 62, Gateway 10)를 문서 변경만으로 반복·확장하지 않는다. 코드 변경이나 새 환경 검증이 필요할 때만 관련 검사를 실행한다.
+- MCP 모의 검사, 실제 HF 연결, 모델 추론, 운영 배포의 성공을 구분한다. 성공한 105개 테스트(MCP·HF·Agent 카탈로그·평가셋·기준선 하네스 95, Gateway 10)를 문서 변경만으로 반복·확장하지 않는다. 코드 변경이나 새 환경 검증이 필요할 때만 관련 검사를 실행한다.
 - 새 환경 설치는 Node 24.22.1에서 `npm --prefix services/jeju-mcp ci --ignore-scripts --no-audit --no-fund`를 사용한다. 잠금 SDK 1.32.1을 유지하고 MCP v2 규칙을 섞지 않는다.
 - `.mcp.json`은 Claude Code 프로젝트 설정이다. 파일 존재만으로 현재 세션에서 MCP가 활성화되거나 인증됐다고 주장하지 않는다. 실제 연결 절차는 [HF 설정](docs/15-huggingface-mcp-setup.md)과 [조직·CI 안내](docs/16-huggingface-organization-and-ci.md)를 따른다.
 - 비밀값·쿠키·보호된 전역 설정을 출력하거나 Git·보고서·ZIP에 넣지 않는다. 프록시, TLS, 프로젝트 신뢰 정책을 우회하지 않는다. 자료의 보유·공개 여부를 재배포·학습 이용 허가로 바꾸지 않는다.
