@@ -1,0 +1,70 @@
+name: Local MCP and gateway CI
+
+on:
+  push:
+    branches: [main, 'codex/**']
+    paths:
+      - 'services/jeju-mcp/**'
+      - 'examples/ollama-tunnel/**'
+      - '.github/workflows/**'
+      - '.mcp.json'
+      - '.codex/config.toml'
+  pull_request:
+    paths:
+      - 'services/jeju-mcp/**'
+      - 'examples/ollama-tunnel/**'
+      - '.github/workflows/**'
+      - '.mcp.json'
+      - '.codex/config.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-tests:
+    name: Local MCP, HF client fixtures and Ollama gateway
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out this revision without retaining credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up the pinned Node.js LTS release
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: services/jeju-mcp/package-lock.json
+
+      - name: Install the locked MCP dependencies without lifecycle scripts
+        run: npm --prefix services/jeju-mcp ci --ignore-scripts --no-audit --no-fund
+
+      - name: Check the JSON and TOML configuration syntax
+        # Ubuntu 24.04 provides Python 3.12, including the standard-library tomllib.
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import tomllib
+          from pathlib import Path
+
+          json.loads(Path('.mcp.json').read_text(encoding='utf-8'))
+          with Path('.codex/config.toml').open('rb') as stream:
+              tomllib.load(stream)
+          print('MCP JSON and TOML syntax: passed')
+          PY
+
+      - name: Test local MCP and Hugging Face client fixtures (32 tests)
+        # Tests use loopback servers and a temporary Git repository. No HF credentials,
+        # model downloads, external reference checkout or provider API calls are needed.
+        run: npm --prefix services/jeju-mcp test
+
+      - name: Test the Ollama gateway with a mock upstream (10 tests)
+        run: node --test examples/ollama-tunnel/gateway.test.mjs

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "dataMode": "fixture",
+  "source": {"path": "services/jeju-mcp/fixtures/catalog.json"},
+  "diagnostics": {"synthetic": true, "note": "All names, coordinates, and conditions below are synthetic test values, not real Jeju places."},
+  "places": [
+    {
+      "id": "fixture:indoor-a",
+      "name": "가상 실내 체험 A — 테스트 전용",
+      "category": "synthetic-indoor",
+      "lat": 33.4,
+      "lon": 126.5,
+      "description": "실제 관광지가 아닌 MCP 동작 검증용 가상 레코드입니다.",
+      "evidence": [{"sourceId": "synthetic:fixture-v1", "recordId": "fixture:indoor-a", "fields": ["constraints.wheelchairAccessible", "constraints.indoor", "constraints.visitCostKRW"], "verifiedAt": "2026-11-01T00:00:00Z", "validUntil": "2027-01-01T00:00:00Z", "note": "Synthetic assertions for software tests only; not destination evidence."}],
+      "constraints": {"wheelchairAccessible": true, "indoor": true, "visitCostKRW": 5000}
+    },
+    {
+      "id": "fixture:outdoor-b",
+      "name": "가상 야외 체험 B — 테스트 전용",
+      "category": "synthetic-outdoor",
+      "lat": 33.5,
+      "lon": 126.6,
+      "description": "실제 관광지가 아닌 MCP 동작 검증용 가상 레코드입니다.",
+      "evidence": [{"sourceId": "synthetic:fixture-v1", "recordId": "fixture:outdoor-b", "fields": ["constraints.wheelchairAccessible", "constraints.indoor", "constraints.visitCostKRW"], "verifiedAt": "2026-11-01T00:00:00Z", "validUntil": "2027-01-01T00:00:00Z", "note": "Synthetic assertions for software tests only; not destination evidence."}],
+      "constraints": {"wheelchairAccessible": false, "indoor": false, "visitCostKRW": 12000}
+    },
+    {
+      "id": "fixture:unknown-c",
+      "name": "가상 정보 미확인 C — 테스트 전용",
+      "category": "synthetic-unknown",
+      "lat": 33.3,
+      "lon": 126.4,
+      "description": "필드 값과 근거가 없어 제약은 unknown으로 반환하는 가상 레코드입니다.",
+      "evidence": [],
+      "constraints": {}
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@oreum-it/jeju-tour-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only Jeju catalog MCP service; local integration stage, not a deployed recommendation agent.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "check:client": "node scripts/check-client.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "import:catalog": "node scripts/import-catalog.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "zod": "4.6.7"
+  }
+}

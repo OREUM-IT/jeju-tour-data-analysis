@@ -1,0 +1,7 @@
+# Project-scoped Hugging Face MCP. No credential values are stored here.
+# Public search first; authenticated access is a separate account connection.
+[mcp_servers.huggingface]
+url = "https://huggingface.co/mcp?gradio=none"
+enabled_tools = ["hub_repo_search", "hub_repo_details", "hf_fs"]
+startup_timeout_sec = 30
+tool_timeout_sec = 30

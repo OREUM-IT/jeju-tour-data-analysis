@@ -1,0 +1,78 @@
+name: Hugging Face MCP anonymous smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: huggingface-mcp-anonymous-smoke
+  cancel-in-progress: false
+
+jobs:
+  anonymous-read-only:
+    name: Live official MCP discovery and public searches
+    # This is intentionally separate from fork PR CI and has no secret references.
+    # Add any future authenticated check as a separate, protected-environment job.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out main's selected revision without retaining credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up the pinned Node.js LTS release
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: services/jeju-mcp/package-lock.json
+
+      - name: Install the locked MCP dependencies without lifecycle scripts
+        run: npm --prefix services/jeju-mcp ci --ignore-scripts --no-audit --no-fund
+
+      - name: Verify live anonymous MCP discovery and bounded public searches
+        timeout-minutes: 5
+        env:
+          HF_TOKEN: ''
+        shell: bash
+        run: |
+          node --use-env-proxy --input-type=module <<'NODE'
+          import { runHuggingFace } from './services/jeju-mcp/scripts/huggingface-client.mjs';
+
+          const scope = 'live-official-huggingface-mcp-anonymous-read-only';
+          const expected = ['hub_repo_search', 'hub_repo_details', 'hf_fs'];
+          try {
+            // Explicit token:'' prevents accidental use of an inherited credential.
+            // The helper pins the HTTPS endpoint, tool arguments, limits and timeouts.
+            const listed = await runHuggingFace({ argv: ['list'], token: '' });
+            if (listed.status !== 'ok' || !listed.readOnly
+                || listed.tools.length !== expected.length
+                || !expected.every(name => listed.tools.includes(name))
+                || listed.missingExpectedTools.length !== 0) {
+              throw new Error('Incomplete tool discovery');
+            }
+            console.log(JSON.stringify({ scope, command: 'list', status: 'ok',
+              tools: expected, toolCount: expected.length }));
+
+            for (const command of ['models', 'datasets']) {
+              const result = await runHuggingFace({ argv: [command, 'Jeju tourism'], token: '' });
+              if (result.status !== 'ok' || result.tool !== 'hub_repo_search'
+                  || !result.readOnly || result.providerTruncated || result.outputTruncated) {
+                throw new Error('Incomplete public search');
+              }
+              // Never print result.data, provider errors, repository contents or tokens.
+              console.log(JSON.stringify({ scope, command, status: 'ok',
+                tool: 'hub_repo_search', limit: 5 }));
+            }
+            console.log(JSON.stringify({ scope, status: 'passed',
+              organizationAccessVerified: false, inferenceInvoked: false }));
+          } catch {
+            console.error(JSON.stringify({ scope, status: 'failed', code: 'HF_MCP_SMOKE_FAILED',
+              reason: 'Discovery or a public search failed or was incomplete. No provider error text was logged.' }));
+            process.exitCode = 1;
+          }
+          NODE
