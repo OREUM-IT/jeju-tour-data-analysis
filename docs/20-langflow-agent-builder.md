@@ -1,5 +1,7 @@
 # Langflow로 제주 관광 Agent 흐름 만들기
 
+2026-11-19 추가: 같은 Gemini 모델의 Vertex AI 서비스 계정 인증·실제 MCP 도구 호출과 구조화 응답을 확인했다. 최신 연결은 [26 인증 안내](26-langflow-vertex-auth.md), 수집·평가는 [25 실행 기록](25-live-baseline-execution.md), 가져올 파일은 [Vertex AI 흐름](../services/langflow/jeju-tour-agent-vertex.flow.json)을 따른다. 아래 기본 시작 흐름 안내와 구분한다.
+
 기준일: 2026-11-18 (한국 시간). **사용자 결정:** 시각적 Agent 빌더로 Langflow를 쓴다. 이 문서는 Claude 세션의 실측(관측), 외부 자료의 보고, 제안을 나눠 기록한다. 실측은 분석 작업 공간에서 했고, 사용자 PC·운영 배포·실제 모델 추론은 검증하지 않았다.
 
 ## 1. 선택 근거와 버전

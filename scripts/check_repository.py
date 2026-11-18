@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import collections
 import csv
-from datetime import date
+from datetime import date, datetime
 import hashlib
 import json
 import math
@@ -685,6 +685,172 @@ def check_baseline_summary():
     check_values(report)
 
 
+def check_vertex_flow():
+    """Pin the reviewed large flow, including embedded code; credentials remain a named runtime global."""
+    flow = read_json(ROOT / "services/langflow/jeju-tour-agent-vertex.flow.json")
+    text = json.dumps(flow, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    require(hashlib.sha256(text.encode()).hexdigest() == "2507a4c385879e958ffa14170cd935985a14898ad55cde5ad4f05b104e7d71f0",
+            "Vertex flow differs from the reviewed credential-free artifact; review its full nested diff before updating the pin")
+    require(not re.search(r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----|AIza[A-Za-z0-9_-]{30,}|ya29\.[A-Za-z0-9_-]+", text)
+            and not re.search(r"[a-z0-9._-]+@[a-z0-9.-]+\.iam\.gserviceaccount\.com", text, re.I)
+            and not re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text, re.I),
+            "Vertex flow contains credential material, an account identity or a runtime UUID")
+    nodes = {node["data"]["type"]: node for node in flow["data"]["nodes"]}
+    require({"ChatInput", "Agent", "MCPTools", "ChatOutput"} <= set(nodes), "Vertex flow is missing core nodes")
+    agent = nodes["Agent"]["data"]["node"]["template"]
+    require(agent["api_key"]["value"] == "JEJU_VERTEX_SERVICE_ACCOUNT_JSON" and agent["api_key"]["load_from_db"] is True
+            and agent["api_key"]["password"] is True and agent["project_id"]["value"] in ("", None),
+            "Vertex credentials must use the exact Credential global, with no inline project or account")
+    require(agent["add_current_date_tool"]["value"] is False, "Vertex baseline must keep the supplied scenario date")
+    require(hashlib.sha256(agent["code"]["value"].encode()).hexdigest() == "8476b6eb666a9e3e8cbc3fa4798ebcef01f8e360ab261b085bd8ece469db8fdf"
+            and hashlib.sha256(agent["system_prompt"]["value"].encode()).hexdigest() == "c2b62ca27e33ce6aed3ba15eaea7885126d8faa1240c83dd048b0dd387884580",
+            "Vertex runtime code or structured prompt changed without review")
+    for node in flow["data"]["nodes"]:
+        for name, field in node["data"]["node"].get("template", {}).items():
+            if isinstance(field, dict) and (field.get("password") or field.get("name") == "api_key"):
+                allowed = node["data"]["type"] == "Agent" and name == "api_key"
+                require(field.get("value") == "JEJU_VERTEX_SERVICE_ACCOUNT_JSON" if allowed else field.get("value") in ("", None),
+                        "Vertex flow contains an inline credential or an unexpected secret reference")
+    mcp = nodes["MCPTools"]["data"]["node"]["template"]
+    require(mcp["mcp_server"]["value"] == {"name": "jeju-mcp", "config": {}} and not mcp["headers"]["value"],
+            "Vertex flow must resolve jeju-mcp without inline headers or server identifiers")
+
+
+BASELINE_METRICS_SHAPE = {
+    "items": "count", "actionAccuracy": "ratio",
+    "disallowedIds": {"returnedIds": "count", "rate": "nullable_ratio", "itemsWithViolation": "count",
+                      "byReason": {key: "count" for key in ("notInCatalog", "outsideCandidates", "userExcluded", "routeForMinimalWalk", "verifiedFail")}},
+    "hardRequirementMisjudgement": {**{key: "count" for key in ("applicableItems", "passOnUnknownItems", "failOnUnknownItems", "contradictsVerifiedItems")}, "rate": "nullable_ratio"},
+    "recallAtK": {"k": "count", "scoredItems": "count", "mean": "nullable_ratio"},
+    "precisionAtK": {"k": "count", "scoredItems": "count", "mean": "nullable_ratio"},
+    "personaThemeMatch": {"scoredItems": "count", "mean": "nullable_ratio"},
+    "confirmationNotice": {"requiredItems": "count", "given": "count", "rate": "nullable_ratio", "topicCoverage": {"scoredItems": "count", "mean": "nullable_ratio"}},
+    "latencyMs": {"measuredItems": "count", "p50": "nullable_measurement", "p95": "nullable_measurement"},
+    "costUsd": {"measuredItems": "count", "total": "nullable_measurement"},
+}
+BASELINE_GROUP_SHAPE = {
+    "system": ("gemini", "langflow"), "variant": ("template", "written"),
+    **{key: "count" for key in ("plannedCases", "successfulResponses", "failedCases")},
+    "completionRate": "ratio", "actionAccuracyAllCases": "ratio",
+    "errors": {key: "count" for key in ("timeout", "transport_error", "invalid_output", "not_executed")},
+    "unexpectedImpossible": {"count": "count", "applicableCases": "count", "measuredCases": "count", "rate": "nullable_ratio"},
+    "metrics": "metrics",
+}
+BASELINE_EXTERNAL_SHAPE = {
+    "schemaVersion": ("1.0",), "kind": ("jeju-baseline-summary",), "mode": ("external",),
+    "resultType": ("imported_responses_not_independently_verified_inference",), "system": ("gemini", "langflow"),
+    **{key: "hash" for key in ("planSha256", "provenanceSha256", "runSha256")},
+    "binding": {**{key: "hash" for key in ("goldSha256", "specSha256", "catalogSha256", "personasSha256", "themeMapSha256")}, "queriesSha256": "nullable_hash"},
+    "startedAt": "instant", "completedAt": "instant",
+    "wording": {key: "count" for key in ("templateItems", "writtenItems", "identicalWrittenItems", "distinctWrittenItems")},
+    "groups": "groups", "securityEvaluation": ("not_executed",),
+    "annotationReview": {**{key: "count" for key in ("structured", "humanReviewed", "modelReviewed", "unannotated", "noResponse")},
+                         "status": ("provisional", "no_model_annotations"), "humanSpotCheck": ("pending", "not_applicable")},
+}
+
+
+def check_public_baseline_shape(value, shape):
+    """Exact recursive keys and scalar types; arbitrary text is forbidden even under otherwise familiar keys."""
+    if isinstance(shape, dict):
+        require(isinstance(value, dict) and set(value) == set(shape), "External aggregate has unexpected or missing fields")
+        for key, child in shape.items():
+            check_public_baseline_shape(value[key], child)
+    elif isinstance(shape, tuple):
+        require(isinstance(value, str) and value in shape, "External aggregate contains an unknown string label")
+    elif shape == "groups":
+        require(isinstance(value, list) and 1 <= len(value) <= 2, "External aggregate needs one or two query-variant groups")
+        for group in value:
+            check_public_baseline_shape(group, BASELINE_GROUP_SHAPE)
+    elif shape == "metrics":
+        if value is not None:
+            check_public_baseline_shape(value, BASELINE_METRICS_SHAPE)
+    elif shape == "instant":
+        require(isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z", value), "External aggregate timestamp is invalid")
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    elif shape in {"hash", "nullable_hash"}:
+        require((value is None and shape == "nullable_hash") or (isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)),
+                "External aggregate hash is invalid or contains free text")
+    elif shape == "count":
+        require(isinstance(value, int) and not isinstance(value, bool) and value >= 0, "External aggregate count is invalid")
+    else:
+        require(shape in {"ratio", "nullable_ratio", "nullable_measurement"}, "Unknown public aggregate schema rule")
+        require((value is None and shape.startswith("nullable_")) or finite(value, 0, 1 if "ratio" in shape else None),
+                "External aggregate measurement is invalid or contains free text")
+
+
+def validate_external_baseline_summary(report, system, evaluation, recall_k):
+    check_public_baseline_shape(report, BASELINE_EXTERNAL_SHAPE)
+    require(report["system"] == system and report["binding"]["goldSha256"] == evaluation["contentSha256"]["gold"]
+            and report["binding"]["specSha256"] == evaluation["source"]["specSha256"], "External baseline is bound to another system or evaluation specification")
+    require(datetime.fromisoformat(report["startedAt"].replace("Z", "+00:00")) <= datetime.fromisoformat(report["completedAt"].replace("Z", "+00:00")),
+            "External baseline timestamps are reversed")
+    wording = report["wording"]
+    items = evaluation["totals"]["items"]
+    require(wording["templateItems"] == items and wording["writtenItems"] <= items
+            and wording["identicalWrittenItems"] + wording["distinctWrittenItems"] == wording["writtenItems"]
+            and (report["binding"]["queriesSha256"] is None) == (wording["writtenItems"] == 0), "External query wording counts/hashes are inconsistent")
+    groups = report["groups"]
+    require(len({group["variant"] for group in groups}) == len(groups), "External baseline repeats a query-variant group")
+    ratio_is = lambda value, numerator, denominator: (value is None if denominator == 0 else value is not None and math.isclose(value, numerator / denominator, abs_tol=1e-12))
+    for group in groups:
+        successful = group["successfulResponses"]
+        require(group["system"] == system and group["plannedCases"] == items and successful + group["failedCases"] == items
+                and sum(group["errors"].values()) == group["failedCases"] and ratio_is(group["completionRate"], successful, items)
+                and (group["variant"] != "written" or wording["writtenItems"] == items), "External baseline coverage or failure counts are inconsistent")
+        refusal = group["unexpectedImpossible"]
+        require(refusal["count"] <= refusal["measuredCases"] <= min(successful, refusal["applicableCases"]) <= items
+                and ratio_is(refusal["rate"], refusal["count"], refusal["measuredCases"]), "External noncompletion metric denominator is inconsistent")
+        metrics = group["metrics"]
+        require((metrics is None) == (successful == 0), "Missing responses cannot have fabricated model metrics")
+        if metrics is None:
+            require(group["actionAccuracyAllCases"] == 0, "No-response baseline cannot claim action accuracy")
+            continue
+        require(metrics["items"] == successful and math.isclose(group["actionAccuracyAllCases"], metrics["actionAccuracy"] * successful / items, abs_tol=1e-12),
+                "External response-only and all-case accuracy disagree")
+        ids = metrics["disallowedIds"]
+        require(ids["itemsWithViolation"] <= successful and ids["itemsWithViolation"] <= sum(ids["byReason"].values()) <= ids["returnedIds"]
+                and ratio_is(ids["rate"], sum(ids["byReason"].values()), ids["returnedIds"]), "External ID violation metric is inconsistent")
+        hard = metrics["hardRequirementMisjudgement"]
+        require(hard["applicableItems"] <= successful and all(hard[key] <= hard["applicableItems"] for key in ("passOnUnknownItems", "failOnUnknownItems", "contradictsVerifiedItems"))
+                and (hard["rate"] is None) == (hard["applicableItems"] == 0), "External requirement metrics are inconsistent")
+        for key in ("recallAtK", "precisionAtK", "personaThemeMatch"):
+            metric = metrics[key]
+            require(metric["scoredItems"] <= successful and (metric["mean"] is None) == (metric["scoredItems"] == 0)
+                    and (key == "personaThemeMatch" or metric["k"] == recall_k), "External ranking metric denominator or k is inconsistent")
+        notice = metrics["confirmationNotice"]
+        require(notice["given"] <= notice["requiredItems"] <= successful and ratio_is(notice["rate"], notice["given"], notice["requiredItems"])
+                and notice["topicCoverage"]["scoredItems"] <= notice["requiredItems"]
+                and (notice["topicCoverage"]["mean"] is None) == (notice["topicCoverage"]["scoredItems"] == 0), "External notice metric is inconsistent")
+        for key, measured in (("latencyMs", ("p50", "p95")), ("costUsd", ("total",))):
+            metric = metrics[key]
+            require(metric["measuredItems"] <= successful and all((metric[field] is None) == (metric["measuredItems"] == 0) for field in measured),
+                    "Unmeasured external latency/cost must remain null")
+        require(metrics["latencyMs"]["p50"] is None or metrics["latencyMs"]["p50"] <= metrics["latencyMs"]["p95"], "External latency percentiles are reversed")
+    review = report["annotationReview"]
+    require(sum(review[key] for key in ("structured", "humanReviewed", "modelReviewed", "unannotated")) == sum(group["successfulResponses"] for group in groups)
+            and review["noResponse"] == sum(group["failedCases"] for group in groups), "External annotation counts confuse responses with unexecuted/failed cases")
+    require((review["status"], review["humanSpotCheck"]) == (("provisional", "pending") if review["modelReviewed"] else ("no_model_annotations", "not_applicable")),
+            "Model annotations must remain provisional with a pending human spot-check")
+
+
+def check_external_baseline_summaries():
+    """Validate optional live reports when present; partial runs remain explicit in the full evaluation denominator."""
+    evaluation = read_json(ROOT / "reports/evaluation-set-summary.json")
+    spec = read_json(ROOT / "data/evaluation-spec.json")
+    reports = []
+    for system in ("gemini", "langflow"):
+        path = ROOT / f"reports/baseline-{system}-live-20261119.json"
+        if not path.exists():
+            continue
+        require(path.stat().st_size <= 128 * 1024, "External aggregate is unexpectedly large; raw responses do not belong in a report")
+        report = read_json(path)
+        validate_external_baseline_summary(report, system, evaluation, spec["metrics"]["recallK"])
+        reports.append(report)
+    if len(reports) == 2:
+        require(reports[0]["planSha256"] == reports[1]["planSha256"] and reports[0]["binding"] == reports[1]["binding"],
+                "Published provider comparisons must use the same evaluation plan and data binding")
+
+
 def main():
     checks = [
         ("JSON syntax", lambda: [read_json(path) for path in sorted((ROOT / "data").glob("*.json"))]),
@@ -695,6 +861,8 @@ def main():
         ("evaluation spec and aggregate evaluation set summary", check_evaluation_set),
         ("baseline harness self-check and publication boundary", check_baseline_summary),
         ("Langflow starter flow and settings example", check_langflow),
+        ("reviewed Vertex flow and credential references", check_vertex_flow),
+        ("external baseline aggregates when present", check_external_baseline_summaries),
         ("publication boundaries and archives", check_deliverables),
     ]
     failed = False

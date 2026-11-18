@@ -98,13 +98,21 @@ function validateRun(run, plan) {
         const audit = record.normalization;
         ensure(!oracle && isRecord(audit) && audit.adapter === (system.id === 'gemini' ? 'gemini-assistant' : 'langflow')
           && audit.adapterVersion === system.adapterVersion && SHA256.test(audit.rawOutputHash ?? '')
-          && ['structured', 'human_reviewed'].includes(audit.mode), 'normalization must match the declared system and adapter version');
-        ensure(system.id !== 'gemini' || (audit.sourceEngine === 'gemini' && audit.reportedModel === system.modelId && audit.mode === 'human_reviewed'),
+          && ['structured', 'human_reviewed', 'model_reviewed'].includes(audit.mode), 'normalization must match the declared system and adapter version');
+        ensure(system.id !== 'gemini' || (audit.sourceEngine === 'gemini' && audit.reportedModel === system.modelId && ['human_reviewed', 'model_reviewed'].includes(audit.mode)),
           'Gemini normalization must name the actual declared model, not a keyword fallback');
-        ensure(audit.mode !== 'human_reviewed' || (isRecord(audit.review) && audit.review.method === 'human'
+        ensure(audit.mode !== 'structured' || audit.review === null, 'structured normalization cannot carry a review override');
+        ensure(!['human_reviewed', 'model_reviewed'].includes(audit.mode) || (isRecord(audit.review)
+          && audit.review.method === (audit.mode === 'model_reviewed' ? 'in_session_llm' : 'human')
           && audit.review.rawOutputHash === audit.rawOutputHash && text(audit.review.reviewerId) && text(audit.review.rubricVersion)
           && typeof audit.review.reviewedAt === 'string' && Number.isFinite(Date.parse(audit.review.reviewedAt))),
-        'human normalization must preserve a hash-bound review audit');
+        'normalization must preserve a hash-bound review audit with its actual method');
+        ensure(audit.mode !== 'human_reviewed' || (audit.review.reviewerModel === undefined && audit.review.reviewerProvider === undefined),
+          'human normalization cannot carry model reviewer metadata');
+        ensure(audit.mode !== 'model_reviewed' || (audit.review.reviewerProvider === 'openai' && text(audit.review.reviewerModel)
+          && audit.review.rubricVersion === 'llm-review-v1'
+          && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/u.test(audit.review.reviewedAt)),
+        'model normalization needs the in-session provider, honest model label, ISO time and llm-review-v1 rubric');
       }
     }
   }
@@ -156,6 +164,19 @@ export function scoreBaselineRun({ plan, set, catalog, personas, themeMap, spec,
     wording: { ...plan.wording }, groups,
     securityEvaluation: 'not_executed',
   };
+  if (run.mode === 'external') {
+    const count = (mode) => run.records.filter((record) => record.response !== undefined && record.normalization?.mode === mode).length;
+    const structured = count('structured');
+    const humanReviewed = count('human_reviewed');
+    const modelReviewed = count('model_reviewed');
+    const responses = run.records.filter((record) => record.response !== undefined).length;
+    summary.annotationReview = {
+      structured, humanReviewed, modelReviewed, unannotated: responses - structured - humanReviewed - modelReviewed,
+      noResponse: run.records.length - responses,
+      status: modelReviewed > 0 ? 'provisional' : 'no_model_annotations',
+      humanSpotCheck: modelReviewed > 0 ? 'pending' : 'not_applicable',
+    };
+  }
   return { summary, details };
 }
 
