@@ -47,6 +47,7 @@ CHAPTERS = [
     ("17-ai-agent-model-registry.md", "17. AI AGENT MODEL 전체 목록과 선정 기준"),
     ("18-claude-code-handoff.md", "18. Claude Code 작업 인수인계와 재개 절차"),
     ("19-agent-step2-data-foundation.md", "19. AI Agent 1·2단계: 진단과 근거 등급 데이터 기반"),
+    ("20-langflow-agent-builder.md", "20. Langflow로 Agent 흐름 만들기"),
 ]
 PAGE_BREAK = '\n```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```\n'
 
@@ -262,11 +263,11 @@ lang: ko-KR
 
 **이번 산출물**
 
-기존 서비스 분석, 문항·8개 페르소나 설계 후보·13개 취향 축·시각화, 추천·데이터 계획, Ollama 기능·Cloud 차이, MCP 버전·도구·인증·작업 큐, Claude·OpenAI 동시 지원·다중 터널·DB 위치·계정/비용, 도메인·관리 MCP·장비 연결 안내, oreumit.com 다음 단계·배치도·MCP 초기 구현, 기존 Vercel 앱의 호환·단계별 전환·롤백 설계, LAG 재현·모델 비교·평가 계획, 확정 CSV 목록, Hugging Face MCP·조직·CI 안내, 전체 AI AGENT MODEL 레지스트리와 Claude Code 인수인계, Agent 구축 가능성 진단과 근거 등급 장소 카탈로그·테마 매핑. 페르소나 시각화에는 실제 관광객 표본이나 학습된 군집을 사용하지 않았다.
+기존 서비스 분석, 문항·8개 페르소나 설계 후보·13개 취향 축·시각화, 추천·데이터 계획, Ollama 기능·Cloud 차이, MCP 버전·도구·인증·작업 큐, Claude·OpenAI 동시 지원·다중 터널·DB 위치·계정/비용, 도메인·관리 MCP·장비 연결 안내, oreumit.com 다음 단계·배치도·MCP 초기 구현, 기존 Vercel 앱의 호환·단계별 전환·롤백 설계, LAG 재현·모델 비교·평가 계획, 확정 CSV 목록, Hugging Face MCP·조직·CI 안내, 전체 AI AGENT MODEL 레지스트리와 Claude Code 인수인계, Agent 구축 가능성 진단과 근거 등급 장소 카탈로그·테마 매핑, Langflow 1.13.3과 jeju-mcp 연결·시작 흐름. 페르소나 시각화에는 실제 관광객 표본이나 학습된 군집을 사용하지 않았다.
 """
     contents = "# 보고서 구성\n\n" + "\n".join(f"- {title}" for _, title in CHAPTERS)
     contents += "\n\n문항과 추천 계산은 3장, 페르소나 설계·시각화는 4장, Ollama·Vercel 구성은 6장, MCP 서버 구축은 7장에 정리했다. Claude·OpenAI·터널·DB·계정/비용은 8장, 도메인·관리 MCP·장비 연결은 9장, 네임서버 저장 후 단계·MCP 구현 결과는 10장, 구현 공통 절차는 11장, 연구·데이터 미확인 항목은 13장을 기준으로 관리한다.\n"
-    contents += "\n확정 CSV의 출처·품질·재생성은 14장, HF MCP와 계정·CI는 15~16장, 전체 모델의 역할·검증 단계는 17장, 다른 Claude Code 세션의 시작 순서와 다음 구현은 18장, Agent 단계 진행과 근거 등급 카탈로그는 19장을 따른다.\n"
+    contents += "\n확정 CSV의 출처·품질·재생성은 14장, HF MCP와 계정·CI는 15~16장, 전체 모델의 역할·검증 단계는 17장, 다른 Claude Code 세션의 시작 순서와 다음 구현은 18장, Agent 단계 진행과 근거 등급 카탈로그는 19장, Langflow 연결과 보안 기준은 20장을 따른다.\n"
     parts = [cover, contents]
     for filename, title in CHAPTERS:
         parts.extend(["# " + title, source_body(filename)])
