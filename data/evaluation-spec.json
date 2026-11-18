@@ -1,0 +1,99 @@
+{
+  "version": "evalset-spec-v1",
+  "personaVersion": "persona-design-v1",
+  "themeMapVersion": "theme-map-v1",
+  "rulesVersion": "evalset-rules-v1",
+  "provenance": "수작업 설계 규칙. 정답은 LLM이 아니라 이 명세의 규칙으로 계산한다. 합성 질의는 실제 관광객 응답·만족도·수요를 대신하지 않는다.",
+  "seed": "jeju-evalset-v1",
+  "anchorDate": "2026-12-07",
+  "themeThreshold": 0.5,
+  "personaFloor": 0.1,
+  "zones": [
+    { "id": "JC", "label": "제주시 원도심" },
+    { "id": "NE", "label": "조천·구좌" },
+    { "id": "E", "label": "성산·우도" },
+    { "id": "SE", "label": "표선·남원" },
+    { "id": "S", "label": "서귀포 시내" },
+    { "id": "SW", "label": "중문" },
+    { "id": "W2", "label": "안덕·대정" },
+    { "id": "W", "label": "한림·애월" }
+  ],
+  "categories": [
+    { "id": "herit", "label": "역사·문화 유적" },
+    { "id": "art", "label": "미술·전시" },
+    { "id": "leisure", "label": "레저·스포츠" },
+    { "id": "heal", "label": "숲·정원·명승" },
+    { "id": "activity", "label": "테마파크·체험" },
+    { "id": "sea", "label": "바다·해변" },
+    { "id": "food", "label": "식당·시장" },
+    { "id": "cafe", "label": "카페·디저트" },
+    { "id": "hike", "label": "오름·올레·탐방로" }
+  ],
+  "conditions": [
+    { "id": "zone", "kind": "filter", "label": "권역", "evidence": "place.zone (computed: 원본 앱 nearestZone)", "rule": "지정 권역의 장소만 후보로 둔다." },
+    { "id": "theme", "kind": "filter", "label": "테마", "evidence": "place.themes (computed: theme-map 설계 가중치)", "rule": "해당 테마 가중치가 themeThreshold 이상인 장소만 후보로 둔다." },
+    { "id": "category", "kind": "filter", "label": "분류", "evidence": "place.category (원본 앱 분류)", "rule": "해당 분류의 장소만 후보로 둔다. 테마 가중치 조건은 겹쳐 쓰지 않는다." },
+    { "id": "transport", "kind": "context", "label": "이동수단", "values": ["rental_car", "public_transit"], "evidence": "없음 (카탈로그 v2에 대중교통 접근 속성이 없다)", "rule": "후보를 바꾸지 않는다. public_transit이면 대중교통 접근을 확인할 수 없다고 알려야 한다." },
+    { "id": "companion", "kind": "context", "label": "동행", "values": ["child", "parents"], "evidence": "없음 (연령·편의시설 속성이 없다)", "rule": "후보를 바꾸지 않는다. 동행 적합성을 확인할 수 없다고 알려야 한다." },
+    { "id": "walk", "kind": "preference", "label": "걷기 강도", "values": ["minimal"], "evidence": "attributes.route (source_reported: 올레·탐방로·자전거길 경로 자료)", "rule": "minimal이면 경로형 장소(route 속성 보유)를 허용 후보에서 뺀다. 판정이 아니라 선호에 따른 제외다. 나머지 장소의 걷는 거리는 자료가 없어 확인이 필요하다고 알려야 한다." },
+    { "id": "indoor_required", "kind": "hard_requirement", "label": "실내 필요(비 예보)", "evidence": "attributes.indoor", "rule": "verified 값만 pass/fail. 확인일이 평가 기준일 이전이고 유효기간이 비 예보일 끝까지 이어져야 한다. 그 외에는 unknown이며 app_curated·source_reported 값은 '확인 필요' 후보 신호, inferred 값은 약한 신호로만 쓴다." },
+    { "id": "crowd_avoid", "kind": "preference", "label": "혼잡 회피", "evidence": "attributes.popularityRank (computed: 방문 지표 상위 100위)", "rule": "허용 후보는 그대로 두고, 정답 후보에서는 상위 100위 명소를 뺀다(남는 곳이 없으면 그대로 둔다). 방문 지표는 혼잡 예측이 아니므로 회피를 보장할 수 없다고 알려야 한다." },
+    { "id": "open_at", "kind": "hard_requirement", "label": "방문 시각", "values": ["07:00", "10:00", "14:00", "18:30", "20:00", "21:30"], "evidence": "attributes.hours (openMin·closeMin)", "rule": "verified이고 휴무·휴게 문구가 없는 단순 일일 시간창(문구와 시작·종료 분이 일치하고 길이가 0이 아님)일 때만 pass/fail. 그 외에는 unknown이며 시간창이 방문 시각을 포함하면 지지, 벗어나면 반대 신호다. 종료 시각 정각은 영업 중으로 보지 않는다. 요일별 휴무 문구는 해석하지 않는다." },
+    { "id": "wheelchair", "kind": "hard_requirement", "label": "휠체어", "evidence": "attributes.barrierFree, attributes.designations(bf)", "rule": "항상 unknown. 무장애 목록 등재는 접근 가능 여부 자체가 아니므로 verified여도 pass로 올리지 않는다. 등재된 곳은 '확인 필요' 후보 신호다." },
+    { "id": "budget_cap", "kind": "hard_requirement", "label": "예산", "values": [30000, 50000, 80000], "evidence": "없음 (비용 속성이 없다)", "rule": "항상 unknown이고 신호도 없다. 비용을 확인할 수 없다고 알려야 한다." },
+    { "id": "trip_dates", "kind": "context", "label": "여행 날짜", "values": ["nights_mismatch", "date_outside_trip"], "evidence": "없음 (사용자 발화 안의 날짜끼리 비교)", "rule": "말한 박 수가 시작일·종료일 간격과 다르거나 방문 희망일이 여행 기간 밖이면 추천 전에 되묻는다. 충돌 여부는 표시가 아니라 날짜 값으로 계산한다." },
+    { "id": "exclude_places", "kind": "filter", "label": "제외할 장소", "evidence": "place.id (사용자가 이름으로 지정)", "rule": "지정한 장소를 허용 후보에서 뺀다. 응답에 쓰면 허용되지 않은 ID 사용이다. 생성기는 방문 지표가 높은 순으로 고르고, 지표가 없는 칸에서는 ID 순으로 고른다." }
+  ],
+  "expectedActions": [
+    { "id": "impossible", "when": "허용 후보가 0곳이다. 없는 장소를 지어내지 않고 불가를 알린다." },
+    { "id": "ask_clarification", "when": "사용자 발화 안의 날짜가 서로 어긋난다. 추천 전에 되묻는다." },
+    { "id": "cannot_confirm", "when": "필수 조건이 있는데 모든 필수 조건을 verified로 통과한 후보가 없다. 조건을 완화하지 않고 '확인 필요' 후보와 이유를 보여 준다." },
+    { "id": "recommend", "when": "위 경우가 아니다." }
+  ],
+  "difficulties": [
+    { "id": "conflict", "when": "날짜 충돌이 있거나, 허용 후보가 0곳이거나, 필수 조건이 있는데 모든 허용 후보가 적어도 한 필수 조건에 반대 신호를 가진다." },
+    { "id": "simple", "when": "충돌이 없고 명시 조건이 1개다." },
+    { "id": "compound", "when": "충돌이 없고 명시 조건이 2~4개다." }
+  ],
+  "hardCases": [
+    { "id": "walk_minimal", "label": "거의 안 걸음", "source": "docs/17 5절" },
+    { "id": "accessibility_unknown", "label": "알 수 없는 접근성", "source": "docs/17 5절" },
+    { "id": "date_conflict", "label": "날짜 충돌", "source": "docs/17 5절" },
+    { "id": "disallowed_id", "label": "허용되지 않은 ID", "source": "docs/17 5절" },
+    { "id": "empty_result", "label": "빈 검색 결과", "source": "docs/17 5절" }
+  ],
+  "noticeTopics": ["wheelchair_unverified", "indoor_unverified", "hours_unverified", "cost_unknown", "transit_access_unknown", "companion_suitability_unknown", "walking_distance_unknown", "crowd_not_guaranteed"],
+  "blueprint": {
+    "itemsPerPersona": 12,
+    "slots": [
+      { "id": "S1", "kind": "plain", "selector": "theme", "zone": false, "extras": [] },
+      { "id": "S2", "kind": "plain", "selector": "persona", "zone": true, "extras": [] },
+      { "id": "S3", "kind": "plain", "selector": "persona", "zone": false, "extras": [["indoor_required", "open_at", "budget_cap"]] },
+      { "id": "C1", "kind": "plain", "selector": "theme", "zone": true, "extras": [] },
+      { "id": "C2", "kind": "plain", "selector": "category", "zone": true, "extras": [["transport", "companion"], ["crowd_avoid"]] },
+      { "id": "C3", "kind": "plain", "selector": "theme", "zone": true, "extras": [["indoor_required", "open_at"]] },
+      { "id": "C4", "kind": "plain", "selector": "theme", "zone": true, "extras": [["budget_cap"], ["transport", "companion"]] },
+      { "id": "H1", "kind": "walk_minimal", "hardCase": "walk_minimal", "selector": "theme", "zone": true, "extras": [["walk"]] },
+      { "id": "H2", "kind": "accessibility_unknown", "hardCase": "accessibility_unknown", "selector": "theme", "zone": true, "extras": [["wheelchair"]] },
+      { "id": "H3", "kind": "date_conflict", "hardCase": "date_conflict", "selector": "theme", "zone": false, "extras": [["trip_dates"]] },
+      { "id": "H4", "kind": "disallowed_id", "hardCase": "disallowed_id", "selector": "theme", "zone": true, "extras": [["exclude_places"]] },
+      { "id": "H5", "kind": "empty_result", "hardCase": "empty_result", "selector": "theme_or_category", "zone": true, "extras": [] }
+    ]
+  },
+  "metrics": {
+    "recallK": 5,
+    "definitions": [
+      { "id": "disallowed_id_rate", "target": 0, "formula": "응답 장소 ID 중 허용 후보 밖 ID의 비율. 카탈로그에 없는 ID, 후보 밖 ID, 사용자가 제외한 ID를 따로 센다." },
+      { "id": "hard_requirement_misjudgement", "target": 0, "formula": "필수 조건이 있는 문항 중, 정답 판정이 unknown인 장소에 대해 pass 또는 fail로 말한 문항의 비율. 장소를 지정하지 않은 판정은 응답이 돌려준 모든 장소에 대한 말로 본다." },
+      { "id": "recall_at_k", "formula": "|응답 상위 k ∩ 정답 후보| / min(k, |정답 후보|). 장소를 기대하지 않는 문항(되묻기·불가 안내)과 정답 후보가 0곳인 문항은 평균에서 뺀다." },
+      { "id": "persona_theme_match", "formula": "응답 장소(카탈로그에 있는 곳)의 테마 가중치 벡터와 페르소나 테마 벡터의 코사인 유사도 평균. 기대 동작이 추천·확인 불가인 문항만 평균한다." },
+      { "id": "confirmation_notice_rate", "formula": "'확인 필요' 고지가 필요한 문항 중 응답이 고지한 문항의 비율. 응답이 고지 주제를 함께 주면 필요한 주제 중 다룬 주제의 비율도 계산한다." },
+      { "id": "action_accuracy", "formula": "응답 동작이 기대 동작과 같은 문항의 비율." },
+      { "id": "latency_and_cost", "formula": "응답에 기록된 지연(ms)·비용의 분위수와 합. 기록이 없으면 null이며 0으로 채우지 않는다." }
+    ]
+  },
+  "queryAuthoring": {
+    "promptVersion": "evalset-query-prompt-v1",
+    "prompt": "너는 제주 여행을 계획하는 사용자다. 아래 '사실'만 보고 여행 비서에게 보내는 한국어 요청을 1~3문장으로 쓴다. 규칙: (1) '조건'에 적힌 내용을 빠짐없이 자연스럽게 말한다. (2) 적히지 않은 조건·장소·날짜·금액을 새로 만들지 않는다. (3) '이름을 말할 장소'가 있으면 그 이름을 글자 그대로 쓴다. 다른 장소 이름과 장소 ID는 쓰지 않는다. (4) '사용자는 모순을 모른다'가 있으면 모순을 지적하거나 고치지 않고 그대로 말한다. (5) 후보 수·근거 등급 같은 내부 정보는 말하지 않는다. (6) 페르소나 설명은 말투와 관심사 참고용이며 설명문을 그대로 옮기지 않는다. (7) 무엇을 해 달라는 요청이 문장에 드러나야 한다(예: 추천해 주세요, 알려 주세요)."
+  }
+}

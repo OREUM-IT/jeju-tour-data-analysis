@@ -93,7 +93,7 @@ jobs:
           print('MCP JSON and TOML syntax: passed')
           PY
 
-      - name: Test local MCP, agent catalog and Hugging Face client fixtures (41 tests)
+      - name: Test local MCP, agent catalog, evaluation set and Hugging Face client fixtures (60 tests)
         # Tests use loopback servers and a temporary Git repository. No HF credentials,
         # model downloads, external reference checkout or provider API calls are needed.
         run: npm --prefix services/jeju-mcp test
