@@ -48,6 +48,8 @@ CHAPTERS = [
     ("18-claude-code-handoff.md", "18. Claude Code 작업 인수인계와 재개 절차"),
     ("19-agent-step2-data-foundation.md", "19. AI Agent 1·2단계: 진단과 근거 등급 데이터 기반"),
     ("20-langflow-agent-builder.md", "20. Langflow로 Agent 흐름 만들기"),
+    ("21-linux-docker-production.md", "21. Linux Docker 운영 배치와 검증 절차"),
+    ("22-jailbreak-and-prompt-injection-defense.md", "22. 탈옥·프롬프트 주입 방어와 평가 설계"),
 ]
 PAGE_BREAK = '\n```{=openxml}\n<w:p><w:r><w:br w:type="page"/></w:r></w:p>\n```\n'
 
