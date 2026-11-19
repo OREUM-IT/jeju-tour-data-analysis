@@ -1,5 +1,7 @@
 # 제주도 맞춤 개인 관광 페르소나(테마) 추천 AI Agent
 
+2026-11-19 웹 연결 최신: 사용자 요청으로 실제 Vercel 앱 저장소의 [PR #33](https://github.com/OREUM-IT/jeju-tour/pull/33)에 **로그인한 설문 사용자 → Vercel 서버 → Gateway → Langflow/Vertex AI** 연결을 구현했다. 로컬 테마 계산과 AI 장소 결과를 구분하고 미검증 조건을 유지한다. 서버·설문 24개, 비밀 등록 15개, 신규/기존 브라우저 18개 검사가 통과했다. 사용자가 AWS 비밀 3개를 해당 Preview 브랜치에 등록했고 Vercel 메타데이터로 범위를 확인했다. 비밀 등록 후 `7ec1360` Preview 배포가 READY이며 `/api/agent/status`의 HTTP 200·`enabled:true`·`configured:true`를 확인했다. 실제 로그인 사용자의 추천 응답 확인은 남아 있다. 모델 호출 없는 모의 검사와 웹 실응답 검증을 구분하며 `productionReady:false`를 유지한다. [웹 연결 절차](https://github.com/OREUM-IT/jeju-tour/blob/codex/vercel-agent-gateway/docs/agent-gateway-vercel.md)를 따른다.
+
 2026-11-19 최신: 사용자 AWS에서 **Cloudflare HTTPS·Access 서비스 인증·Gateway 앱 HMAC/JWT를 거치는 공개 준비 검사(`scope:public`)가 통과**했다. [PR #17](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/17)의 `7890060`을 적용해 검사기 User-Agent의 Cloudflare `1010`과 동일 JWT의 `CF_Authorization` 쿠키 호환 문제를 해결했다. [검증 결과와 범위](docs/32-agent-gateway-tunnel.md#aws-공개-인증-검사-성공)는 사용자 제공 출력에 근거한다. 다음은 **Vercel 설문 서버 어댑터·서버 비밀 설정·Preview 연결 검사**다. 이번 검사는 모델을 실행하지 않았으며 실제 웹 사용자 추천과 운영 전체 검증 전이므로 `productionReady:false`를 유지한다.
 
 2026-11-19 AWS 최신 진행: 사용자가 **`143b705` 적용 후 Vertex 실제 요청 1건 성공** 출력을 제공했다. Langflow는 41초에 Healthy가 됐고, 흐름은 `upgraded-vertex-client`, `vertexConfigured:true`다. 실제 요청은 HTTP 200·14.5초·최종 검증 수락으로 완료됐으며 모델 호출 기록 4회 모두 성공, MCP 도구 호출 3회 성공, 예상 밖 도구 호출 0회다. trace 1건은 정상 종료했고 임시 실행 키도 폐기됐다. 후보 3곳에 대한 `cannot_confirm`·`indoor_unverified`는 **미검증 실내 조건을 확정하지 않고 확인 필요를 정상 안내한 결과**다. [상세 실행 기록](docs/31-lightsail-langflow.md#4-실제-모델-요청-1건-검사)은 사용자 제공 출력에 근거하며 작성자의 AWS 원격 실행 결과가 아니다. 단건 연결·검증 성공이며 추천 품질 전체나 운영 준비 완료를 뜻하지 않아 `productionReady:false`를 유지한다. [PR #14](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/14)는 CI 통과 후 `main@4579c25`에 병합됐다. 완료된 단건 요청을 다시 확인하기 위한 반복 실행은 필요하지 않다. 이 단건 성공 이후 Gateway 구현·Tunnel 기동까지 진행했으며, 최신 공개 인증 상태와 다음 작업은 위 최신 문단을 따른다.
@@ -8,6 +10,7 @@
 
 ## 현재 상태
 
+- **Vercel 설문 연결 구현·Preview 비밀 등록 완료:** [웹 PR #33](https://github.com/OREUM-IT/jeju-tour/pull/33)에서 서버 어댑터·결과 화면·비밀 등록 도구를 구현했습니다. Gateway/HMAC/Access 키 3개는 작업 브랜치 Preview에만 등록됐습니다. 실제 로그인 사용자의 웹 추천 검증과 Production 적용은 남아 있습니다.
 - **Gateway·Tunnel 공개 인증 검사 통과:** 사용자 AWS에서 무인증 거부 → Access 인증만 있으면 앱 인증 거부 → 두 인증을 갖추면 준비 응답 성공을 확인했습니다. 검사기 User-Agent와 Cloudflare 인증 쿠키 호환 문제를 해결했고 기존 인증 검증은 유지합니다. 다음은 Vercel 설문 서버 어댑터·서버 비밀 설정·Preview 연결입니다. 모델 실행·실제 웹 사용자 추천·운영 준비 검증은 별도입니다.
 - **AWS Vertex 단건 실응답 성공(사용자 제공 출력):** [실제 981곳 MCP·Langflow·Vertex 연결](docs/31-lightsail-langflow.md)에서 HTTP 200, 모델 성공 4회·MCP 호출 성공 3회, 최종 검증 수락과 임시 키 폐기를 확인했습니다. 실내 조건을 확정할 근거가 없어 후보 3곳을 `cannot_confirm`으로 안내한 정상 결과입니다. 단건 성공 범위이며 `productionReady:false`입니다. Gateway·Tunnel 공개 인증 검사까지 통과했으며, Vercel 연결은 다음 단계입니다.
 - **Lightsail 초기 구성:** [비공개 Docker 기동 안내](docs/29-lightsail-docker-bootstrap.md)와 [Compose](deploy/compose.yaml)를 추가했습니다. 가상 데이터 MCP와 PostgreSQL·pgvector를 독립 실행하는 초기 구성입니다. 검증 환경에서 MCP SDK·인증·DB 연산을 확인했으며 실제 AWS 적용, 관광 데이터/DB 연동, Langflow·Tunnel·Vercel 연결 완료를 뜻하지 않습니다.
