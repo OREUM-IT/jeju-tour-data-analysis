@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { loadCatalog } from './catalog.mjs';
 import { registerTools } from './tools.mjs';
 import { createRuntimeValidator, RecommendationValidationError } from './recommendation-validation.mjs';
+import { createGatewayScopes, GatewayScopeError } from './gateway-scopes.mjs';
 
 const MAX_BODY = 128 * 1024;
 const DEFAULT_CATALOG = fileURLToPath(new URL('../fixtures/catalog.json', import.meta.url));
@@ -65,7 +66,7 @@ function readBody(req) {
   });
 }
 
-export function createMcpHttpServer({ catalog, token, allowedOrigins = [], now }) {
+export function createMcpHttpServer({ catalog, token, gatewayControlToken, allowedOrigins = [], now }) {
   if (typeof token !== 'string' || !/^[\x21-\x7e]{32,256}$/.test(token)) {
     throw new Error('MCP_SERVICE_TOKEN requires 32–256 non-space ASCII characters.');
   }
@@ -80,6 +81,11 @@ export function createMcpHttpServer({ catalog, token, allowedOrigins = [], now }
   })) throw new Error('Allowed origins must be exact HTTP(S) origins.');
   const origins = new Set(allowedOrigins);
   const validator = catalog.schemaVersion === '2.0' ? createRuntimeValidator({ catalog, now }) : null;
+  if (gatewayControlToken !== undefined && (typeof gatewayControlToken !== 'string'
+    || !/^[\x21-\x7e]{32,256}$/.test(gatewayControlToken) || gatewayControlToken === token || validator === null)) {
+    throw new Error('Gateway control requires a distinct valid token and catalog v2.');
+  }
+  const scopes = gatewayControlToken === undefined ? null : createGatewayScopes({ catalog, now });
   const active = new Set();
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -92,6 +98,37 @@ export function createMcpHttpServer({ catalog, token, allowedOrigins = [], now }
     if (req.method === 'GET' && req.url === '/healthz') {
       req.resume();
       return json(res, 200, { ok: true, check: 'liveness_only' });
+    }
+    if (scopes !== null && req.url.startsWith('/gateway/')) {
+      const release = /^\/gateway\/scopes\/(gw-[a-f0-9]{32})$/u.exec(req.url);
+      const control = req.url === '/gateway/scopes' || req.url === '/gateway/readyz' || release !== null;
+      const execution = ['/gateway/prepare-request', '/gateway/validate-response', '/gateway/tools/call'].includes(req.url);
+      if (!control && !execution) { req.resume(); return json(res, 404, { error: { code: 'GATEWAY_ROUTE_UNAVAILABLE' } }); }
+      if (!tokenMatches(req.headers.authorization, control ? gatewayControlToken : token)) {
+        req.resume(); return json(res, 401, { error: { code: 'GATEWAY_UNAUTHORIZED' } });
+      }
+      const method = release ? 'DELETE' : req.url === '/gateway/readyz' ? 'GET' : 'POST';
+      if (req.method !== method) { req.resume(); return json(res, 405, { error: { code: 'GATEWAY_METHOD_REJECTED' } }, { Allow: method }); }
+      try {
+        if (release) { req.resume(); return json(res, 200, scopes.release(release[1])); }
+        if (req.url === '/gateway/readyz') { req.resume(); return json(res, 200, scopes.ready()); }
+        if ((req.headers['content-type'] || '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+          req.resume(); return json(res, 415, { error: { code: 'GATEWAY_CONTENT_TYPE_REJECTED' } });
+        }
+        if (Number(req.headers['content-length'] || 0) > MAX_BODY) {
+          req.resume(); return json(res, 413, { error: { code: 'GATEWAY_REQUEST_TOO_LARGE' } });
+        }
+        const body = await readBody(req);
+        if (res.destroyed) return;
+        const handler = req.url === '/gateway/scopes' ? scopes.register
+          : req.url === '/gateway/prepare-request' ? scopes.prepare
+            : req.url === '/gateway/validate-response' ? scopes.validate : scopes.call;
+        return json(res, 200, handler(body));
+      } catch (error) {
+        return json(res, error instanceof GatewayScopeError || error instanceof HttpError ? error.status : 500,
+          { error: { code: error instanceof GatewayScopeError ? error.code
+            : error instanceof HttpError ? 'INVALID_HTTP_REQUEST' : 'GATEWAY_SCOPE_FAILED' } });
+      }
     }
     const validationRoute = validator !== null && ['/prepare-request', '/validate-response'].includes(req.url);
     if (!['/mcp', '/readyz'].includes(req.url) && !validationRoute) {
@@ -193,6 +230,7 @@ async function main() {
   const portText = process.env.PORT || '8788';
   if (!/^\d+$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535) throw new Error('Invalid port.');
   const server = createMcpHttpServer({ catalog, token: process.env.MCP_SERVICE_TOKEN,
+    gatewayControlToken: process.env.GATEWAY_CONTROL_TOKEN,
     allowedOrigins: (process.env.MCP_ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean) });
   server.on('error', () => {
     console.error('MCP server could not start; check the configured host and port.');
