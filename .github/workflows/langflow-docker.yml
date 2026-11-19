@@ -1,0 +1,49 @@
+name: Private Langflow Docker integration
+on:
+  push:
+    branches: [main, 'codex/**']
+    paths: ['deploy/**', 'services/langflow/**', 'services/jeju-mcp/**', '.github/workflows/langflow-docker.yml']
+  pull_request:
+    paths: ['deploy/**', 'services/langflow/**', 'services/jeju-mcp/**', '.github/workflows/langflow-docker.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: langflow-docker-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  private-langflow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COMPOSE_PROJECT_NAME: oreumit-langflow-ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with: {node-version: '24.22.1'}
+      - name: Test credential preservation and fail-closed provisioning
+        run: python3 -m unittest discover -s deploy/tests
+      - name: Prepare disposable credentials and FICTIONAL catalog
+        run: |
+          python3 deploy/prepare.py
+          python3 deploy/prepare-langflow.py
+          node deploy/tests/make-ci-catalog.mjs
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml config --quiet
+      - name: Start official Langflow image with private MCP and dedicated PostgreSQL
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml up -d --build --wait --wait-timeout 300 jeju-mcp langflow-db langflow
+      - name: Check authentication, database, SSRF and three real MCP tool calls
+        run: |
+          bash deploy/check-catalog.sh
+          bash deploy/check-langflow.sh
+      - name: Restart Langflow and its database, then verify encrypted credentials and flow persisted
+        run: |
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml restart langflow-db langflow
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml up -d --no-deps --wait --wait-timeout 300 langflow-db langflow
+          bash deploy/check-langflow.sh
+      - name: Record verification boundary
+        if: always()
+        run: echo 'This job uses 981 FICTIONAL places to test official Docker runtime, authentication, DB persistence and MCP wiring. It does NOT verify actual tourism data, Vertex authentication, model inference, Gateway, Tunnel or Vercel.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove only this disposable CI project and its database
+        if: always()
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml down --volumes
