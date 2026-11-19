@@ -79,35 +79,32 @@ def migration_check(setup, template):
     with client() as c:
         login(c)
         assert flows(c) == [], 'CI_REQUIRES_EMPTY_FLOW_STATE'
-    original = setup.deployment_flow
-    def legacy(*args, **kwargs):
-        kwargs['direct_vertex'] = False
-        return original(*args, **kwargs)
-
-    with httpx.Client(base_url=setup.MCP_URL, timeout=10, follow_redirects=False, trust_env=False) as mcp:
-        with patch.object(setup, 'deployment_flow', side_effect=legacy), client() as c:
-            assert setup.bootstrap(c, mcp, os.environ, template)['flowStatus'] == 'imported'
-            flow_id = flows(c)[0]['id']
-            before = stored(c, flow_id)
-            variables_before = c.get('/api/v1/variables/').json()
-        with client() as c:
-            try:
-                setup.bootstrap(c, mcp, os.environ, template)
-                raise AssertionError('LEGACY_FLOW_MUST_REQUIRE_UPGRADE_FLAG')
-            except setup.BootstrapError as error:
-                assert str(error) == 'EXISTING_FLOW_DIFFERS'
-            assert stored(c, flow_id)['data'] == before['data']
-        with client() as c:
-            assert setup.bootstrap(c, mcp, os.environ, template,
-                                   upgrade_vertex_client=True)['flowStatus'] == 'upgraded-vertex-client'
-            after = stored(c, flow_id)
-            for key in ('id', 'name', 'description', 'folder_id', 'endpoint_name'):
-                assert before.get(key) == after.get(key), key
-            assert c.get('/api/v1/variables/').json() == variables_before
-            assert before['data'] != after['data']
-        with client() as c:
-            assert setup.bootstrap(c, mcp, os.environ, template,
-                                   upgrade_vertex_client=True)['flowStatus'] == 'preserved-existing'
+        # Reuse one authenticated session: the production login rate limit must
+        # also cover the full bootstrap checks that follow this CI-only test.
+        setup.ensure_variables(c, os.environ['MCP_SERVICE_TOKEN'])
+        setup.ensure_server(c)
+        mcp_node = setup.discover_tools(c)
+        previous = setup.deployment_flow(template, mcp_node, direct_vertex=False)
+        updated = setup.deployment_flow(template, mcp_node)
+        assert setup.ensure_flow(c, previous) == 'imported'
+        flow_id = flows(c)[0]['id']
+        before = stored(c, flow_id)
+        variables_before = c.get('/api/v1/variables/').json()
+        try:
+            setup.ensure_flow(c, updated)
+            raise AssertionError('LEGACY_FLOW_MUST_REQUIRE_UPGRADE_FLAG')
+        except setup.BootstrapError as error:
+            assert str(error) == 'EXISTING_FLOW_DIFFERS'
+        assert stored(c, flow_id)['data'] == before['data']
+        assert setup.ensure_flow(c, updated, previous_flow=previous,
+                                 upgrade_vertex_client=True) == 'upgraded-vertex-client'
+        after = stored(c, flow_id)
+        for key in ('id', 'name', 'description', 'folder_id', 'endpoint_name'):
+            assert before.get(key) == after.get(key), key
+        assert c.get('/api/v1/variables/').json() == variables_before
+        assert before['data'] != after['data']
+        assert setup.ensure_flow(c, updated, previous_flow=previous,
+                                 upgrade_vertex_client=True) == 'preserved-existing'
     return {'status': 'passed', 'knownLegacyFlowUpgraded': True,
             'flowIdentityAndCredentialMetadataPreserved': True, 'modelExecuted': False}
 
