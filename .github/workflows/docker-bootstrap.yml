@@ -26,9 +26,31 @@ jobs:
         run: docker compose -f deploy/compose.yaml up -d --build --wait --wait-timeout 120
       - name: Exercise MCP protocol, authentication and pgvector
         run: bash deploy/check.sh
+      - name: Check optional private source access
+        id: catalog_source
+        env:
+          SOURCE_READ_TOKEN: ${{ secrets.JEJU_SOURCE_READ_TOKEN }}
+        run: |
+          if [ -n "$SOURCE_READ_TOKEN" ]; then
+            echo 'available=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'available=false' >> "$GITHUB_OUTPUT"
+            echo 'Real catalog integration was NOT run: the private source requires JEJU_SOURCE_READ_TOKEN with contents:read for OREUM-IT/jeju-tour.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Read the pinned private source without persisting credentials
+        if: steps.catalog_source.outputs.available == 'true'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: OREUM-IT/jeju-tour
+          ref: b0602a175c1d08959b7187da2b29ac450b52e0ba
+          path: .local/catalog-source
+          token: ${{ secrets.JEJU_SOURCE_READ_TOKEN }}
+          persist-credentials: false
       - name: Generate the pinned private 981-place catalog
-        run: python3 deploy/export-catalog.py
+        if: steps.catalog_source.outputs.available == 'true'
+        run: python3 deploy/export-catalog.py --source-repo .local/catalog-source
       - name: Switch only MCP to the real catalog and check its hash
+        if: steps.catalog_source.outputs.available == 'true'
         run: |
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml config --quiet
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml up -d --no-deps --wait --wait-timeout 120 jeju-mcp

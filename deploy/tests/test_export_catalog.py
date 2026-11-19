@@ -137,6 +137,83 @@ class CatalogExportTest(unittest.TestCase):
         self.assertEqual(self.target.read_bytes(), b'preserve concurrent result')
         self.assertEqual(list(self.target.parent.iterdir()), [self.target])
 
+    def test_private_checkout_exports_committed_files_without_credentials_or_hooks(self):
+        original = self.root / 'private-source'
+        original.mkdir()
+        real_run = subprocess.run
+
+        def git(*args):
+            return real_run(['git', '-C', str(original), *args], check=True, capture_output=True, text=True).stdout
+
+        git('init', '--quiet', '--template=')
+        git('config', 'user.name', 'Catalog test')
+        git('config', 'user.email', 'test@example.invalid')
+        git('remote', 'add', 'origin', 'https://operator:private-token@github.com/OREUM-IT/jeju-tour.git')
+        tracked = original / 'tracked.txt'
+        tracked.write_text('pinned content')
+        git('add', 'tracked.txt')
+        git('commit', '--quiet', '-m', 'Pinned source')
+        commit = git('rev-parse', 'HEAD').strip()
+        tracked.write_text('local edits must remain')
+        (original / '.env').write_text('PRIVATE=never-mount-this')
+        (original / '.git/hooks').mkdir()
+        hook = original / '.git/hooks/post-checkout'
+        hook.write_text('#!/bin/sh\nexit 99\n')
+        hook.chmod(0o755)
+        before_config = (original / '.git/config').read_bytes()
+        # Exercise the sudo case without mutating global git trust configuration.
+        if os.getuid() == 0:
+            os.chown(original, 65534, 65534)
+            os.chown(original / '.git', 65534, 65534)
+        observed = []
+
+        def run(command, **kwargs):
+            if command[:2] == ['docker', 'run']:
+                mounts = [command[i + 1] for i, part in enumerate(command) if part == '--mount']
+                self.assertEqual(len(mounts), 2)
+                source_mount = mounts[1]
+                self.assertTrue(source_mount.endswith(',dst=/source,readonly'))
+                source = Path(source_mount.split('src=', 1)[1].split(',dst=', 1)[0])
+                output = Path(mounts[0].split('src=', 1)[1].split(',dst=', 1)[0])
+                self.assertEqual(source.parent, output.parent)
+                self.assertNotEqual(source, output)
+                self.assertNotIn(str(original), '\n'.join(mounts))
+                self.assertEqual((source / 'tracked.txt').read_text(), 'pinned content')
+                self.assertFalse((source / '.env').exists())
+                self.assertFalse((source / '.git/hooks').exists())
+                self.assertNotIn('private-token', (source / '.git/config').read_text())
+                self.assertIn(exporter.SOURCE_REMOTE, (source / '.git/config').read_text())
+                observed.append(True)
+                return self.generate_in_mount(command)
+            if command[:2] == ['docker', 'build']:
+                return subprocess.CompletedProcess(command, 0)
+            return real_run(command, **kwargs)
+
+        output = io.StringIO()
+        with patch.object(exporter, 'APP_COMMIT', commit), patch.object(exporter.subprocess, 'run', side_effect=run):
+            with contextlib.redirect_stdout(output):
+                exporter.export_catalog(self.root, original)
+                exporter.export_catalog(self.root, self.root / 'missing-checkout')
+        self.assertEqual(observed, [True], 'Existing catalog reuse needs neither source checkout nor Docker.')
+        self.assertEqual(tracked.read_text(), 'local edits must remain')
+        self.assertEqual((original / '.git/config').read_bytes(), before_config)
+        self.assertEqual(hook.read_text(), '#!/bin/sh\nexit 99\n')
+        self.assertNotIn('private-token', output.getvalue())
+        self.assertNotIn('never-mount-this', output.getvalue())
+
+    def test_source_origin_identity_and_errors_do_not_expose_credentials(self):
+        for remote in ['git@github.com:OREUM-IT/jeju-tour.git',
+                       'ssh://git@github.com/OREUM-IT/jeju-tour.git',
+                       'https://user:private-token@github.com/OREUM-IT/jeju-tour.git']:
+            self.assertEqual(exporter.repository_identity(remote), 'oreum-it/jeju-tour')
+        self.assertIsNone(exporter.repository_identity('https://github.com.evil.invalid/OREUM-IT/jeju-tour.git'))
+        secret_error = subprocess.CalledProcessError(128, ['git'], stderr=b'https://private-token@github.com')
+        with patch.object(exporter.subprocess, 'run', side_effect=secret_error):
+            with self.assertRaises(ValueError) as failure:
+                exporter.export_catalog(self.root, self.root / 'absent')
+        self.assertNotIn('private-token', str(failure.exception))
+        self.assertFalse(self.target.exists())
+
 
 if __name__ == '__main__':
     unittest.main()
