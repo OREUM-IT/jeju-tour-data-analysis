@@ -342,6 +342,37 @@ test('legacy telemetry can bind a continuation without claiming old response has
   assert.deepEqual(continued.capture.records[0], original.capture.records[0]);
 });
 
+test('a second resume retains inherited legacy provenance after the first resume added event hashes', async () => {
+  const original = await collect({ maxCases: 1 });
+  delete original.telemetry.provenanceSha256;
+  for (const event of original.telemetry.events) { delete event.requestSha256; delete event.captureRecordSha256; }
+  const first = await collect({ maxCases: 1, resumeCapture: original.capture, resumeTelemetry: original.telemetry });
+  assert.equal(first.telemetry.resume.integrity, 'legacy_event_binding_checked');
+  assert.ok(first.telemetry.events.every((event) => event.requestSha256 && event.captureRecordSha256));
+  const priorBytes = JSON.stringify(first);
+  const second = await collect({ maxCases: 1, resumeCapture: first.capture, resumeTelemetry: first.telemetry });
+  assert.equal(second.telemetry.resume.integrity, 'legacy_event_binding_checked');
+  assert.equal(second.telemetry.resume.sourceTelemetrySha256, canonicalSha256(first.telemetry));
+  assert.equal(second.telemetry.attemptedCases, 3);
+  assert.equal(second.telemetry.newAttemptedCases, 1);
+  assert.deepEqual(second.capture.records.slice(0, 2), first.capture.records.slice(0, 2));
+  assert.equal(JSON.stringify(first), priorBytes);
+});
+
+test('resume rejects unknown inherited integrity labels while preserving native hashed chains', async () => {
+  const original = await collect({ maxCases: 1 });
+  const first = await collect({ maxCases: 1, resumeCapture: original.capture, resumeTelemetry: original.telemetry });
+  const second = await collect({ maxCases: 1, resumeCapture: first.capture, resumeTelemetry: first.telemetry });
+  assert.equal(second.telemetry.resume.integrity, 'event_hashes_verified');
+  let calls = 0;
+  for (const resume of [null, [], {}, { integrity: 'verified' }, { integrity: true }, { integrity: 'legacy_event_binding_checked_typo' }]) {
+    const telemetry = { ...first.telemetry, resume };
+    await assert.rejects(() => collect({ maxCases: 1, resumeCapture: first.capture, resumeTelemetry: telemetry,
+      fetchImpl: async () => { calls += 1; return jsonResponse(rawGemini()); } }), /known integrity classification/u);
+  }
+  assert.equal(calls, 0);
+});
+
 test('resume rejects changed plans, metadata, requests, outputs and missing/inconsistent events before any call', async () => {
   const original = await collect({ maxCases: 2 });
   let calls = 0;

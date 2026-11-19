@@ -195,7 +195,12 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
       'model_or_engine_mismatch', 'invalid_assistant_reply', 'missing_selected_machine_output'],
   };
   let bytes = 0;
-  let legacy = false;
+  ensure(telemetry.resume === undefined || (isRecord(telemetry.resume)
+    && ['legacy_event_binding_checked', 'event_hashes_verified'].includes(telemetry.resume.integrity)),
+  'resume history must use a known integrity classification');
+  // A previous continuation may have added hashes to legacy events. Those new bindings do not retroactively
+  // establish source integrity, so retain that limitation throughout every later continuation in the chain.
+  let legacy = telemetry.resume?.integrity === 'legacy_event_binding_checked';
   const seen = new Set();
   for (const event of telemetry.events) {
     const record = attemptedRecords.get(event?.caseId);
