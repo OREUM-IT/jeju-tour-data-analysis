@@ -10,6 +10,7 @@
     "check:client": "node scripts/check-client.mjs",
     "test": "node --test tests/*.test.mjs",
     "evaluate:baseline": "node scripts/evaluate-baselines.mjs",
+    "collect:baseline": "node scripts/collect-baseline-responses.mjs",
     "import:catalog": "node scripts/import-catalog.mjs"
   },
   "dependencies": {

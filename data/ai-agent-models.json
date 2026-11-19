@@ -1,7 +1,8 @@
 {
   "schemaVersion": "1.0",
-  "registryVersion": "2026-11-18.5",
-  "updatedOn": "2026-11-18",
+  "registryVersion": "2026-11-19.1",
+  "updatedOn": "2026-11-19",
+  "updatedOnTimezone": "UTC",
   "purpose": "제주 관광 Agent 모델·실행 엔진·추천 방법·호스트의 인수인계용 상태 목록",
   "documentation": "docs/17-ai-agent-model-registry.md",
   "isRuntimeConfiguration": false,
@@ -9,6 +10,7 @@
   "newAgentProductionModelSelection": null,
   "identifierPolicy": "key는 이 문서 내부 식별자다. 실제 모델 ID·태그·digest를 대신하지 않는다. 미확인 값은 null로 남긴다.",
   "verificationDefinitions": {
+    "live_inference_observed": "실제 요청의 응답·반환 모델 메타데이터를 캡처해 확인. 전체 모델 가용성, 계정 권한·과금 명세, 제품 품질 검증은 별도다.",
     "local_artifact_observed": "분석 저장소의 실제 파일·구현을 읽어 확인. 외부 연결 성공과 구분한다.",
     "reference_source_observed": "고정 커밋의 원본 앱 코드를 읽어 확인. 현재 배포·환경변수·모델 사용 가능성은 미확인이다.",
     "official_source_reviewed": "고정된 공식 문서·코드의 설명을 확인. 해당 장비에서 추론한 결과가 아니다.",
@@ -18,6 +20,9 @@
     "unread_reference": "사용자가 지정한 자료의 식별자만 보유하며 원문·방법·결과를 검토하지 못했다."
   },
   "sources": [
+    {"key":"gemini-live-baseline-observation","kind":"local_artifact_observed","documentation":"docs/25-live-baseline-execution.md","paths":["reports/baseline-gemini-live-20261119.json"],"reviewedOn":"2026-11-19","reviewedTimezone":"UTC","observedOn":"2026-11-18","observedTimezone":"UTC","endpoint":"https://jeju-tour-six.vercel.app/api/assistant","collectorDeclaredToolVersion":"jeju-tour-e07a93e","toolVersionEvidence":"independently_verified_deployment_sha","observedModelIds":["gemini-3.8-flash","gemini-3.5-flash-lite"],"identityEvidence":"application_response_metadata","note":"실제 응답에서 비서 모델과 3.8+3.5-lite 혼합 대체 경로를 관측했다. 도구 버전은 API 반환 필드가 아니라 독립 확인한 배포 SHA를 바탕으로 수집기가 지정한 값이며, 기존 고정 소스 커밋과 별도로 기록한다. 수집·정규화·채점의 최종 집계는 연결한 보고서를 따른다. 세션 내 모델 주석 결과는 잠정 상태이며 사람 검토는 대기 중이다."},
+    {"key":"langflow-live-baseline-observation","kind":"local_artifact_observed","documentation":"docs/25-live-baseline-execution.md","paths":["reports/baseline-langflow-live-20261119.json"],"observedOn":"2026-11-19","observedTimezone":"UTC","langflowVersion":"1.13.3","provider":"Google Vertex AI","observedModelId":"gemini-3.8-flash","identityEvidence":"runtime_response_metadata","collectionStatus":"completed","normalizationStatus":"completed_with_failures","annotationMode":"structured_without_review_override","note":"고정 계획 전체의 실제 수집을 마치고 실패를 포함해 정규화·자동 채점했다. 성공 응답의 구조화 출력은 사람·모델 주석으로 덮어쓰지 않았다. 전체 집계와 원래 실행 시각은 보고서를 따른다. 보고서만으로 추론의 독립 검증이나 운영 품질 검증 완료를 뜻하지 않는다."},
+    {"key":"langflow-vertex-smoke-observation","kind":"local_artifact_observed","documentation":"docs/26-langflow-vertex-auth.md","observedOn":"2026-11-18","observedTimezone":"UTC","langflowVersion":"1.13.3","provider":"Google Vertex AI","observedModelId":"gemini-3.8-flash","identityEvidence":"runtime_response_metadata","smokeLatencyMs":9877,"mcpToolCallsObserved":true,"structuredResponseObserved":true,"productionChangesApplied":false,"note":"로컬 Langflow에서 실제 Vertex 추론·제주 MCP 도구 호출·구조화 응답을 확인한 단일 smoke 관측이다. 평균 지연이나 전체 평가 품질을 뜻하지 않는다."},
     {"key":"reference-app","kind":"reference_source_observed","repository":"OREUM-IT/jeju-tour","commit":"b0602a175c1d08959b7187da2b29ac450b52e0ba","url":"https://github.com/OREUM-IT/jeju-tour/tree/b0602a175c1d08959b7187da2b29ac450b52e0ba"},
     {"key":"ollama-official","kind":"official_source_reviewed","repository":"ollama/ollama","commit":"b8db8d5b5c8daedbbef7bb9ace2221a38bc384c2","url":"https://github.com/ollama/ollama/blob/b8db8d5b5c8daedbbef7bb9ace2221a38bc384c2/docs/capabilities/tool-calling.mdx"},
     {"key":"llama32-official","kind":"official_source_reviewed","repository":"meta-llama/llama-models","commit":"0e0b8c519242d5833d8c11bffc1232b77ad7f301","url":"https://github.com/meta-llama/llama-models/blob/0e0b8c519242d5833d8c11bffc1232b77ad7f301/models/llama3_2/MODEL_CARD.md"},
@@ -36,19 +41,19 @@
     {"key":"lag-logic-augmented-generation","kind":"official_source_reviewed","url":"https://arxiv.org/abs/2508.05509","arxivId":"2508.05509","title":"LAG: Logic-Augmented Generation from a Cartesian Perspective","reviewedOn":"2026-11-18","reviewedScope":"abstract","fullTextReviewed":false,"mechanismVerified":false,"selectedBy":"user_decision_2026-11-18"}
   ],
   "hosts": [
-    {"key":"existing-vercel-app","kind":"application_host","referenceUrl":"https://jeju-tour-six.vercel.app","deployedCommit":null,"configurationVerifiedAgainstAccount":false,"inferenceDaemonHostedHere":false,"note":"기존 서버 API의 외부 모델 호출 위치다. Vercel 함수에 Ollama 데몬을 상주시킨다는 뜻이 아니다."},
+    {"key":"existing-vercel-app","kind":"application_host","referenceUrl":"https://jeju-tour-six.vercel.app","deployedCommit":null,"collectorDeclaredToolVersion":"jeju-tour-e07a93e","toolVersionEvidence":"independently_verified_deployment_sha","liveAssistantInferenceObserved":true,"sourceRefs":["reference-app","gemini-live-baseline-observation"],"configurationVerifiedAgainstAccount":false,"inferenceDaemonHostedHere":false,"note":"기존 서버 API의 외부 모델 호출 위치다. Vercel 함수에 Ollama 데몬을 상주시킨다는 뜻이 아니다."},
     {"key":"proposed-agent-worker","kind":"planned_application_host","publicEndpoint":null,"deployed":false,"note":"공급자 라우터·큐·취소·공유 사용량 관리의 제안 위치. 현재 운영 Worker가 있다는 뜻이 아니다."},
     {"key":"user-ollama-host","kind":"unverified_local_inference_host","os":null,"cpuOrAppleChip":null,"ramGiB":null,"gpu":null,"vramOrUnifiedMemoryGiB":null,"freeDiskGiB":null,"ollamaVersion":null,"privateBaseUrlExample":"http://127.0.0.1:11434","connected":false,"note":"Windows/Mac 사양 답변과 설치·모델 적재 확인 대기. 예시 loopback은 해당 사용자 호스트 내부 주소다."},
-    {"key":"local-langflow","kind":"local_agent_orchestration_host","version":"1.13.3","bind":"127.0.0.1:7860","mcpToolDiscoveryVerified":true,"agentRunWithModelVerified":false,"productionHost":false,"sourceRefs":["local-langflow-artifacts"],"note":"사용자 결정(2026-11-18)으로 쓰는 시각적 Agent 흐름 편집·실행 위치. jeju-mcp는 Streamable HTTP와 전역 변수 토큰으로 연결한다. 1.13.0 미만은 미수정 취약점 때문에 쓰지 않는다."},
+    {"key":"local-langflow","kind":"local_agent_orchestration_host","version":"1.13.3","bind":"127.0.0.1:7860","mcpToolDiscoveryVerified":true,"agentRunWithModelVerified":true,"mcpToolCallsObserved":true,"structuredResponseObserved":true,"productionHost":false,"sourceRefs":["local-langflow-artifacts","langflow-vertex-smoke-observation","langflow-live-baseline-observation"],"note":"사용자 결정(2026-11-18)으로 쓰는 시각적 Agent 흐름 편집·실행 위치. jeju-mcp는 Streamable HTTP와 전역 변수 토큰으로 연결한다. 1.13.0 미만은 미수정 취약점 때문에 쓰지 않는다."},
     {"key":"analysis-workspace","kind":"development_workspace","productionHost":false,"note":"문서·데이터 검증·MCP 개발 환경. 이 환경의 자원을 사용자 PC나 운영 호스트 자원으로 간주하지 않는다."},
     {"key":"huggingface-official-mcp","kind":"external_research_tool_host","endpoint":"https://huggingface.co/mcp","liveConnectionVerified":false,"blocker":"현재 런타임의 Hugging Face HTTPS 접근 정책 미적용/프록시 차단. 설정 초안 저장과 적용은 별개다."}
   ],
   "engines": [
     {
-      "key":"google-vertex-ai","provider":"Google","kind":"remote_model_api","integrationStatus":"reference_source_observed","applicationHostRef":"existing-vercel-app",
+      "key":"google-vertex-ai","provider":"Google","kind":"remote_model_api","integrationStatus":"reference_source_and_live_inference_observed","applicationHostRef":"existing-vercel-app","additionalApplicationHostRefs":["local-langflow"],
       "credentialEnvironmentNames":["GOOGLE_SERVICE_ACCOUNT_JSON","GOOGLE_APPLICATION_CREDENTIALS"],"configurationEnvironmentNames":["GOOGLE_CLOUD_PROJECT","VERTEX_LOCATION","GEMINI_MODEL","GEMINI_ASSISTANT_MODEL"],
       "credentialScope":"서버의 지정 Google Cloud 프로젝트와 Vertex 호출에 필요한 최소 권한. 실제 IAM·과금·서비스 계정 설정은 미확인.",
-      "billing":"Google Cloud/Vertex 사용량·프로젝트 과금 확인 필요. 현재 가격·잔액은 미확인.","sourceRefs":["reference-app"]
+      "billing":"Google Cloud/Vertex 사용량·프로젝트 과금 확인 필요. 현재 가격·잔액은 미확인.","sourceRefs":["reference-app","gemini-live-baseline-observation","langflow-vertex-smoke-observation","langflow-live-baseline-observation"]
     },
     {
       "key":"openai","provider":"OpenAI","kind":"remote_model_api","integrationStatus":"reference_source_observed_and_user_deployment_reported","applicationHostRef":"existing-vercel-app",
@@ -75,18 +80,33 @@
   "models": [
     {
       "key":"existing-gemini-assistant","engineRef":"google-vertex-ai","role":["request_interpretation","assistant_response_composition"],
-      "runtimeResolvedModelId":null,"sourceDefaultModelId":"gemini-3.8-flash","configurationEnvironmentName":"GEMINI_ASSISTANT_MODEL",
-      "status":"existing_source_path_runtime_unverified","sourcePath":"prototype/src/assistant.ts","sourceLine":24,
-      "sourceRefs":["reference-app"],"inferenceValidation":"not_performed","qualityValidation":"not_performed","modelAvailabilityVerified":false,
-      "nextTests":["비밀값을 출력하지 않고 실제 모델 환경변수 선택 확인","한국어 요청 해석→서버 후보 평가→응답 구성의 기존 경로 회귀 확인","정확한 API 모델 사용 가능성과 사용량 확인"],
-      "note":"위 기본값은 원본 코드 문자열이다. 공식 공급자의 최신 모델 목록이나 현재 배포 선택을 확인했다는 의미가 아니다."
+      "runtimeResolvedModelId":"gemini-3.8-flash","sourceDefaultModelId":"gemini-3.8-flash","configurationEnvironmentName":"GEMINI_ASSISTANT_MODEL",
+      "status":"live_baseline_collected_scored_provisional","sourcePath":"prototype/src/assistant.ts","sourceLine":24,
+      "sourceRefs":["reference-app","gemini-live-baseline-observation"],"inferenceValidation":"live_inference_observed","qualityValidation":"provisional_in_session_model_review_human_audit_pending","modelAvailabilityVerified":true,
+      "identityEvidence":"application_response_metadata","availabilityScope":"captured_assistant_requests_only",
+      "baselineSummary":"reports/baseline-gemini-live-20261119.json","collectionStatus":"completed","normalizationStatus":"completed_with_failures",
+      "humanAudit":{"plannedCount":24,"status":"pending"},
+      "nextTests":["사람 24건 검토를 마쳐 세션 내 모델 주석의 잠정 판정을 점검","후보 범위·날짜 문맥을 맞춘 비교 실험 설계","사용량·비용과 운영 배포 승인 기준은 별도 확인"],
+      "note":"sourceDefaultModelId와 원본 소스 핀은 보존했다. runtimeResolvedModelId는 실제 /api/assistant 응답 메타데이터에서 관측한 값이며 공식 공급자 전체 모델 목록 검증이 아니다. 운영 설정·모델을 변경하지 않았다."
     },
     {
       "key":"existing-gemini-place-search","engineRef":"google-vertex-ai","role":["place_search_assistance","existing_assistant_fallback"],
-      "runtimeResolvedModelId":null,"sourceDefaultModelId":"gemini-3.5-flash-lite","configurationEnvironmentName":"GEMINI_MODEL",
-      "status":"existing_source_path_runtime_unverified","sourcePath":"prototype/src/placesearch.ts","sourceLine":17,
-      "sourceRefs":["reference-app"],"inferenceValidation":"not_performed","qualityValidation":"not_performed","modelAvailabilityVerified":false,
-      "nextTests":["기본 모델 환경변수와 Vertex 프로젝트·리전 확인","기존 비서의 제한된 대체 경로·장소 ID 검증 보존 확인"]
+      "runtimeResolvedModelId":"gemini-3.5-flash-lite","sourceDefaultModelId":"gemini-3.5-flash-lite","configurationEnvironmentName":"GEMINI_MODEL",
+      "status":"assistant_mixed_fallback_observed_place_search_path_unverified","sourcePath":"prototype/src/placesearch.ts","sourceLine":17,
+      "sourceRefs":["reference-app","gemini-live-baseline-observation"],"inferenceValidation":"observed_in_assistant_fallback_only","qualityValidation":"pending","modelAvailabilityVerified":true,
+      "identityEvidence":"application_response_metadata","availabilityScope":"captured_assistant_mixed_fallback_only",
+      "nextTests":["집계에 보존한 혼합 대체 응답의 실패 원인 점검","독립 장소 검색 경로와 Vertex 프로젝트·리전은 별도 확인"],
+      "note":"기존 비서 응답에서 3.8+3.5-lite 혼합 대체 실행을 관측했다. 독립 장소 검색 API의 실제 성공까지 확인했다는 뜻은 아니다."
+    },
+    {
+      "key":"langflow-vertex-agent","engineRef":"google-vertex-ai","applicationHostRef":"local-langflow","role":["tool_using_tourism_agent","structured_response_generation"],
+      "runtimeResolvedModelId":"gemini-3.8-flash","sourceDefaultModelId":null,"status":"live_baseline_collected_structured_scoring_completed",
+      "sourceRefs":["local-langflow-artifacts","langflow-vertex-smoke-observation","langflow-live-baseline-observation"],"inferenceValidation":"live_inference_observed","qualityValidation":"structured_response_scoring_completed_product_validation_pending","modelAvailabilityVerified":true,
+      "identityEvidence":"runtime_response_metadata","availabilityScope":"captured_local_langflow_baseline","initialSmokeLatencyMs":9877,
+      "baselineSummary":"reports/baseline-langflow-live-20261119.json","collectionStatus":"completed","normalizationStatus":"completed_with_failures","annotationMode":"structured_without_review_override",
+      "mcpToolCallsObserved":true,"structuredResponseObserved":true,
+      "nextTests":["실패·허용 밖 장소 ID의 원인과 도구 흐름을 검토","후보 범위·날짜 문맥을 맞춘 비교 실험 설계","운영 품질·지연·사용량·보안 검증을 별도 완료"],
+      "note":"Langflow 1.13.3의 로컬 실행에서 Vertex 모델 메타데이터, 실제 제주 MCP 도구 호출, 구조화 응답을 관측하고 고정 계획 전체의 수집·자동 채점을 완료했다. 처음의 9.877초는 별도 smoke 지연이며 기준선 지연 집계는 보고서를 따른다. 운영 배포·제품 품질 검증 완료를 뜻하지 않는다."
     },
     {
       "key":"existing-openai-paths","engineRef":"openai","role":["web_assisted_json_lookup","itinerary_explanation"],
@@ -135,14 +155,14 @@
     {"key":"legacy-deterministic-recommendation","kind":"recommendation_method","status":"reference_source_observed","isLanguageModel":false,"sourceRefs":["reference-app"],"note":"기존 설문·규칙 후보 평가·키워드 대체 경로. 새 모델의 사실성·필수 제약 검증을 대체하지 않는다."},
     {"key":"persona-prototype-matching","kind":"designed_matching_method","status":"local_artifact_observed","isLanguageModel":false,"version":"persona-design-v1","sourceRefs":["local-persona-artifacts"],"learnedFromUserResponses":false,"prototypeCount":8,"note":"테마 cosine·관측된 스칼라 거리의 설계 가중치 매칭. 군집 학습이나 심리 유형 확률이 아니다."},
     {"key":"paper-lag","kind":"paper_method","status":"definition_and_reproduction_pending","isLanguageModel":false,"sourceRefs":["lag-logic-augmented-generation"],"implementationVerified":false,"reproductionVerified":false,"plannedUse":"5단계 에이전트 추론 비교 실험","note":"사용자 결정(2026-11-18)으로 LAG는 2508.05509 Logic-Augmented Generation이다. RAG 오타로 바꾸지 않는다. 원문 세부·재현 실험을 확인하기 전 결과에 method=lag를 붙이지 않는다."},
-    {"key":"synthtrips-evaluation-generation","kind":"evaluation_method","status":"generator_implemented_baseline_scoring_pending","isLanguageModel":false,"sourceRefs":["synthtrips-paper","synthtrips-code"],"plannedUse":"3단계 페르소나·조건별 제주 평가 질의 생성","implementedOn":"2026-11-18","codeReviewedOn":"2026-11-18","paperReproductionVerified":false,"note":"추천·추론 방법이 아니다. 합성 질의는 실제 관광객 응답이나 만족도를 대신하지 않는다. 저자 코드(synthtrips-code, 커밋 고정)에서 확인한 순서(페르소나+조건 조합→지식베이스 조건 필터로 정답→LLM은 질의 문장만 작성)와 점검 항목(질의 200자 상한, 정답 이름 금지, 조건 반영 점검, recall·precision 채점)에 맞췄고 정답은 규칙으로 계산한다(docs/23). 코드를 실행·재현하지 않았고 논문 본문 세부는 미확인이라 재현이라고 부르지 않는다. 판정 LLM 평가와 사람 평가는 실행하지 않았다."},
+    {"key":"synthtrips-evaluation-generation","kind":"evaluation_method","status":"generator_and_live_baseline_scoring_completed_human_review_pending","isLanguageModel":false,"sourceRefs":["synthtrips-paper","synthtrips-code"],"plannedUse":"3단계 페르소나·조건별 제주 평가 질의 생성","implementedOn":"2026-11-18","codeReviewedOn":"2026-11-18","paperReproductionVerified":false,"note":"추천·추론 방법이 아니다. 합성 질의는 실제 관광객 응답이나 만족도를 대신하지 않는다. 저자 코드(synthtrips-code, 커밋 고정)에서 확인한 순서(페르소나+조건 조합→지식베이스 조건 필터로 정답→LLM은 질의 문장만 작성)와 점검 항목(질의 200자 상한, 정답 이름 금지, 조건 반영 점검, recall·precision 채점)에 맞췄고 정답은 규칙으로 계산한다(docs/23). 코드를 실행·재현하지 않았고 논문 본문 세부는 미확인이라 재현이라고 부르지 않는다. 실제 Gemini 응답의 수집·정규화·세션 내 모델 주석·잠정 채점을 완료했다. Gemini 결과는 reports/baseline-gemini-live-20261119.json을 따른다. Langflow도 실제 수집·구조화 출력 자동 채점을 완료했으며 reports/baseline-langflow-live-20261119.json을 따른다. Gemini 모델 주석의 사람 24건 검토는 대기 중이다. 별도 외부 판정 모델 API를 실행했다는 뜻은 아니다."},
     {"key":"retrieval-baselines","kind":"comparison_methods","status":"planned","isLanguageModel":false,"candidates":["rules+BM25","hybrid RAG"],"note":"LAG와 구분된 비교 실험. embedding/reranker를 이미 선택했다는 뜻이 아니다."}
   ],
   "toolConnections": [
     {
-      "key":"jeju-mcp","kind":"tool_protocol_service","isModel":false,"hostRef":"analysis-workspace","status":"local_read_only_implementation","productionConnectionVerified":false,
+      "key":"jeju-mcp","kind":"tool_protocol_service","isModel":false,"hostRef":"analysis-workspace","status":"local_read_only_implementation","productionConnectionVerified":false,"localLangflowToolCallsVerified":true,
       "transport":"Streamable HTTP","sdkVersion":"1.32.1","schemaLibraryVersion":"4.6.7","tools":["places.search","places.get","constraints.check"],
-      "sourceRefs":["local-mcp-artifacts"],"note":"장소 조회·근거 기반 제약 검사. 추천 LLM, LAG, 작업 큐, OAuth 또는 운영 DNS 배포가 완료된 서비스라는 의미는 아니다."
+      "sourceRefs":["local-mcp-artifacts","langflow-vertex-smoke-observation","langflow-live-baseline-observation"],"note":"장소 조회·근거 기반 제약 검사. 추천 LLM, LAG, 작업 큐, OAuth 또는 운영 DNS 배포가 완료된 서비스라는 의미는 아니다."
     },
     {
       "key":"huggingface-research-mcp","kind":"external_research_tool_connection","isModel":false,"hostRef":"huggingface-official-mcp","status":"configuration_prepared_live_connection_blocked",
@@ -151,6 +171,15 @@
       "sourceRefs":["hf-mcp-official","local-hf-configuration"],"note":"모델·데이터셋·논문 조사용. 모델 추론 공급자가 아니다. URL preset만으로 호출 권한이 제한되지 않으며 tools/list와 로컬 허용 목록을 확인한다."
     }
   ],
+  "liveBaselineComparison": {
+    "summaryPaths": ["reports/baseline-gemini-live-20261119.json", "reports/baseline-langflow-live-20261119.json"],
+    "primaryModelId": "gemini-3.8-flash",
+    "comparisonUnit": "application_and_orchestration_paths",
+    "candidateScopeAligned": false,
+    "dateContextAligned": false,
+    "modelSuperiorityEstablished": false,
+    "note": "기존 Gemini 앱과 Langflow 경로의 관측 모델은 같은 3.8이다. 후보 카탈로그 범위와 날짜 문맥이 달라 이번 경로별 집계만으로 모델 우열을 주장하지 않는다. Gemini 혼합 대체 응답은 단일 3.8 성공으로 합치지 않는다."
+  },
   "proposedValidationSequence": [
     {"stage":"source_identity","checks":["정확한 모델 ID/태그·원본·라이선스·지원 형식 확인"],"completion":"검토한 소스와 미확인 배포 상태 분리 기록"},
     {"stage":"connectivity","checks":["서버 버전·인증·도구 목록 또는 모델 목록 조회"],"completion":"접속 성공을 실제 추론 성공으로 표시하지 않기"},

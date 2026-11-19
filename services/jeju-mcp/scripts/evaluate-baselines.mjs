@@ -108,6 +108,14 @@ export function importCapture(plan, capture) {
     }
     const adapt = capture.system.id === 'gemini' ? adaptGeminiResponse : adaptLangflowResponse;
     const normalized = adapt({ itemId: item.itemId, raw: entry.raw, review: entry.review, measurements: entry.measurements, outputSelector: entry.outputSelector });
+    if (capture.system.id === 'langflow') {
+      // The adapter has already validated an unambiguous output selection. Missing metadata remains unverified.
+      const selected = entry.raw.outputs[entry.outputSelector.outputIndex].outputs.find((output) => output.component_id === entry.outputSelector.componentId);
+      const reportedModel = selected.results.message.properties?.source?.source;
+      if (reportedModel !== undefined && reportedModel !== capture.system.modelId) {
+        throw new Error('Langflow capture reported a different model than the declared baseline.');
+      }
+    }
     if (capture.system.adapterVersion !== normalized.normalization.adapterVersion) throw new Error('Capture adapterVersion does not match the normalizer.');
     return { caseId: item.caseId, requestSha256: item.requestSha256, ...normalized };
   });

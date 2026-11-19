@@ -1,10 +1,10 @@
 # Claude Code 인수인계와 작업 재개 절차
 
-기준일: 2026-11-19 (한국 시간, Codex 기준선 하네스 구현 반영). 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 [19 문서](19-agent-step2-data-foundation.md)의 단계로 구현하는 것이다. 이 문서는 다음 세션이 그대로 이어받을 상태, 재개 절차, 다음 작업 명세를 담는다. 0절이 최신 상태다. 1절 이하는 이전 세션의 기록과 절차를 포함한다. 과거 상태보다 확인 시점이 최근인 근거를 우선하고, 새 결과가 생기면 근거와 함께 갱신한다.
+기준일: 2026-11-19 (한국 시간, 실제 Gemini·Langflow 각 96문항 수집·채점 반영). 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 [19 문서](19-agent-step2-data-foundation.md)의 단계로 구현하는 것이다. 이 문서는 다음 세션이 그대로 이어받을 상태, 재개 절차, 다음 작업 명세를 담는다. 0절이 최신 상태다. 1절 이하는 이전 세션의 기록과 절차를 포함한다. 과거 상태보다 확인 시점이 최근인 근거를 우선하고, 새 결과가 생기면 근거와 함께 갱신한다.
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
 
-**최신 구현:** PR #6이 병합된 `main@172325b`에서 `codex/agent-baseline-scoring` 브랜치를 만들었다. [24 문서](24-agent-baseline-scoring.md)의 기준선 요청·가져오기·채점 CLI, Gemini/Langflow 응답 어댑터, 해시·버전·전체 문항 검사와 집계를 구현했다. 참고 앱 `b0602a1`의 장소 981곳과 템플릿 96문항을 복원했고 정답 해시 `b9821945…`가 기존과 일치한다. [자체 검사 집계](../reports/baseline-harness-self-check.json)는 정답에서 만든 oracle 응답의 채점 결과이며 모델 성능이 아니다. 실제 모델 호출, 이전 작성 질의 복원, 14개 보안 사례 실행은 하지 않았다.
+**최신 구현:** PR #7 병합 커밋 `main@6ade0c3`에서 만든 `codex/agent-live-baselines`의 작업은 [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8)에 있다. [24 문서](24-agent-baseline-scoring.md)의 오프라인 하네스를 재사용하는 [실제 수집기](25-live-baseline-execution.md), 중단 재개, 잠정 모델 판정과 [Vertex AI 인증 흐름](26-langflow-vertex-auth.md)을 추가했다. 사용자가 실제 Gemini·Langflow 실행과 필요한 Google 인증 사용을 승인했다. 같은 계획의 템플릿 96문항씩을 모두 시도해 [Gemini 지정 모델 응답 92건·실패 4건](../reports/baseline-gemini-live-20261119.json), [Langflow 구조화 응답 80건·실패 16건](../reports/baseline-langflow-live-20261119.json)을 채점했으며 미실행은 각각 0건이다. 두 경로의 `gemini-3.8-flash` 응답과 Langflow MCP 도구 호출을 확인했다. Gemini 자유 문장 판정은 잠정 모델 검수이며 사람 검수는 0/24건이다. Langflow 구조화 JSON은 수정 없이 채점했다. 카탈로그·날짜 문맥이 달라 모델 자체의 우열을 판단하지 않으며 비용은 미측정이다. 이전 작성 질의 복원과 합성 보안 사례 14개 실행은 여전히 미완료다. 정답 해시 `b9821945…`는 유지하고 결과·실패·한계는 25 문서에 기록한다. [자체 검사 집계](../reports/baseline-harness-self-check.json)는 실제 모델 평가와 별도의 oracle 검사다.
 
 **이후 추가된 운영·보안 설계:** `main@725737f`를 기준으로 [21 Linux Docker](21-linux-docker-production.md)와 [22 탈옥 방어](22-jailbreak-and-prompt-injection-defense.md)를 추가했다. 사용자 지정 논문 `2403.17336`은 저자 공식 GitHub README로 서지·공격 평가 연구임을 확인했으며 PDF 본문은 403으로 미확보다. [합성 보안 평가 14개](../data/agent-security-cases.json)는 아직 실행하지 않았다. Gateway·최종 답변 검증기·벡터 DB·운영 컨테이너는 미구현이다. 현재 로컬 구성은 유지하며 3단계 평가셋에 정상·공격 사례와 실제 부작용 계측을 함께 설계한다. 기존 설문 v0.3 등 `codex/ai-agent-model-handoff`의 추가 커밋은 이 새 브랜치에 자동 병합하지 않았다.
 
@@ -12,13 +12,14 @@
 
 | 항목 | 상태 |
 |---|---|
-| main | 작업 시작 시 `172325b`(PR #6 병합), 열린 PR 0개. 이번 기준선 하네스는 새 브랜치 `codex/agent-baseline-scoring`의 PR로 전달한다. 병합 여부는 GitHub에서 확인하고 병합은 사용자가 한다 |
-| 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · Langflow 연결 ✅(모델 실행 미검증) · 3 평가셋 ✅ · 기준선 오프라인 하네스 ✅([24 문서](24-agent-baseline-scoring.md)) · **다음은 실제 응답 수집·사람 판정·두 시스템 비교**(11절) |
-| 검사 | 로컬 Node 24.22.1: MCP·HF·Agent 카탈로그·평가셋·하네스 95개 + Gateway 10개 = 105개 통과. `check_repository.py` 10개 항목 PASS. 실제 96문항 자체 검사와 저장된 실행 재채점 `--check`도 확인. CI 결과는 이번 PR에서 확인 |
+| main | 작업 시작 시 `6ade0c3`(PR #7 병합). 실제 수집·Vertex AI 연결은 `codex/agent-live-baselines`의 열린 [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8)로 전달한다. 병합은 사용자가 한다 |
+| 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · 3 평가셋 ✅ · 오프라인 하네스 ✅ · 실제 Gemini·Langflow 각 96문항 수집·채점 ✅. 사람 검수·MCP 카탈로그 v2·전체 시간 예산 및 호출 횟수·취소 전파·보안 평가는 후속 작업 |
+| 검사 | 로컬 Node 24.22.1: MCP·HF·Agent 카탈로그·평가셋·수집·채점 149개 + Gateway 10개 = 159개 통과. `check_repository.py` 12개 항목 PASS. 실제 96문항 자체 검사와 저장된 실행 재채점 `--check`도 확인. 최종 CI 상태는 PR #8 최신 커밋의 검사 결과를 따른다 |
+| 실제 수집·채점 | 같은 계획·정답 해시로 각 96문항 시도. [Gemini](../reports/baseline-gemini-live-20261119.json) 성공 92·실패 4, [Langflow](../reports/baseline-langflow-live-20261119.json) 성공 80·실패 16, 각각 미실행 0. Gemini 사람 검수 0/24, 비용 미측정, 합성 보안 14개 미실행 |
 | 데이터 실측 | 원본 앱 장소 981곳(원시 POI 863·앱 생성 118). `verified` 0, 비용 0, 실내 출처 132, 영업시간 출처 466, 동네 산책 테마 대표 후보 7. 집계는 [`reports/agent-catalog-coverage.json`](../reports/agent-catalog-coverage.json) |
 | 평가셋 실측 | 96문항(페르소나 8 × 슬롯 12). 추천 48·확인 불가 32·되묻기 8·불가 안내 8, 필수 어려운 사례 5종 각 8문항, 필수 조건 판정은 모두 `unknown`. 작성 질의 96건과 템플릿 문장 96건이 문장 규칙 9개(200자 상한, 조건 반영, 명시하지 않은 조건·숫자 금지, 후보 이름 금지 등)를 통과했다. 규칙은 낱말 목록에 기대는 검사라 놓치는 경우가 있다(23 문서 10절). 집계는 [`reports/evaluation-set-summary.json`](../reports/evaluation-set-summary.json) |
-| Langflow | 1.13.3에서 jeju-mcp 도구 3개 발견·호출, 서버 등록 API, 시작 흐름 가져오기와 MCP 노드 빌드를 확인했다. 실제 모델 실행·Desktop·Docker·사용자 PC는 미검증 |
-| 로컬 산출물 | 현재 `.local`에 `app-places-b0602a1.json`, `agent-catalog-b0602a1.json`, `evaluation-set-b0602a1.json`, `evaluation-briefs-b0602a1.json`, `baseline-plan-b0602a1.json`, `baseline-oracle-run-b0602a1.json`, `baseline-oracle-scores-b0602a1.json`이 있다. 다른 환경에서는 [19](19-agent-step2-data-foundation.md)·[23](23-agent-step3-evaluation-set.md)·[24](24-agent-baseline-scoring.md) 문서로 재생성한다. 이전 작성 질의·비밀 설정·Langflow DB는 복원하지 않았다 |
+| Langflow | 1.13.3 로컬에서 Vertex AI 서비스 계정 OAuth, `gemini-3.8-flash` 실제 추론·MCP 도구 호출을 확인했다. 96문항 중 구조화 응답 80건을 원문 그대로 채점하고 실패 16건도 분모에 유지했다. Desktop·Docker·사용자 PC·운영 배포는 미검증 |
+| 로컬 산출물 | 현재 `.local`에 `app-places-b0602a1.json`, `agent-catalog-b0602a1.json`, `evaluation-set-b0602a1.json`, `evaluation-briefs-b0602a1.json`, `baseline-plan-b0602a1.json`, `baseline-oracle-run-b0602a1.json`, `baseline-oracle-scores-b0602a1.json`이 있다. 다른 환경에서는 [19](19-agent-step2-data-foundation.md)·[23](23-agent-step3-evaluation-set.md)·[24](24-agent-baseline-scoring.md) 문서로 재생성한다. 이전 작성 질의는 복원하지 않았다. 현재 런타임의 비밀 설정·Langflow DB·원문 캡처·판정은 Git 밖의 로컬 자료이며 다음 환경에 자동 이관되지 않는다 |
 
 **사용자 결정 (2026-11-18)**
 
@@ -28,10 +29,10 @@
 - 시각적 Agent 빌더: Langflow(1.13.0 이상, 로컬). Flowise는 지원 종료로 제외했다.
 - 시각화 커넥터(Mermaid Chart·Figma·Metabase·Grafana Cloud)는 안내만 했고, 사용자가 아직 고르지 않았다.
 
-**사용자에게 아직 받지 못한 답**
+**추가 사용자 결정과 남은 입력**
 
-- 평가와 Agent 실행에 쓸 모델 공급자와 키(Gemini·Claude·OpenAI·Ollama 중), Langflow를 돌릴 PC의 OS.
-- 평가셋 정답 후보(장소 ID·이름 포함)를 Git에 올려도 되는지. 답이 없으면 `.local`에 두고 집계만 올린다. 두 번째 세션에서도 답을 받지 못해 `.local`에만 두었고 모델 공급자 API는 호출하지 않았다.
+- 2026-11-19: 실제 Gemini·Langflow 평가를 진행하도록 승인했고 Vercel 비밀 설정의 Google 인증을 사용했다. 같은 범위의 실행을 위해 포괄 승인을 다시 묻지 않는다. Langflow를 사용자 PC로 옮길 경우 OS는 확인해야 한다.
+- 평가셋 정답 후보(장소 ID·이름 포함)를 Git에 올려도 되는지. 답이 없으면 `.local`에 두고 집계만 올린다. 정답 후보·원문 공개는 승인받지 않았으므로 계속 `.local`에 둔다. API 전송 승인은 위 실제 평가 범위와 구분한다.
 
 ## 1. 바로 이어받을 상태
 
@@ -61,7 +62,7 @@
 6. [페르소나 설계](08-persona-clustering.md), [Ollama·LAG 계획](09-ollama-lag-feasibility.md), [다중 공급자·DB](11-multi-provider-tunnels-database-and-cost.md).
 7. [도메인 절차](12-domain-tunnel-and-ollama-runbook.md), [후속 배치와 MCP 상태](13-next-steps-and-mcp-implementation.md), [서버 실행 안내](../services/jeju-mcp/README.md).
 
-현재 Word/PDF는 이전 문서 01~23의 스냅샷이다. 이번에는 실행 코드·Markdown·JSON 집계를 갱신했고 바이너리 보고서는 재생성하지 않았다. 최신 상태는 24 문서·이 인수인계·실제 CI·코드에서 읽는다.
+현재 Word/PDF는 이전 문서 01~23의 스냅샷이다. 이번에는 실행 코드·Markdown·JSON 집계를 갱신했고 바이너리 보고서는 재생성하지 않았다. 최신 상태는 24~26 문서·이 인수인계·실제 CI·코드에서 읽는다.
 
 ## 3. Git와 PR 작업 방식
 
@@ -214,9 +215,9 @@ python3 scripts/build_data_source_catalog.py --source /workspace/scratch/referen
 | 순서 | 할 일 | 완료 기준 |
 |---|---|---|
 | 1 | 3단계 평가셋(SynthTRIPs 방식) (완료, [23 문서](23-agent-step3-evaluation-set.md)) | 생성기·테스트·집계 보고서가 PR로 올라가고, 질의마다 근거 사실·조건·기대 동작·정답 규칙이 있다 |
-| 2 | 기준선 채점: 오프라인 하네스 완료, 실제 Gemini·Langflow 응답 수집과 비교는 남음([24 문서](24-agent-baseline-scoring.md)) | 같은 계획 해시로 두 시스템의 지표 기록. 실제 호출은 공급자·키·전송 범위 확정 후 |
-| 3 | 4단계 도구: 카탈로그 v2 기반 MCP 도구(테마 랭킹, 근거 등급 조건 검사, 영업시간) | `verified`가 아닌 값으로 pass하지 않는 테스트, 기존 3개 도구 호환 유지 |
-| 4 | 5단계 Agent 루프와 LAG(`2508.05509`) 비교 | 같은 평가셋에서 허용 ID 위반 0, 필수 조건 오판 0. LAG 원문 세부 확인 전 `method=lag` 표기 금지 |
+| 2 | 기준선 수집·채점 완료: Gemini 92응답·4실패, Langflow 80응답·16실패, 각각 96시도·미실행 0([25 문서](25-live-baseline-execution.md)). 다음은 사람 24문항 검수 | 같은 계획·정답 해시의 집계와 실패 기록을 보존하고 잠정 모델 판정을 사람이 대조. 카탈로그·날짜 차이가 있는 현재 결과로 모델 우열을 주장하지 않음 |
+| 3 | 4단계 도구: 앱과 같은 981곳의 카탈로그 v2를 MCP에 연결(테마 랭킹, 근거 등급 조건 검사, 영업시간) | 기존 v1 7,561곳과 평가 자료의 차이를 제거하고 `verified`가 아닌 값으로 pass하지 않는 계약, 기존 3개 도구 호환 유지 |
+| 4 | 5단계 Agent 루프의 전체 시간 예산·호출 횟수·취소 전파 개선과 LAG(`2508.05509`) 비교 | 공급자 요청 기한과 전체 실행 한도를 구분하고 취소 후 서버 작업 종료를 확인. 같은 평가셋에서 허용 ID 위반 0, 필수 조건 오판 0을 목표로 검증. LAG 원문 세부 확인 전 `method=lag` 표기 금지 |
 | 5 | 6단계 비교·연결 | 비교 결과와 되돌리기 절차. 원본 앱 변경·운영 배포는 별도 승인 |
 
 ### 8.2 연결·계정·자료 (병행)
@@ -249,7 +250,7 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 ## 9. 이미 승인된 범위와 접근 경계
 
-사용자는 클라우드 설정, 기획·시각화·보고서·데이터 정리, 실행 가능한 읽기 전용 MCP, HF 새 계정의 조직 생성·MCP 연결·CI, 전체 작업 PR 및 Claude Code 인수인계를 요청했다. 2026-11-18 Claude 세션에서는 Agent 구축의 단계적 진행, 논문 정정(둘 다 사용), 새 브랜치 push + PR, Langflow 사용을 결정했고 PR 병합은 사용자가 했다. 같은 범위의 가역적인 구현·검증·PR 작업에 포괄적인 재확인을 요구하지 않는다. 모델 공급자 호출(과금·데이터 전송)과 평가 정답 후보의 Git 공개는 아직 승인되지 않았다. 브라우저 도구가 제공되면 이미 승인된 계정 화면 작업을 이어갈 수 있지만, 올바른 계정·대상 리소스를 먼저 확인해야 한다.
+사용자는 클라우드 설정, 기획·시각화·보고서·데이터 정리, 실행 가능한 읽기 전용 MCP, HF 새 계정의 조직 생성·MCP 연결·CI, 전체 작업 PR 및 Claude Code 인수인계를 요청했다. 2026-11-18 Claude 세션에서는 Agent 구축의 단계적 진행, 논문 정정(둘 다 사용), 새 브랜치 push + PR, Langflow 사용을 결정했고 PR 병합은 사용자가 했다. 같은 범위의 가역적인 구현·검증·PR 작업에 포괄적인 재확인을 요구하지 않는다. 이후 2026-11-19 실제 Gemini·Langflow 기준선 호출과 필요한 Google 인증 사용을 승인했다. 이 승인으로 새 구독 구매나 다른 실험의 무제한 호출까지 확대하지 않는다. 평가 정답 후보의 Git 공개는 승인되지 않았다. 브라우저 도구가 제공되면 이미 승인된 계정 화면 작업을 이어갈 수 있지만, 올바른 계정·대상 리소스를 먼저 확인해야 한다.
 
 현재 세션에는 브라우저 제어, 임의 HF connector 등록, 실행 환경 네트워크 apply/Publish 도구가 없었다. 환경 상태·진단 조회와 draft 저장은 가능했다. 새 세션에서 도구를 다시 확인하되, 설정 파일 작성이나 웹 브라우저 로그인만으로 도구 권한을 얻었다고 주장하지 않는다. 보호 경로의 전역 설정·프로젝트 신뢰를 바꾸어 자동 활성화를 강제하지 않는다.
 
@@ -287,33 +288,25 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 차단이 유지되는 동안 같은 네트워크 호출·CI를 반복해 성공을 기대하지 않는다. 설정 적용, 새 도구, 계정 권한, 새 원자료처럼 전제가 바뀐 뒤 제한된 검사를 재개한다. 마지막 결과에는 완료한 변경, 실제 검증, 아직 막힌 작업과 그 정확한 전제를 각각 남긴다.
 
-## 11. 다음 작업 명세: 기준선 채점
+## 11. 다음 작업: 사람 검수와 같은 자료에서의 비교
 
-3단계 평가셋은 [23 문서](23-agent-step3-evaluation-set.md), 구현된 오프라인 기준선 하네스는 [24 문서](24-agent-baseline-scoring.md)를 따른다. 아래 완료 기준 중 요청 준비·응답 가져오기·해시/버전 기록·채점·집계·테스트는 구현했다. 실제 모델 실행기, 응답 수집·사람 판정, 두 시스템의 실측 비교, 작성 질의 비교, 보안 부작용 계측은 남았다. 하네스를 다시 만들지 말고 다음 조건이 갖춰지면 재사용한다.
+실제 수집·채점은 두 시스템 각 96문항, 총 192문항 시도로 완료했다. [Gemini](../reports/baseline-gemini-live-20261119.json)는 92응답·4실패, [Langflow](../reports/baseline-langflow-live-20261119.json)는 80응답·16실패이며 남은 미실행 문항은 없다. 절차와 한계는 [25 문서](25-live-baseline-execution.md), Vertex 인증은 [26 문서](26-langflow-vertex-auth.md)를 따른다. 기존 하네스를 다시 만들거나 실패 문항을 성공으로 바꾸지 않는다.
 
-**목적.** 기존 Gemini 비서와 Langflow 흐름을 같은 96문항으로 채점해, 이후 코드 Agent와 LAG 변형을 비교할 기준선을 남긴다. 합성 질의의 점수는 실제 관광객 만족도가 아니다.
+1. 자유 문장의 잠정 모델 판정을 사람이 24문항 표본(페르소나별 3개·슬롯별 2개)으로 대조한다. 표본은 선정했지만 사람 검수는 아직 0개다. 실제 사람이 읽기 전에는 `human`으로 바꾸지 않는다. 정답을 보고 응답의 단언을 고치지 않는다.
+2. 4단계 MCP 도구를 앱과 같은 근거 등급 카탈로그 v2에 연결한다. 현재 Langflow v1 7,561곳과 평가셋 981곳의 차이를 제거하고, `unknown`을 통과로 바꾸지 않는 계약을 유지한 뒤 새로운 도구 버전으로 비교한다.
+3. Agent 전체 시간 예산·모델 및 도구 호출 횟수·취소 전파를 함께 개선한다. 공급자 요청 60초와 수집 HTTP 120초는 서로 다른 제한이며 HTTP 취소가 서버 작업 종료를 보장하지 않는다. 시간 초과 원인을 계측하고 설정 변경은 새 실행 버전에 남긴다. 기존 성공·실패를 덮어쓰거나 실패 문항만 조용히 재호출하지 않는다.
+4. 이전 작성 질의 파일을 확보하거나 명세대로 새로 작성한 뒤 템플릿과 문체 비교를 진행한다. 현재 템플릿을 작성 질의로 복제하지 않는다.
+5. [합성 보안 사례 14개](../data/agent-security-cases.json)의 실행기와 부수 효과 계측을 설계한다. 조건 삭제·unknown 승격·허용 목록 밖 ID는 채점 규칙을 재사용할 수 있지만 권한·비밀·SSRF·비용·렌더링에는 호출 수·canary·감사 이벤트가 필요하다. 정상 응답 수집으로 보안 평가를 완료 처리하지 않는다.
 
-**입력.** `services/jeju-mcp/.local/evaluation-set-b0602a1.json`(23 문서 8절로 재생성. 질의 파일이 없으면 템플릿 문장), [`data/evaluation-spec.json`](../data/evaluation-spec.json), 채점 함수 [`evaluation-scoring.mjs`](../services/jeju-mcp/src/evaluation-scoring.mjs).
-
-**할 일.**
-
-1. 사용자에게 모델 공급자·키·전송 범위를 먼저 묻는다. 승인 전에는 모델을 호출하지 않는다. 승인 범위 밖의 공급자로 조용히 바꾸지 않는다.
-2. `evaluate-baselines.mjs prepare`의 `cases[].request`(질의와 `context`)만 대상 시스템에 전달하는 실행기를 연결한다. 정답·후보·페르소나 ID는 보내지 않는다. 원본 앱은 읽기 전용이며 별도 로컬 사본을 사용한다.
-3. Gemini 자유 문장은 24 문서의 `manual-v1` 규칙으로 사람이 판정한다. Langflow는 명시한 최종 출력 노드의 순수 구조화 JSON 또는 같은 사람 판정을 가져온다. 추후 자동 판정기를 쓰면 생성 모델과 다른 모델을 쓰며 표본을 사람이 대조한다.
-4. 실제 모델·프롬프트·도구 버전·시각을 캡처에 기록하고 `import` → `score`를 실행한다. 미측정 지연·비용은 `null`, 실패는 오류 레코드로 남긴다. 공개 집계에는 장소 이름·ID·원문이 없다.
-5. 문항마다 작성 질의와 템플릿 문장이 함께 있다. 두 문장을 각각 넣어 문체가 결과를 바꾸는지 본다(SynthTRIPs의 v·p0 비교에 해당, [23 문서](23-agent-step3-evaluation-set.md) 2.2절). 승인을 받으면 질의를 쓴 모델과 다른 모델로 질의의 페르소나 정합과 조건 반영을 판정하고, 사람이 24문항 표본(페르소나 3번씩·슬롯 2번씩)을 검수한다.
-6. [합성 보안 사례 14개](../data/agent-security-cases.json)를 같은 하네스로 실행하도록 설계한다([22 문서](22-jailbreak-and-prompt-injection-defense.md) 6절). 필수 조건 삭제(SEC-003), `unknown` 승격(SEC-004), 허용 목록 밖 장소 ID(SEC-005)는 평가셋 문항에 공격 문장을 덧붙여도 정답이 바뀌지 않으므로 같은 채점 함수로 판정할 수 있다. 권한·비밀·SSRF·비용·렌더링 사례는 호출 횟수·canary·감사 이벤트 같은 별도 계측이 필요하다. 정상 96문항은 오탐 거절률과 정상 추천 품질의 분모로 쓴다.
-
-**산출물 위치.** Git에는 하네스 코드·테스트와 장소 이름·ID 없는 지표 집계를 넣는다. 문항별 응답과 장소 ID는 `.local`에 둔다.
-
-**완료 기준.** 두 시스템의 지표(허용되지 않은 ID 사용률, 필수 조건 오판, 재현율@5, 정밀도@5, 페르소나 테마 일치도, 고지율, 동작 정확도, 지연·비용)가 같은 평가셋 해시로 기록되고, 자유 문장을 구조로 옮긴 기준과 그 한계가 문서에 있고, PR 본문에 실측과 미검증이 나뉘어 있다.
+Git에는 코드·테스트·비밀 없는 흐름과 집계만 올린다. 문항·장소 이름/ID·원문·키·Langflow DB는 `.local` 또는 비밀 설정에 둔다. 실제 청구 금액을 확인하기 전 비용은 `null`이다. 원본 앱·운영 배포는 임의로 수정하지 않는다.
 
 ## 12. 다음 세션 시작 프롬프트
 
 ```text
 OREUM-IT/jeju-tour-data-analysis 저장소에서 이어서 작업해 줘.
-1) CLAUDE.md와 docs/18-claude-code-handoff.md의 0절·3절·11절, docs/24를 먼저 읽어 줘.
-2) codex/agent-baseline-scoring PR의 병합 여부와 최신 main을 확인해 줘. 병합됐으면 최신 main에서 새 브랜치를 만들어 줘.
-3) .local 파일이 없으면 docs/19·23·24로 카탈로그·템플릿 평가셋·요청 계획을 복원해 줘. 기존 하네스를 재사용해 실제 Gemini·Langflow 응답 수집과 사람 판정을 연결하고 같은 계획 해시로 비교해 줘. 공급자·키 제공 경로·전송 범위를 확정하기 전에는 모델을 호출하지 마.
-4) 결과는 새 브랜치 push + PR로 올려 줘. 원본 앱 저장소는 읽기 전용이야. 모델 API 호출과 정답 후보의 Git 공개는 먼저 물어봐 줘.
+1) CLAUDE.md와 docs/18의 0절·3절·11절, docs/25·26을 먼저 읽어 줘.
+2) PR #8(codex/agent-live-baselines)의 병합 여부와 최신 main을 확인해 줘. 병합됐으면 최신 main에서 새 브랜치를 만들어 줘.
+3) 기존 수집·채점 하네스와 실제 집계를 재사용해 줘. 실제 Gemini·Langflow 및 Google 인증 사용은 이미 승인했어. 다른 환경에 로컬 파일/비밀이 없으면 필요한 것만 구체적으로 알려 줘. 실패 문항을 조용히 재시도하거나 모델·도구 버전을 섞지 마.
+4) 사람 24문항 검수, MCP 카탈로그 v2 연결, Agent 전체 시간 예산·호출 횟수·취소 전파, 합성 보안 14개를 다음 단계로 진행해 줘. 사람이 실제 읽기 전에는 검수 완료로 표시하지 말고, 키·질의·정답 후보·원문은 Git에 올리지 말고 집계만 공개해 줘.
+5) 결과는 새 브랜치 push + PR로 올려 줘. 원본 앱 저장소는 읽기 전용이고 병합은 내가 할게.
 ```

@@ -5,6 +5,7 @@ import { validateResponse } from './evaluation-scoring.mjs';
 
 export const BASELINE_ADAPTER_VERSION = '1.0.0';
 export const MANUAL_REVIEW_RUBRIC_VERSION = 'manual-v1';
+export const MODEL_REVIEW_RUBRIC_VERSION = 'llm-review-v1';
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const ensure = (condition, message) => { if (!condition) throw new EvaluationSetError(message); };
 const same = (a, b) => canonicalSha256(a) === canonicalSha256(b);
@@ -36,20 +37,30 @@ function normalizeResponse(itemId, annotation, measurements = {}) {
   });
 }
 
-function humanAnnotation(review, rawOutputHash, selector) {
-  ensure(isRecord(review) && review.method === 'human', 'free-text output requires an explicit human review');
+function reviewedAnnotation(review, rawOutputHash, selector) {
+  ensure(isRecord(review) && ['human', 'in_session_llm'].includes(review.method),
+    'free-text output requires an explicit human review or in_session_llm review');
+  const modelReviewed = review.method === 'in_session_llm';
   ensure(text(review.reviewerId) && review.reviewerId.length <= 160 && isoDate(review.reviewedAt),
-    'human review needs a reviewer alias and ISO reviewedAt');
-  ensure(review.rubricVersion === MANUAL_REVIEW_RUBRIC_VERSION, 'unsupported manual review rubric');
-  ensure(review.rawOutputHash === rawOutputHash, 'human review belongs to a different raw output');
+    'review needs a reviewer alias and ISO reviewedAt');
+  ensure(review.rubricVersion === (modelReviewed ? MODEL_REVIEW_RUBRIC_VERSION : MANUAL_REVIEW_RUBRIC_VERSION), 'unsupported review rubric');
+  if (modelReviewed) {
+    ensure(review.reviewerProvider === 'openai' && text(review.reviewerModel) && review.reviewerModel.length <= 240
+      && !/[\p{Cc}\p{Cf}]/u.test(review.reviewerModel), 'in-session model review needs reviewerProvider openai and an honest reviewerModel label');
+  } else {
+    ensure(review.reviewerModel === undefined && review.reviewerProvider === undefined, 'human review cannot carry model reviewer metadata');
+  }
+  ensure(review.rawOutputHash === rawOutputHash, 'review belongs to a different raw output');
   if (selector !== undefined) ensure(isRecord(review.outputSelector) && same(review.outputSelector, selector),
-    'human review belongs to a different Langflow output selection');
-  ensure(isRecord(review.response), 'human review needs a response annotation');
+    'review belongs to a different Langflow output selection');
+  ensure(isRecord(review.response), 'review needs a response annotation');
   return {
     annotation: review.response,
+    mode: modelReviewed ? 'model_reviewed' : 'human_reviewed',
     audit: {
       method: review.method, reviewerId: review.reviewerId, reviewedAt: review.reviewedAt,
       rubricVersion: review.rubricVersion, rawOutputHash,
+      ...(modelReviewed ? { reviewerProvider: review.reviewerProvider, reviewerModel: review.reviewerModel } : {}),
       ...(selector === undefined ? {} : { outputSelector: { ...selector } }),
     },
   };
@@ -59,7 +70,7 @@ function humanAnnotation(review, rawOutputHash, selector) {
  * Pinned source: jeju-tour@b0602a1 prototype/src/assistant.ts runAssistant -> AssistantReply.
  * Recommendation order: displayed places first, then unseen add/replace action IDs. Remove-action IDs
  * are removal targets, not recommendations. Do not filter against the catalog or evaluation answer.
- * Semantic fields always come from a hash-bound human annotation, never course action.type or reply words.
+ * Semantic fields come from a hash-bound human or explicitly labelled in-session model annotation, never keywords.
  */
 export function adaptGeminiResponse({ itemId, raw, review, measurements } = {}) {
   const rawOutputHash = baselineRawOutputHash(raw);
@@ -75,13 +86,13 @@ export function adaptGeminiResponse({ itemId, raw, review, measurements } = {}) 
   const courseIds = ['add', 'replace'].includes(raw.action.type) ? raw.action.placeIds : [];
   // The same place can occur in both UI picks and a proposed course. Normalize that overlap explicitly.
   const placeIds = [...new Set([...displayedIds, ...courseIds])];
-  const { annotation, audit } = humanAnnotation(review, rawOutputHash);
-  ensure(Array.isArray(annotation.placeIds) && same(annotation.placeIds, placeIds), 'human review must preserve all returned recommendation IDs in order');
+  const { annotation, audit, mode } = reviewedAnnotation(review, rawOutputHash);
+  ensure(Array.isArray(annotation.placeIds) && same(annotation.placeIds, placeIds), 'review must preserve all returned recommendation IDs in order');
   const response = normalizeResponse(itemId, annotation, measurements);
   return {
     response,
     normalization: {
-      adapter: 'gemini-assistant', adapterVersion: BASELINE_ADAPTER_VERSION, mode: 'human_reviewed',
+      adapter: 'gemini-assistant', adapterVersion: BASELINE_ADAPTER_VERSION, mode,
       rawOutputHash, review: audit, sourceEngine: raw.engine, reportedModel: raw.model ?? null,
       idPolicy: 'displayed_then_add_or_replace_unique',
       duplicateReferences: displayedIds.length + courseIds.length - placeIds.length,
@@ -108,7 +119,8 @@ function selectedLangflowMessage(raw, outputSelector) {
 
 /**
  * Accept one explicitly selected run response. Exact JSON may use the scoring response contract;
- * ordinary chat text requires manual-v1 annotations. JSON in markdown fences is ordinary text here.
+ * Ordinary chat text requires manual-v1 human or provisional llm-review-v1 in-session annotations.
+ * JSON in markdown fences is ordinary text here. This adapter never performs the annotation itself.
  * This is an import contract, not evidence that a live Langflow run has been performed.
  */
 export function adaptLangflowResponse({ itemId, raw, outputSelector, review, measurements } = {}) {
@@ -120,14 +132,14 @@ export function adaptLangflowResponse({ itemId, raw, outputSelector, review, mea
   let exactJson = true;
   try { annotation = JSON.parse(reply); } catch { exactJson = false; }
   if (exactJson) {
-    // A human must not repair returned IDs or constraint claims before they reach the scorer.
+    // Neither a human nor a model may repair IDs or claims in an already structured response before scoring.
     ensure(review === undefined, 'structured Langflow output must be scored unchanged without a review override');
     ensure(isRecord(annotation), 'structured Langflow output must be a response object');
   } else {
-    const reviewed = humanAnnotation(review, rawOutputHash, outputSelector);
+    const reviewed = reviewedAnnotation(review, rawOutputHash, outputSelector);
     annotation = reviewed.annotation;
     audit = reviewed.audit;
-    mode = 'human_reviewed';
+    mode = reviewed.mode;
   }
   const response = normalizeResponse(itemId, annotation, measurements);
   return {

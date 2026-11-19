@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-baseline-summary",
+  "mode": "external",
+  "resultType": "imported_responses_not_independently_verified_inference",
+  "system": "langflow",
+  "planSha256": "d357ff6f38f32f711010e67674eb23a37aa69cc622418b075f4af7e36fc9c276",
+  "binding": {
+    "goldSha256": "b982194547edc386b1bfb5d9588cbe607dc99fbf960072b9b20221904f21217d",
+    "queriesSha256": null,
+    "specSha256": "508c71ec17bfdf2395e30e479cb330128c0dbe6e7fc084edf936963721ce04f2",
+    "catalogSha256": "adbbe3fd09025873e75cb9e5d9d663a7300db2a27e3d734433cbdddbe6531ca9",
+    "personasSha256": "5255d010b8f6e7b95e21211004e0d7c5339a7a042355d53870d62ce377eacbe5",
+    "themeMapSha256": "eaf3e91ab4a9e2a40340771a533d9c930d2ce566b265cfa52f704ce341cd65b0"
+  },
+  "provenanceSha256": "1dd702c2320813aee88a0e6705ff3bc086a22d584b4c60d7b89fa51c0bbd370d",
+  "runSha256": "9d9ad6c559b43f25dd340883be45d9d3da7ba904f072d93a177a4ccbbfec4bab",
+  "startedAt": "2026-11-18T23:23:23.147Z",
+  "completedAt": "2026-11-19T00:57:51.904Z",
+  "wording": {
+    "templateItems": 96,
+    "writtenItems": 0,
+    "identicalWrittenItems": 0,
+    "distinctWrittenItems": 0
+  },
+  "groups": [
+    {
+      "system": "langflow",
+      "variant": "template",
+      "plannedCases": 96,
+      "successfulResponses": 80,
+      "failedCases": 16,
+      "completionRate": 0.8333333333333334,
+      "errors": {
+        "timeout": 1,
+        "transport_error": 15,
+        "invalid_output": 0,
+        "not_executed": 0
+      },
+      "actionAccuracyAllCases": 0.6979166666666666,
+      "unexpectedImpossible": {
+        "count": 1,
+        "applicableCases": 88,
+        "measuredCases": 73,
+        "rate": 0.0136986301369863
+      },
+      "metrics": {
+        "items": 80,
+        "actionAccuracy": 0.8375,
+        "disallowedIds": {
+          "returnedIds": 305,
+          "rate": 0.5311475409836065,
+          "itemsWithViolation": 52,
+          "byReason": {
+            "notInCatalog": 34,
+            "outsideCandidates": 128,
+            "userExcluded": 0,
+            "routeForMinimalWalk": 0,
+            "verifiedFail": 0
+          }
+        },
+        "hardRequirementMisjudgement": {
+          "applicableItems": 24,
+          "passOnUnknownItems": 0,
+          "failOnUnknownItems": 0,
+          "contradictsVerifiedItems": 0,
+          "rate": 0
+        },
+        "recallAtK": {
+          "k": 5,
+          "scoredItems": 65,
+          "mean": 0.3802564102564103
+        },
+        "precisionAtK": {
+          "k": 5,
+          "scoredItems": 64,
+          "mean": 0.4505208333333333
+        },
+        "personaThemeMatch": {
+          "scoredItems": 63,
+          "mean": 0.5660264508020759
+        },
+        "confirmationNotice": {
+          "requiredItems": 36,
+          "given": 35,
+          "rate": 0.9722222222222222,
+          "topicCoverage": {
+            "scoredItems": 36,
+            "mean": 0.9722222222222222
+          }
+        },
+        "latencyMs": {
+          "measuredItems": 80,
+          "p50": 25446.694728000002,
+          "p95": 74136.57392699999
+        },
+        "costUsd": {
+          "measuredItems": 0,
+          "total": null
+        }
+      }
+    }
+  ],
+  "securityEvaluation": "not_executed",
+  "annotationReview": {
+    "structured": 80,
+    "humanReviewed": 0,
+    "modelReviewed": 0,
+    "unannotated": 0,
+    "noResponse": 16,
+    "status": "no_model_annotations",
+    "humanSpotCheck": "not_applicable"
+  }
+}

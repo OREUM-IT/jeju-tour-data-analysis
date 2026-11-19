@@ -105,6 +105,18 @@ test('capture import rejects incomplete, duplicated, mismatched and fallback rec
   assert.equal(result.summary.groups[0].metrics.disallowedIds.byReason.notInCatalog, 1);
 });
 
+test('Langflow imports reject reported model drift while preserving compatibility with unreported metadata', () => {
+  const valid = capture();
+  assert.equal(importCapture(plan, valid).records.length, 96);
+  valid.records[0].raw.outputs[0].outputs[0].results.message.properties = { source: { source: valid.system.modelId } };
+  assert.equal(importCapture(plan, valid).records.length, 96);
+  for (const reportedModel of ['different-model', null, '', `${valid.system.modelId} `]) {
+    const changed = structuredClone(valid);
+    changed.records[0].raw.outputs[0].outputs[0].results.message.properties.source.source = reportedModel;
+    assert.throws(() => importCapture(plan, changed), /different model/);
+  }
+});
+
 test('CLI prevents raw output publication, symlink escape and path collisions', async (t) => {
   const p = await files(t);
   await assert.rejects(main(['prepare', ...common(p), '--output', path.join(p.root, 'public-plan.json')]), /inside .local/);

@@ -16,6 +16,10 @@ const reviewOf = (raw, response, extras = {}) => ({
   method: 'human', reviewerId: 'fixture-reviewer', reviewedAt: '2026-11-19T09:30:00+09:00',
   rubricVersion: 'manual-v1', rawOutputHash: baselineRawOutputHash(raw), response, ...extras,
 });
+const modelReviewOf = (raw, response, extras = {}) => reviewOf(raw, response, {
+  method: 'in_session_llm', reviewerId: 'fixture-codex-session', reviewerProvider: 'openai',
+  reviewerModel: 'OpenAI Codex; exact model version unavailable', rubricVersion: 'llm-review-v1', ...extras,
+});
 const outputSelector = { outputIndex: 0, componentId: 'ChatOutput-Fixture' };
 const flow = (messageText, { sender = 'Machine' } = {}) => ({
   outputs: [{
@@ -162,4 +166,59 @@ test('normalization does not mutate captures or human annotations', () => {
   result.response.placeIds.push('MUTATION');
   result.response.requirementClaims[0].verdict = 'fail';
   assert.equal(JSON.stringify({ raw, review }), before);
+});
+
+test('in-session Gemini annotation remains explicitly model-reviewed with exact metadata and wrong claims preserved', () => {
+  const raw = assistant({ places: [{ id: 'FIXTURE_OUTSIDE' }] });
+  const response = annotation({ placeIds: ['FIXTURE_OUTSIDE'], requirementClaims: [{ requirement: 'wheelchair', verdict: 'pass' }] });
+  const review = modelReviewOf(raw, response);
+  const before = JSON.stringify(review);
+  const result = adaptGeminiResponse({ itemId, raw, review });
+  assert.equal(result.normalization.mode, 'model_reviewed');
+  assert.equal(result.normalization.review.method, 'in_session_llm');
+  assert.equal(result.normalization.review.reviewerProvider, 'openai');
+  assert.equal(result.normalization.review.reviewerModel, 'OpenAI Codex; exact model version unavailable');
+  assert.equal(result.normalization.review.rubricVersion, 'llm-review-v1');
+  assert.deepEqual(result.response.placeIds, ['FIXTURE_OUTSIDE']);
+  assert.equal(result.response.requirementClaims[0].verdict, 'pass');
+  assert.equal(result.response.costUsd, null);
+  assert.equal(JSON.stringify(review), before);
+  assert.ok(!Object.hasOwn(result.normalization.review, 'humanSpotCheck'));
+});
+
+test('model annotation requires provider, honest model label, version, time and matching raw output', () => {
+  const raw = assistant();
+  for (const extras of [
+    { reviewerProvider: undefined }, { reviewerProvider: 'google' }, { reviewerModel: undefined },
+    { reviewerModel: ' ' }, { reviewerModel: 'invalid\nlabel' }, { rubricVersion: 'manual-v1' },
+    { reviewedAt: 'unrecorded' }, { rawOutputHash: 'a'.repeat(64) }, { method: 'llm' },
+  ]) assert.throws(() => adaptGeminiResponse({ itemId, raw, review: modelReviewOf(raw, annotation(), extras) }));
+  for (const ids of [[], ['FIXTURE_REPAIRED'], ['FIXTURE_A', 'FIXTURE_OTHER']]) {
+    assert.throws(() => adaptGeminiResponse({ itemId, raw, review: modelReviewOf(raw, annotation({ placeIds: ids })) }), /preserve/u);
+  }
+});
+
+test('changing a model review to human cannot retain machine metadata or manufacture a human audit', () => {
+  const raw = assistant();
+  const mislabeled = modelReviewOf(raw, annotation(), { method: 'human', rubricVersion: 'manual-v1' });
+  assert.throws(() => adaptGeminiResponse({ itemId, raw, review: mislabeled }), /human review cannot carry model/u);
+  const originalHuman = reviewOf(raw, annotation());
+  const result = adaptGeminiResponse({ itemId, raw, review: originalHuman });
+  assert.equal(result.normalization.mode, 'human_reviewed');
+  assert.deepEqual(Object.keys(result.normalization.review).sort(), ['method', 'rawOutputHash', 'reviewedAt', 'reviewerId', 'rubricVersion']);
+  assert.equal(result.normalization.review.method, 'human');
+});
+
+test('Langflow model annotation binds its selected free-text output while structured overrides remain forbidden', () => {
+  const raw = flow('조건은 확인할 수 없습니다.');
+  const review = modelReviewOf(raw, annotation(), { outputSelector });
+  const result = adaptLangflowResponse({ itemId, raw, outputSelector, review });
+  assert.equal(result.normalization.mode, 'model_reviewed');
+  assert.equal(result.normalization.review.method, 'in_session_llm');
+  assert.deepEqual(result.normalization.review.outputSelector, outputSelector);
+  assert.throws(() => adaptLangflowResponse({ itemId, raw, outputSelector,
+    review: { ...review, outputSelector: { ...outputSelector, outputIndex: 1 } } }), /different Langflow/u);
+  const structured = flow(JSON.stringify(annotation({ placeIds: ['FIXTURE_OUTSIDE'] })));
+  assert.throws(() => adaptLangflowResponse({ itemId, raw: structured, outputSelector,
+    review: modelReviewOf(structured, annotation(), { outputSelector }) }), /scored unchanged/u);
 });

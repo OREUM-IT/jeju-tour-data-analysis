@@ -76,6 +76,9 @@ test('oracle checks the scorer without measuring model quality, latency or cost'
   assert.equal(summary.mode, 'oracle_self_check');
   assert.equal(summary.resultType, 'scorer_self_check_not_model_quality');
   assert.equal(summary.securityEvaluation, 'not_executed');
+  assert.ok(!Object.hasOwn(summary, 'annotationReview'));
+  // Pinned before adding provisional model annotations: oracle output remains byte-equivalent in meaning.
+  assert.equal(canonicalSha256(summary), '36a79197181c94000a2fd160e1d66c1af9b1692cb06086b300897adb5595e40e');
   assert.equal(details.length, 96);
   const group = summary.groups[0];
   assert.equal(group.actionAccuracyAllCases, 1);
@@ -228,4 +231,67 @@ test('timestamps must be actual UTC calendar instants in nondecreasing order', (
   }
   const run = external(); run.completedAt = '2026-11-18T23:59:59Z';
   assert.throws(() => score(run), /timestamps/u);
+});
+
+const modelAudit = () => ({
+  adapter: 'gemini-assistant', adapterVersion: 'manual-v1', mode: 'model_reviewed', rawOutputHash: 'a'.repeat(64),
+  sourceEngine: 'gemini', reportedModel: 'fixture-model',
+  review: { method: 'in_session_llm', reviewerId: 'fixture-codex-session', reviewerProvider: 'openai',
+    reviewerModel: 'OpenAI Codex; exact model version unavailable', reviewedAt: times.completedAt,
+    rubricVersion: 'llm-review-v1', rawOutputHash: 'a'.repeat(64) },
+});
+
+test('in-session model annotations produce provisional external metrics with human spot-check explicitly pending', () => {
+  const run = external();
+  run.records[0].normalization = modelAudit();
+  const result = score(run).summary;
+  assert.deepEqual(result.annotationReview, { structured: 0, humanReviewed: 0, modelReviewed: 1, unannotated: 95, noResponse: 0,
+    status: 'provisional', humanSpotCheck: 'pending' });
+  assert.equal(result.runSha256, canonicalSha256(run));
+  const serialized = JSON.stringify(result);
+  assert.ok(!serialized.includes('fixture-codex-session'));
+  assert.ok(!serialized.includes('exact model version unavailable'));
+  assert.equal(score(external()).summary.annotationReview.status, 'no_model_annotations');
+});
+
+test('model normalization rejects missing metadata, wrong method/hash and reclassification as human or structured', () => {
+  for (const [field, value] of [
+    ['reviewerProvider', undefined], ['reviewerProvider', 'google'], ['reviewerModel', undefined],
+    ['reviewerModel', ' '], ['rubricVersion', 'manual-v1'], ['reviewedAt', '2026-11-19'],
+    ['method', 'human'], ['rawOutputHash', 'b'.repeat(64)],
+  ]) {
+    const run = external(); run.records[0].normalization = modelAudit();
+    run.records[0].normalization.review[field] = value;
+    assert.throws(() => score(run), /normalization/u);
+  }
+  let run = external(); run.records[0].normalization = modelAudit();
+  run.records[0].normalization.mode = 'human_reviewed';
+  run.records[0].normalization.review.method = 'human';
+  assert.throws(() => score(run), /human normalization cannot carry model/u);
+  run = external(); run.system.id = 'langflow'; run.records[0].normalization = modelAudit();
+  run.records[0].normalization.adapter = 'langflow'; run.records[0].normalization.mode = 'structured';
+  assert.throws(() => score(run), /structured normalization cannot carry a review/u);
+});
+
+test('annotation populations distinguish unannotated responses from failures without claiming human review', () => {
+  const run = external(); run.system.id = 'langflow';
+  run.records[0].normalization = { adapter: 'langflow', adapterVersion: run.system.adapterVersion,
+    mode: 'structured', rawOutputHash: 'a'.repeat(64), review: null };
+  run.records[1].normalization = { ...modelAudit(), adapter: 'langflow' };
+  run.records[2].normalization = { ...modelAudit(), adapter: 'langflow', mode: 'human_reviewed' };
+  run.records[2].normalization.review = { method: 'human', reviewerId: 'fixture-human', reviewedAt: times.completedAt,
+    rubricVersion: 'manual-v1', rawOutputHash: 'a'.repeat(64) };
+  const { caseId, requestSha256 } = run.records[3];
+  run.records[3] = { caseId, requestSha256, error: { code: 'timeout' } };
+  assert.deepEqual(score(run).summary.annotationReview, { structured: 1, humanReviewed: 1, modelReviewed: 1, unannotated: 92, noResponse: 1,
+    status: 'provisional', humanSpotCheck: 'pending' });
+});
+
+test('one annotated response plus 95 unexecuted cases reports zero unannotated responses and 95 noResponse', () => {
+  const run = external();
+  run.records[0].normalization = modelAudit();
+  run.records = run.records.map((record, index) => index === 0 ? record
+    : { caseId: record.caseId, requestSha256: record.requestSha256, error: { code: 'not_executed' } });
+  assert.deepEqual(score(run).summary.annotationReview, { structured: 0, humanReviewed: 0, modelReviewed: 1, unannotated: 0,
+    noResponse: 95, status: 'provisional', humanSpotCheck: 'pending' });
 });

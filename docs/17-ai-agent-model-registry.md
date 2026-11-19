@@ -1,6 +1,6 @@
 # AI Agent 모델 전체 현황과 다음 검증 절차
 
-기준일: 2026-11-18 한국 시간. **기존 앱에는 Gemini와 OpenAI 호출 코드가 있다. Claude는 미연동이며 Ollama 모델은 아직 실행하지 않았다. 한국어 평가 우선 후보는 Qwen3-4B, 연결 시험 비교 후보는 `llama3.2:3b`다. 어느 후보도 제주 관광 서비스의 최적 모델로 검증하지 않았다.**
+기준일: 2026-11-19 한국 시간. 레지스트리·보고서 확인일도 2026-11-19 UTC이며 개별 실행의 원래 UTC 시각은 보고서에 보존한다. **기존 Gemini `/api/assistant`와 로컬 Langflow 1.13.3의 고정 평가 계획 전체를 실제 수집·정규화·채점했다. Gemini 자유 문장 채점은 세션 내 모델 주석을 사용한 잠정 결과이며 사람 24건 검토가 남았다. Langflow는 구조화 응답을 자동 채점했다. 두 경로의 주 모델은 `gemini-3.8-flash`이고 기존 비서의 `gemini-3.5-flash-lite` 혼합 대체 기록도 보존했다. OpenAI 실제 호출은 미검증, Claude는 미연동, Ollama 모델은 미실행이다.**
 
 이 문서와 [머신 판독용 목록](../data/ai-agent-models.json)은 다른 Claude Code 세션이 현재 근거와 미완료 항목을 이어받기 위한 기록이다. 모델 설치·교체·API 호출·운영 배포를 자동 실행하는 설정 파일이 아니다. `Update all AI AGENT MODEL` 요청에 따라 사용 중인 경로·후보·미선정 역할을 함께 갱신했으며, 모델을 모두 다운로드하거나 운영 기본값을 일괄 변경하지 않았다.
 
@@ -8,6 +8,7 @@
 
 | 근거 수준 | 확인한 것 | 이 근거만으로 주장할 수 없는 것 |
 |---|---|---|
+| 실제 추론 응답 관측 | 요청 응답·반환 모델 메타데이터, Langflow의 실제 도구 호출·구조화 응답 | 공급자 전체 모델 목록·계정 과금 명세·평균 지연·제품 품질 |
 | 분석 저장소 직접 확인 | 설정·스크립트·프로토타입·MCP 구현 파일 | 외부 서버 접속·운영 배포·실제 추론 성공 |
 | 원본 앱 소스 확인 | `OREUM-IT/jeju-tour`의 고정 커밋 `b0602a175c1d08959b7187da2b29ac450b52e0ba`에 존재하는 호출 경로·기본 문자열 | 현재 Vercel 배포 커밋·환경변수 override·공급자 모델 가용성 |
 | 공식 소스 검토 | 공급자 문서의 언어·라이선스·API·형식 지원 | 사용자 장비 메모리·속도·한국어 과제 정확도 |
@@ -20,8 +21,9 @@ JSON의 `key`는 레지스트리 내부 참조다. 공급자의 실제 모델 ID
 
 | 구성 | 역할·확인한 이름 | 현재 상태 | 다음 검증 |
 |---|---|---|---|
-| Gemini / Vertex AI 비서 | `GEMINI_ASSISTANT_MODEL`, 코드 기본 `gemini-3.8-flash` | 요청 해석→서버 후보 평가→답변 구성 경로를 소스로 확인. 현재 배포 모델·API 성공 미확인 | 실제 환경 선택·서비스 계정·모델 접근, 기존 한국어 비서 경로 회귀 확인 |
-| Gemini / Vertex AI 장소 검색·대체 | `GEMINI_MODEL`, 코드 기본 `gemini-3.5-flash-lite` | `placesearch.ts`와 비서 대체 경로를 소스로 확인 | 기본 모델·프로젝트·리전·제한된 재시도·대체 표시 확인 |
+| Gemini / Vertex AI 비서 | `GEMINI_ASSISTANT_MODEL`, 코드 기본·실제 반환 `gemini-3.8-flash` | 실제 응답 수집·정규화·잠정 채점 완료. [최종 집계](../reports/baseline-gemini-live-20261119.json); 도구 버전 `jeju-tour-e07a93e`는 수집기 지정 | 사람 24건 검토, 비교 조건 정렬, 사용량·비용 확인 |
+| Gemini / Vertex AI 장소 검색·대체 | `GEMINI_MODEL`, 코드 기본·대체 응답 관측 `gemini-3.5-flash-lite` | 기존 비서의 3.8+3.5-lite 혼합 대체 실행 관측. 독립 장소 검색 API는 미검증 | 실패로 보존한 혼합 대체 결과의 원인과 독립 경로·프로젝트·리전 확인 |
+| Langflow / Vertex AI Agent | Langflow 1.13.3, 실제 반환 `gemini-3.8-flash` | Vertex·제주 MCP를 사용한 실제 응답 수집·정규화·구조화 자동 채점 완료. [최종 집계](../reports/baseline-langflow-live-20261119.json) | 실패·허용 밖 ID 원인 검토, 비교 조건 정렬, 운영 품질 검증 |
 | OpenAI | `OPENAI_MODEL`, 코드 기본 `gpt-5.4-mini` | Responses+웹 검색, Chat Completions 일정 설명 코드 존재. 키 설정·재배포는 사용자 보고; 실제 호출 미검증 | 두 API 경로를 각각 확인하고 반환 모델·오류·사용량 기록 |
 | Claude / Anthropic API | 정확한 모델 ID 미선정 | 공급자 어댑터 설계만 있음. 관광 앱 미연동 | API 계정의 사용 가능 모델·데이터 정책·비용 확인 후 어댑터 구현 |
 | Qwen3-4B / Ollama | 한국어 제품 평가 우선 후보. `qwen3:4b`는 확인 대기 태그 | 공식 언어·라이선스·실행 문서 검토. 모델 적재·한국어 평가 미수행 | 태그가 가리키는 정확한 변형·양자화·digest 확인 후 공통 평가 |
@@ -30,7 +32,11 @@ JSON의 `key`는 레지스트리 내부 참조다. 공급자의 실제 모델 ID
 | 재정렬 모델 | 선택 모델 없음 | 도입·구현 미확정 | 규칙/BM25/hybrid 기준선 대비 순위 이득과 지연·비용 비교 |
 | 학습 기반 페르소나 군집 | 선택 모델 없음 | 현재 8개 프로토타입은 수작업 설계이며 실제 응답으로 학습한 군집이 아님 | 동의된 응답을 확보한 뒤 Gower/PAM·임베딩/HDBSCAN 등 비교 |
 
-Gemini와 OpenAI의 위 기본 문자열은 **기존 코드에 적힌 값**이다. 공식 모델 목록을 실시간 검증한 결과로 해석하지 않는다. 실행 환경의 override가 우선할 수 있고, 키가 있어도 모델 사용 권한·과금·요청 형식이 맞는지는 별도로 확인해야 한다.
+코드 기본 문자열은 고정된 원본 소스의 값이고, 실제 반환 모델은 별도 실행 근거다. Gemini의 모델 ID는 응답 메타데이터에서 관측했으며 공식 공급자 전체 모델 목록을 검증한 결과는 아니다. OpenAI 기본값은 여전히 소스 확인 수준이다. 계정 권한 전체·과금 명세·환경변수 override 설정은 응답 성공과 별도로 확인한다.
+
+초기 실행을 관측한 2026-11-18 UTC(한국 시간 11월 19일)의 근거는 레지스트리 출처 `gemini-live-baseline-observation`과 `langflow-vertex-smoke-observation`에 추가했다. `jeju-tour-e07a93e`는 독립 확인한 배포 SHA를 바탕으로 수집기가 지정한 도구 버전이다. API 응답이 보고한 필드가 아니며, 아래 원본 소스 핀 `b0602a1`과 별도로 기록한다. 2026-11-19 UTC에는 `langflow-live-baseline-observation`과 두 최종 집계 보고서를 확인했다. Langflow의 9.877초는 초기 단일 smoke의 관측 지연이며 기준선의 지연 분포는 최종 보고서를 따른다. 실행·집계 절차는 [25 실제 기준선 실행](25-live-baseline-execution.md), Vertex 연결 절차는 [26 Langflow 인증](26-langflow-vertex-auth.md)을 따른다. 집계 수치는 연결한 보고서를 기준으로 확인하며 이 문서에 중복 기록하지 않는다. 이번 기록 갱신으로 운영 모델·설정·배포를 변경하지 않았다.
+
+기존 Gemini 앱과 Langflow 경로는 같은 주 모델 `gemini-3.8-flash`를 사용한다. 후보 카탈로그 범위와 날짜 문맥이 달라 이번 집계는 각 서비스 경로의 관측 결과로 읽어야 한다. 모델 우열을 입증한 비교가 아니며, Gemini의 혼합 대체 응답을 단일 3.8 성공에 합치지 않는다. 사람 검토와 조건을 맞춘 후속 비교는 별도 작업이다.
 
 원본 코드 연결점:
 
@@ -55,7 +61,7 @@ Claude Code에서 이 저장소를 개발하거나 HF MCP를 연결하는 것과
 
 HF MCP는 연구용 서버다. [Codex 설정](../.codex/config.toml)은 공개 조회용 3개 도구, [Claude Code 설정](../.mcp.json)은 `files` preset을 가리킨다. 소스상 익명 공개 조회를 지원하므로 HF_TOKEN을 필수로 요구하지 않는다. 현재 클라우드는 HF 접근이 차단되어 운영 서버 `tools/list`·검색 성공을 확인하지 못했다. 환경 초안 저장, 실제 네트워크 적용, 새 세션에서 설정 로딩은 서로 다른 단계다.
 
-HF의 `paper.md`는 본문이 없을 때 메타데이터·초록·AI 요약을 대신 반환할 수 있다. 2026-11-18 웹 조회로 `2504.09277`의 제목·초록을 확인한 결과 SynthTRIPs(관광 추천기 평가용 합성 질의 생성 틀)였고 LAG를 정의하지 않았다. 사용자 결정에 따라 LAG는 `2508.05509` Logic-Augmented Generation을 뜻한다([19 문서](19-agent-step2-data-foundation.md)). **두 논문 모두 본문 세부·필수 모델·재현 결과는 미확인**이다. LAG를 RAG로 바꾸거나 일반 도구 루프를 LAG 재현으로 표시하지 않는다. 평가 방법 `synthtrips-evaluation-generation`은 2026-11-18에 규칙 기반 정답과 세션 안에서 쓴 질의로 구현했다([23 문서](23-agent-step3-evaluation-set.md)). 같은 날 사용자 지시로 SynthTRIPs 저자 공식 코드 저장소(레지스트리 출처 `synthtrips-code`, 커밋 `9562f53`)를 읽고 생성 순서, 질의 200자 상한, 정답 이름 금지, 조건 반영 점검, recall·precision 채점을 대조해 맞췄다. 저자 코드는 실행하지 않았고 논문 본문과 Hugging Face 데이터셋은 확인하지 못했으므로 SynthTRIPs 재현이 아니다. 판정 LLM 평가와 사람 평가는 하지 않았다.
+HF의 `paper.md`는 본문이 없을 때 메타데이터·초록·AI 요약을 대신 반환할 수 있다. 2026-11-18 웹 조회로 `2504.09277`의 제목·초록을 확인한 결과 SynthTRIPs(관광 추천기 평가용 합성 질의 생성 틀)였고 LAG를 정의하지 않았다. 사용자 결정에 따라 LAG는 `2508.05509` Logic-Augmented Generation을 뜻한다([19 문서](19-agent-step2-data-foundation.md)). **두 논문 모두 본문 세부·필수 모델·재현 결과는 미확인**이다. LAG를 RAG로 바꾸거나 일반 도구 루프를 LAG 재현으로 표시하지 않는다. 평가 방법 `synthtrips-evaluation-generation`은 2026-11-18에 규칙 기반 정답과 세션 안에서 쓴 질의로 구현했다([23 문서](23-agent-step3-evaluation-set.md)). 같은 날 사용자 지시로 SynthTRIPs 저자 공식 코드 저장소(레지스트리 출처 `synthtrips-code`, 커밋 `9562f53`)를 읽고 생성 순서, 질의 200자 상한, 정답 이름 금지, 조건 반영 점검, recall·precision 채점을 대조해 맞췄다. 저자 코드는 실행하지 않았고 논문 본문과 Hugging Face 데이터셋은 확인하지 못했으므로 SynthTRIPs 재현이 아니다. 실제 Gemini 응답의 수집·정규화·채점을 완료했다. 세션 내 모델 주석은 [24 기준선 채점 문서](24-agent-baseline-scoring.md)의 `in_session_llm`로 기록하며 [집계 보고서](../reports/baseline-gemini-live-20261119.json)의 결과는 잠정 상태다. Langflow는 [구조화 응답 집계](../reports/baseline-langflow-live-20261119.json)를 완료했으며 출력 내용을 사람·모델 주석으로 덮어쓰지 않았다. 별도 외부 판정 모델 API를 실행했다는 뜻은 아니다. Gemini 모델 주석의 사람 24건 검토는 대기 중이며 사람 평가 완료로 표시하지 않는다.
 
 현재 [페르소나 설정](../data/persona-prototypes.json)은 `persona-design-v1`의 8개 설계 후보다. [계산 코드](../scripts/persona_model.py)는 관측된 선호 축과 프로토타입의 거리를 계산한다. PCA 그림과 HTML 탐색기는 설계값을 표시하며 학습된 사용자 분포·군집 성능·심리 확률을 제공하지 않는다. 향후 군집 모델은 별도 버전으로 채택한다.
 
@@ -97,7 +103,7 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 | 도구 왕복 | 읽기 도구 하나의 요청→인자 검사→실행→도구 결과 재입력 | 올바른 도구명·인자·허용 ID 사용·종료 조건 |
 | 제품 적합성 | 같은 설문·장소 스냅샷으로 규칙/Gemini/OpenAI/로컬 후보 비교 | 한국어 해석, 지명 보존, ID·근거·제약, 지연·비용 결과 |
 
-이 문서는 모델 다운로드나 유료 시험을 이미 실행했다는 기록이 아니다. 실제 실행 시에는 당시 사용자 지시와 계정·예산 범위를 따른다. 공식 API의 JSON object 모드, JSON Schema, 도구 호출 형식이 서로 같다고 가정하지 않는다. Ollama Cloud는 조사한 공식 문서에서 structured outputs 미지원으로 구분하므로 로컬 결과를 Cloud에도 적용하지 않는다.
+위 Gemini·Langflow 실측과 초기 smoke는 실제 API 실행 근거이며 모델 다운로드나 다른 후보의 실행 근거로 확대하지 않는다. 추가 실행 시에는 당시 사용자 지시와 계정·예산 범위를 따른다. 공식 API의 JSON object 모드, JSON Schema, 도구 호출 형식이 서로 같다고 가정하지 않는다. Ollama Cloud는 조사한 공식 문서에서 structured outputs 미지원으로 구분하므로 로컬 결과를 Cloud에도 적용하지 않는다.
 
 평가 사례에는 긍정 선호뿐 아니라 “거의 안 걸어요”, 카페 필수/선호 구분, 알 수 없는 접근성, 날짜 충돌, 허용되지 않은 장소 ID, 빈 검색 결과를 포함한다. 모델이 그럴듯한 장소를 만들어 채우거나 필수 제약을 무시하면 유창한 설명과 무관하게 실패로 기록한다. 상세 실험 기준은 [03 평가·로드맵](03-evaluation-and-roadmap.md)을 따른다.
 
@@ -113,7 +119,7 @@ node --use-env-proxy services/jeju-mcp/scripts/huggingface-client.mjs paper 2504
 
 ## 7. 계정·비용·비밀값·개인정보 경계
 
-- **Vertex:** 기존 Google 서비스 계정·프로젝트 범위를 확인한다. 문서의 환경변수 이름만으로 실제 IAM 권한·모델 접근·과금 상태를 판정하지 않는다.
+- **Vertex:** 기존 Gemini와 로컬 Langflow의 실제 추론 성공을 확인했다. 사용한 요청 범위 밖의 IAM 권한·모델 접근·과금 상태까지 검증한 것은 아니며, 기존 Google 서비스 계정·프로젝트 범위를 별도로 관리한다.
 - **OpenAI/Anthropic:** 운영자가 API 프로젝트·자격·과금을 관리한다. 여행자에게 공급자 계정을 만들게 하지 않는다. ChatGPT/Claude 채팅 구독과 API 과금은 별도이며 최신 가격·무료 크레딧은 이번에 검증하지 않았다.
 - **Ollama:** 로컬 실행은 외부 API 구독과 별개다. 장비·전기·저장소·GPU 임대 비용은 남는다. 로컬 전용 운영은 실제 모델의 원격 호스트 여부와 Cloud 비활성화를 함께 확인한다.
 - **키 범위:** 기존 Vercel 호출용 키와 미래 Worker 자격은 이관 전까지 역할을 분리한다. 키·토큰·서비스 계정 원문을 이 JSON, Git, 브라우저, 프롬프트, MCP 출력에 넣지 않는다. HF 공개 연구 조회에는 현재 토큰이 필수 조건이 아니다.
