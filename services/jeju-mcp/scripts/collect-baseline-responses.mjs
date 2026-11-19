@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { collectBaselineCapture } from '../src/baseline-runner.mjs';
 import { validateBaselinePlan } from '../src/baseline-evaluation.mjs';
 import { BASELINE_ADAPTER_VERSION } from '../src/baseline-adapters.mjs';
+import { VALIDATED_BASELINE_ADAPTER_VERSION } from '../src/validated-capture-binding.mjs';
 import { MAX_SOURCE_BYTES } from './import-catalog.mjs';
 import { PERSONA_PATH, THEME_MAP_PATH } from './export-agent-catalog.mjs';
 import { SPEC_PATH } from './build-evaluation-set.mjs';
@@ -17,6 +18,7 @@ const USAGE = `Usage: node scripts/collect-baseline-responses.mjs --execute
   --endpoint <explicit-api-url> --output <.local/capture.json> --telemetry <.local/telemetry.json>
   [--max-cases <1..192>] [--timeout-ms <1..120000>] [--max-response-bytes <1..4194304>]
   [--resume-capture <.local/prior-capture.json> --resume-telemetry <.local/prior-telemetry.json>]
+  [--request-mode <legacy|langflow-v2>] (v2 is Langflow only; all structured inputs are preflighted)
   [--continue-on-model-mismatch] (Gemini only: preserve fallback failures and attempt the next case)
   Langflow also requires --output-index <number> --component-id <final-output-node-id>.
 Default: one smoke case, 60-second timeout, sequential execution, stop on first failure, no retry.
@@ -27,7 +29,7 @@ Each attempted response is checkpointed to the same private files before the nex
 Credentials: LANGFLOW_API_KEY for Langflow; optional BASELINE_APP_BEARER_TOKEN for the Gemini app.
 GEMINI_API_KEY must be configured on the Gemini app/Langflow server, not sent to this endpoint by the collector.`;
 const VALUE_OPTIONS = new Set(['catalog', 'set', 'plan', 'system', 'model', 'prompt-version', 'tool-version', 'endpoint',
-  'output', 'telemetry', 'max-cases', 'timeout-ms', 'max-response-bytes', 'output-index', 'component-id', 'resume-capture', 'resume-telemetry']);
+  'output', 'telemetry', 'max-cases', 'timeout-ms', 'max-response-bytes', 'output-index', 'component-id', 'resume-capture', 'resume-telemetry', 'request-mode']);
 const FLAG_OPTIONS = new Set(['execute', 'continue-on-model-mismatch']);
 const REQUIRED = ['catalog', 'set', 'plan', 'system', 'model', 'prompt-version', 'tool-version', 'endpoint', 'output', 'telemetry'];
 const boundedInteger = (value, min, max, label) => {
@@ -55,6 +57,8 @@ export function parseArguments(args) {
   }
   if (!['gemini', 'langflow'].includes(options.system)) throw new Error('--system must be gemini or langflow.');
   if (options['continue-on-model-mismatch'] && options.system !== 'gemini') throw new Error('--continue-on-model-mismatch is only supported for Gemini.');
+  options.requestMode = options['request-mode'] ?? 'legacy';
+  if (!['legacy', 'langflow-v2'].includes(options.requestMode) || (options.requestMode === 'langflow-v2' && options.system !== 'langflow')) throw new Error('--request-mode must be legacy or Langflow-only langflow-v2.');
   options.maxCases = options['max-cases'] === undefined ? 1 : boundedInteger(options['max-cases'], 1, 192, '--max-cases');
   options.timeoutMs = options['timeout-ms'] === undefined ? 60_000 : boundedInteger(options['timeout-ms'], 1, 120_000, '--timeout-ms');
   options.maxResponseBytes = options['max-response-bytes'] === undefined ? 1024 * 1024 : boundedInteger(options['max-response-bytes'], 1, 4 * 1024 * 1024, '--max-response-bytes');
@@ -186,7 +190,7 @@ export async function main(args = process.argv.slice(2), { paths = {}, env = pro
     if (!env.LANGFLOW_API_KEY) throw new Error('LANGFLOW_API_KEY is required for the selected Langflow server.');
     headers['x-api-key'] = env.LANGFLOW_API_KEY;
   } else if (env.BASELINE_APP_BEARER_TOKEN) headers.authorization = `Bearer ${env.BASELINE_APP_BEARER_TOKEN}`;
-  const system = { id: options.system, modelId: options.model, promptVersion: options['prompt-version'], toolVersion: options['tool-version'], adapterVersion: BASELINE_ADAPTER_VERSION };
+  const system = { id: options.system, modelId: options.model, promptVersion: options['prompt-version'], toolVersion: options['tool-version'], adapterVersion: options.requestMode === 'langflow-v2' ? VALIDATED_BASELINE_ADAPTER_VERSION : BASELINE_ADAPTER_VERSION };
   // Reserve both files now, so a late permission/collision error cannot discard a completed paid call.
   const reserved = await reserveOutputs(outputs);
   try {
@@ -194,7 +198,7 @@ export async function main(args = process.argv.slice(2), { paths = {}, env = pro
       outputSelector: options.outputSelector, maxCases: options.maxCases, timeoutMs: options.timeoutMs,
       maxResponseBytes: options.maxResponseBytes, maxTotalResponseBytes: 16 * 1024 * 1024,
       stopOnError: true, continueOnModelMismatch: options['continue-on-model-mismatch'] === true,
-      signal, fetchImpl, resumeCapture, resumeTelemetry,
+      signal, fetchImpl, resumeCapture, resumeTelemetry, requestMode: options.requestMode, catalog,
       onProgress: ({ attempted, total, outcome }) => log(JSON.stringify({ status: 'collecting', attempted, planned: total, outcome })),
       onCheckpoint: (snapshot) => persistSnapshot(reserved, snapshot),
     });

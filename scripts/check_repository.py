@@ -832,6 +832,8 @@ def check_public_baseline_shape(value, shape):
                 "External aggregate hash is invalid or contains free text")
     elif shape == "count":
         require(isinstance(value, int) and not isinstance(value, bool) and value >= 0, "External aggregate count is invalid")
+    elif shape == "boolean":
+        require(isinstance(value, bool), "External aggregate boolean is invalid")
     else:
         require(shape in {"ratio", "nullable_ratio", "nullable_measurement"}, "Unknown public aggregate schema rule")
         require((value is None and shape.startswith("nullable_")) or finite(value, 0, 1 if "ratio" in shape else None),
@@ -911,6 +913,82 @@ def check_external_baseline_summaries():
                 "Published provider comparisons must use the same evaluation plan and data binding")
 
 
+def check_v2_evaluation_results():
+    """New v2 results are separate from historical baselines and contain aggregate evidence only."""
+    summary_path = ROOT / "reports/baseline-langflow-v2-live-20261119.json"
+    audit_path = ROOT / "reports/agent-v2-runtime-audit-20261119.json"
+    if not summary_path.exists() and not audit_path.exists():
+        return
+    require(summary_path.exists() and audit_path.exists(), "V2 scores and runtime audit must be published together")
+    require(max(summary_path.stat().st_size, audit_path.stat().st_size) <= 128 * 1024,
+            "V2 aggregates must not contain raw requests, responses or traces")
+    report = read_json(summary_path)
+    evaluation = read_json(ROOT / "reports/evaluation-set-summary.json")
+    spec = read_json(ROOT / "data/evaluation-spec.json")
+    validate_external_baseline_summary(report, "langflow", evaluation, spec["metrics"]["recallK"])
+    previous = read_json(ROOT / "reports/baseline-langflow-live-20261119.json")
+    require(report["planSha256"] == previous["planSha256"] and report["binding"] == previous["binding"]
+            and report["provenanceSha256"] != previous["provenanceSha256"],
+            "V2 evaluation must preserve the plan and identify its distinct configuration")
+    require(len(report["groups"]) == 1 and report["groups"][0]["variant"] == "template"
+            and report["annotationReview"]["humanReviewed"] == report["annotationReview"]["modelReviewed"]
+            == report["annotationReview"]["unannotated"] == 0,
+            "V2 evaluation only imports unchanged structured template responses")
+    audit = read_json(audit_path)
+    shape = {
+        "schemaVersion": ("1.0",), "kind": ("jeju-v2-runtime-audit",), "collectedAt": "instant",
+        "flow": {"artifactCanonicalSha256": "hash", "artifactByteSha256": "hash", "registeredDataMatchesArtifact": "boolean"},
+        "catalog": {"schemaVersion": ("2.0",), "placeCount": "count",
+                    "dataVersion": ("sha256:d4e6d1820ec134b91f6b8a3d195763471c0bdf7194aa206a0df4b294d44c6a07",)},
+        "runtime": {"langflowVersion": ("1.13.3",), "googleAdapterVersion": ("4.1.3",)},
+        "sessions": {key: "count" for key in ("attempted", "traced", "missingTrace", "multipleTraces", "unfinishedTraces")},
+        "model": {"expectedModel": ("gemini-3.8-flash",),
+                  **{key: "count" for key in ("calls", "ok", "error", "otherStatus", "expectedModelCalls", "otherModelCalls",
+                                             "missingModelCalls", "missingProviderCalls", "inputUsageMissingCalls", "outputUsageMissingCalls")},
+                  "inputTokens": "nullable_measurement", "outputTokens": "nullable_measurement"},
+        "tools": {**{key: "count" for key in ("calls", "ok", "error", "otherStatus", "otherToolCalls")},
+                  "byName": {key: "count" for key in ("places.search", "places.get", "constraints.check")}},
+        "storedMessages": {key: "count" for key in ("user", "finalGate", "sanitizedAgentError", "rawAgent", "otherMachine", "other")},
+        "activeJobs": "count", "costUsd": "nullable_measurement",
+    }
+    check_public_baseline_shape(audit, shape)
+    artifact = ROOT / "services/langflow/jeju-tour-agent-vertex-v2.flow.json"
+    canonical = json.dumps(read_json(artifact), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    require(audit["flow"]["artifactCanonicalSha256"] == hashlib.sha256(canonical).hexdigest()
+            and audit["flow"]["artifactByteSha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
+            and audit["flow"]["registeredDataMatchesArtifact"] is True and audit["catalog"]["placeCount"] == 981,
+            "Runtime audit must name the reviewed flow and application catalog")
+    group, sessions = report["groups"][0], audit["sessions"]
+    require(sessions["attempted"] == group["plannedCases"] - group["errors"]["not_executed"]
+            and sessions["traced"] + sessions["missingTrace"] == sessions["attempted"]
+            and sessions["multipleTraces"] <= sessions["traced"]
+            and (sessions["multipleTraces"] > 0 or sessions["unfinishedTraces"] <= sessions["traced"]),
+            "Runtime trace coverage must not count unexecuted cases")
+    model, tools = audit["model"], audit["tools"]
+    require(model["ok"] + model["error"] + model["otherStatus"] == model["calls"]
+            and model["expectedModelCalls"] + model["otherModelCalls"] + model["missingModelCalls"] == model["calls"]
+            and model["missingProviderCalls"] <= model["calls"], "Runtime model span counts are inconsistent")
+    for token_key, missing_key in (("inputTokens", "inputUsageMissingCalls"), ("outputTokens", "outputUsageMissingCalls")):
+        require(model[missing_key] <= model["calls"]
+                and (model[token_key] is None) == (model[missing_key] == model["calls"]),
+                "Missing token observations must not become measured zero")
+    require(tools["ok"] + tools["error"] + tools["otherStatus"] == tools["calls"]
+            and sum(tools["byName"].values()) + tools["otherToolCalls"] == tools["calls"],
+            "Runtime tool span counts are inconsistent")
+    require(audit["costUsd"] is None and (group["metrics"] is None
+            or group["metrics"]["costUsd"] == {"measuredItems": 0, "total": None}),
+            "Token usage and span counts must not be presented as measured billing")
+    registry = read_json(ROOT / "data/ai-agent-models.json").get("validatedV2Evaluation")
+    if registry is not None:
+        require(all(registry[key] == group[key] for key in
+                    ("plannedCases", "successfulResponses", "failedCases", "errors", "actionAccuracyAllCases"))
+                and registry["attemptedCases"] == sessions["attempted"]
+                and all(registry[key] == audit[key] for key in ("catalog", "storedMessages", "activeJobs", "costUsd"))
+                and registry["toolCalls"] == tools and registry["modelIdentity"]["recordedCalls"] == model["calls"]
+                and registry["comparisonWithHistoricalV1"]["candidateContractAligned"] is False,
+                "V2 registry must preserve the measured counts and remaining candidate-contract mismatch")
+
+
 def main():
     checks = [
         ("JSON syntax", lambda: [read_json(path) for path in sorted((ROOT / "data").glob("*.json"))]),
@@ -924,6 +1002,7 @@ def main():
         ("reviewed Vertex flow and credential references", check_vertex_flow),
         ("validated Vertex graph, credentials and tested source parity", check_validated_vertex_flow),
         ("external baseline aggregates when present", check_external_baseline_summaries),
+        ("v2 evaluation aggregates and runtime audit when present", check_v2_evaluation_results),
         ("publication boundaries and archives", check_deliverables),
     ]
     failed = False

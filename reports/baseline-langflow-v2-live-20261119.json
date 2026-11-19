@@ -1,0 +1,114 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-baseline-summary",
+  "mode": "external",
+  "resultType": "imported_responses_not_independently_verified_inference",
+  "system": "langflow",
+  "planSha256": "d357ff6f38f32f711010e67674eb23a37aa69cc622418b075f4af7e36fc9c276",
+  "binding": {
+    "goldSha256": "b982194547edc386b1bfb5d9588cbe607dc99fbf960072b9b20221904f21217d",
+    "queriesSha256": null,
+    "specSha256": "508c71ec17bfdf2395e30e479cb330128c0dbe6e7fc084edf936963721ce04f2",
+    "catalogSha256": "adbbe3fd09025873e75cb9e5d9d663a7300db2a27e3d734433cbdddbe6531ca9",
+    "personasSha256": "5255d010b8f6e7b95e21211004e0d7c5339a7a042355d53870d62ce377eacbe5",
+    "themeMapSha256": "eaf3e91ab4a9e2a40340771a533d9c930d2ce566b265cfa52f704ce341cd65b0"
+  },
+  "provenanceSha256": "5afc1db8ad12c80ac3eb908ec1509b0d705a390e989c6c6f6ac56dbd3eb0b6a6",
+  "runSha256": "aef04c70d3bfe2e2bc1c358c44c23e41f18a75b70a2ffa520e0495d454738454",
+  "startedAt": "2026-11-19T02:23:42.329Z",
+  "completedAt": "2026-11-19T03:00:32.441Z",
+  "wording": {
+    "templateItems": 96,
+    "writtenItems": 0,
+    "identicalWrittenItems": 0,
+    "distinctWrittenItems": 0
+  },
+  "groups": [
+    {
+      "system": "langflow",
+      "variant": "template",
+      "plannedCases": 96,
+      "successfulResponses": 73,
+      "failedCases": 23,
+      "completionRate": 0.7604166666666666,
+      "errors": {
+        "timeout": 0,
+        "transport_error": 9,
+        "invalid_output": 14,
+        "not_executed": 0
+      },
+      "actionAccuracyAllCases": 0.6979166666666666,
+      "unexpectedImpossible": {
+        "count": 0,
+        "applicableCases": 88,
+        "measuredCases": 65,
+        "rate": 0
+      },
+      "metrics": {
+        "items": 73,
+        "actionAccuracy": 0.9178082191780822,
+        "disallowedIds": {
+          "returnedIds": 295,
+          "rate": 0.023728813559322035,
+          "itemsWithViolation": 3,
+          "byReason": {
+            "notInCatalog": 0,
+            "outsideCandidates": 5,
+            "userExcluded": 0,
+            "routeForMinimalWalk": 2,
+            "verifiedFail": 0
+          }
+        },
+        "hardRequirementMisjudgement": {
+          "applicableItems": 17,
+          "passOnUnknownItems": 0,
+          "failOnUnknownItems": 0,
+          "contradictsVerifiedItems": 0,
+          "rate": 0
+        },
+        "recallAtK": {
+          "k": 5,
+          "scoredItems": 58,
+          "mean": 0.9563218390804596
+        },
+        "precisionAtK": {
+          "k": 5,
+          "scoredItems": 58,
+          "mean": 0.914655172413793
+        },
+        "personaThemeMatch": {
+          "scoredItems": 58,
+          "mean": 0.6631427951786558
+        },
+        "confirmationNotice": {
+          "requiredItems": 31,
+          "given": 17,
+          "rate": 0.5483870967741935,
+          "topicCoverage": {
+            "scoredItems": 31,
+            "mean": 0.5161290322580645
+          }
+        },
+        "latencyMs": {
+          "measuredItems": 73,
+          "p50": 11885.991707000001,
+          "p95": 50100.478880999995
+        },
+        "costUsd": {
+          "measuredItems": 0,
+          "total": null
+        }
+      }
+    }
+  ],
+  "securityEvaluation": "not_executed",
+  "annotationReview": {
+    "structured": 73,
+    "humanReviewed": 0,
+    "modelReviewed": 0,
+    "unannotated": 0,
+    "noResponse": 23,
+    "status": "no_model_annotations",
+    "humanSpotCheck": "not_applicable"
+  }
+}
