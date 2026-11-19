@@ -2,6 +2,8 @@
 import { canonicalSha256 } from './evaluation-rng.mjs';
 import { EvaluationSetError } from './evaluation-set.mjs';
 import { validateResponse } from './evaluation-scoring.mjs';
+import { z } from 'zod';
+import { VALIDATED_BASELINE_ADAPTER_VERSION } from './validated-capture-binding.mjs';
 
 export const BASELINE_ADAPTER_VERSION = '1.0.0';
 export const MANUAL_REVIEW_RUBRIC_VERSION = 'manual-v1';
@@ -115,6 +117,52 @@ function selectedLangflowMessage(raw, outputSelector) {
   ensure(isRecord(message) && message.sender === 'Machine' && typeof message.text === 'string',
     'selected Langflow output must contain a Machine message with text');
   return message.text;
+}
+
+const v2Id = z.string().min(1).max(160).refine((value) => value === value.trim());
+const validatedResponseSchema = z.object({
+  schemaVersion: z.literal('1.0'), requestId: v2Id,
+  action: z.enum(['recommend', 'cannot_confirm', 'ask_clarification', 'impossible']),
+  placeIds: z.array(v2Id).max(50),
+  requirementClaims: z.array(z.object({ placeId: v2Id,
+    requirement: z.enum(['indoor_required', 'open_at', 'wheelchair', 'budget_cap']),
+    verdict: z.enum(['pass', 'fail', 'unknown']),
+  }).strict()).max(200),
+  confirmationNotice: z.boolean(),
+  noticeTopics: z.array(z.enum(['indoor_unverified', 'hours_unverified', 'wheelchair_unverified', 'cost_unknown'])).max(4),
+}).strict();
+
+/** Only the selected final JSON is eligible; blocked prose is a failed response, never a reviewable replacement. */
+export function validateValidatedLangflowResponse({ raw, outputSelector, requestId } = {}) {
+  ensure(text(requestId), 'validated Langflow import requires the original runtime requestId');
+  const reply = selectedLangflowMessage(raw, outputSelector);
+  const message = raw.outputs[outputSelector.outputIndex].outputs.find((entry) => entry.component_id === outputSelector.componentId).results.message;
+  ensure(message.properties?.source?.id === 'JejuFinalValidation-v2'
+    && message.properties.source.source === 'Jeju Final Validation', 'validated Langflow output must identify the final validation component');
+  let parsed;
+  try { parsed = JSON.parse(reply); } catch { throw new EvaluationSetError('validated Langflow final output is not exact JSON'); }
+  if (isRecord(parsed) && Object.keys(parsed).length === 3 && parsed.status === 'blocked'
+    && ['RECOMMENDATION_BLOCKED', 'VALIDATION_FAILED'].includes(parsed.code) && typeof parsed.message === 'string') {
+    const error = new EvaluationSetError('validated Langflow final gate did not accept a response');
+    error.code = parsed.code;
+    throw error;
+  }
+  const result = validatedResponseSchema.safeParse(parsed);
+  ensure(result.success, 'validated Langflow final output violates its strict schema');
+  ensure(result.data.requestId === requestId, 'validated Langflow final output has a different requestId');
+  return result.data;
+}
+
+/** Mechanical conversion only: runtime schema/identity become an audit; claims and IDs are not repaired. */
+export function adaptValidatedLangflowResponse({ itemId, raw, outputSelector, review, measurements, requestId } = {}) {
+  ensure(review === undefined, 'validated Langflow output cannot carry a review override');
+  const annotation = validateValidatedLangflowResponse({ raw, outputSelector, requestId });
+  return {
+    response: normalizeResponse(itemId, annotation, measurements),
+    normalization: { adapter: 'langflow', adapterVersion: VALIDATED_BASELINE_ADAPTER_VERSION,
+      mode: 'structured', rawOutputHash: baselineRawOutputHash(raw), outputSelector: { ...outputSelector },
+      review: null, requestMode: 'langflow-v2', runtimeRequestId: requestId },
+  };
 }
 
 /**

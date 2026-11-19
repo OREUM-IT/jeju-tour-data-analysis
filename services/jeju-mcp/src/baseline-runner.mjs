@@ -3,6 +3,8 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSha256 } from './evaluation-rng.mjs';
 import { buildGeminiRequest, buildLangflowRequest } from './baseline-request-adapters.mjs';
+import { validateValidatedLangflowResponse } from './baseline-adapters.mjs';
+import { prepareValidatedCollection, buildBoundValidatedRequest, validateValidatedCapture, VALIDATED_BASELINE_ADAPTER_VERSION } from './validated-capture-binding.mjs';
 
 export const BASELINE_RUNNER_VERSION = '1.0.0';
 const MAX_CASES = 192;
@@ -125,7 +127,7 @@ async function limitedJson(response, limit, signal, allowNonJson = false) {
   }
 }
 
-function unwrapResponse(raw, system, outputSelector) {
+function unwrapResponse(raw, system, outputSelector, runtimeRequest) {
   if (system.id === 'gemini') {
     if (!isRecord(raw) || raw.success !== true || !isRecord(raw.data)) throw new CollectionFailure('invalid_output', 'invalid_response_envelope', { raw });
     const value = raw.data;
@@ -143,14 +145,22 @@ function unwrapResponse(raw, system, outputSelector) {
   }
   // Older captures may omit model metadata; absence is not verification. A reported model must match exactly.
   const reportedModel = selected[0].results.message.properties?.source?.source;
-  if (reportedModel !== undefined && reportedModel !== system.modelId) {
+  if (runtimeRequest === undefined && reportedModel !== undefined && reportedModel !== system.modelId) {
     throw new CollectionFailure('invalid_output', 'model_or_engine_mismatch', { raw });
+  }
+  if (runtimeRequest !== undefined) {
+    try { validateValidatedLangflowResponse({ raw, outputSelector, requestId: runtimeRequest.requestId }); }
+    catch (error) {
+      const reason = error.code === 'RECOMMENDATION_BLOCKED' ? 'final_validation_blocked'
+        : error.code === 'VALIDATION_FAILED' ? 'final_validation_failed' : 'invalid_validated_output';
+      throw new CollectionFailure('invalid_output', reason, { raw });
+    }
   }
   return raw;
 }
 
 /** Validate a full prior capture against its telemetry; old events can bind a continuation, not prove old inference. */
-function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector }) {
+function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector, requestMode, catalog, requestBinding }) {
   ensure((resumeCapture === undefined) === (resumeTelemetry === undefined), 'resumeCapture and resumeTelemetry must be supplied together');
   if (resumeCapture === undefined) return null;
   const capture = resumeCapture;
@@ -165,6 +175,10 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
     && telemetry.endpointSha256 === canonicalSha256(url.href) && telemetry.startedAt === capture.startedAt && telemetry.completedAt === capture.completedAt,
   'resume telemetry provenance, endpoint or timestamps mismatch');
   ensure(Array.isArray(capture.records) && capture.records.length === plan.cases.length && Array.isArray(telemetry.events), 'resume requires full record coverage and event telemetry');
+  ensure(validateValidatedCapture(plan, capture, catalog) === requestMode, 'resume request mode changed');
+  if (requestMode === 'langflow-v2') {
+    ensure(telemetry.requestMode === requestMode && canonicalSha256(telemetry.requestBinding) === canonicalSha256(requestBinding), 'resume telemetry request provenance changed');
+  } else ensure(telemetry.requestMode === undefined && telemetry.requestBinding === undefined, 'legacy telemetry cannot claim v2 request provenance');
   const attemptedRecords = new Map();
   for (let index = 0; index < plan.cases.length; index += 1) {
     const entry = plan.cases[index];
@@ -174,16 +188,16 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
     const hasRaw = record.raw !== undefined;
     ensure(hasRaw !== (record.error !== undefined), 'resume record needs raw output or an explicit error');
     if (hasRaw) {
-      ensure(Object.keys(record).every((key) => ['caseId', 'requestSha256', 'raw', 'measurements', 'outputSelector'].includes(key))
+      ensure(Object.keys(record).every((key) => ['caseId', 'requestSha256', 'raw', 'measurements', 'outputSelector', 'runtimeRequest'].includes(key))
         && isRecord(record.measurements) && measurement(record.measurements.latencyMs) && record.measurements.costUsd === null,
       'resume raw record needs original observed measurements only');
       if (system.id === 'langflow') ensure(canonicalSha256(record.outputSelector) === canonicalSha256(outputSelector), 'resume output selection changed');
       else ensure(record.outputSelector === undefined, 'resume Gemini record cannot have an output selector');
-      try { unwrapResponse(system.id === 'gemini' ? { success: true, data: record.raw } : record.raw, system, outputSelector); }
+      try { unwrapResponse(system.id === 'gemini' ? { success: true, data: record.raw } : record.raw, system, outputSelector, record.runtimeRequest); }
       catch { throw new Error('Invalid baseline collection: resume raw record does not match the declared baseline'); }
       attemptedRecords.set(record.caseId, record);
     } else {
-      ensure(Object.keys(record).every((key) => ['caseId', 'requestSha256', 'error'].includes(key)) && isRecord(record.error)
+      ensure(Object.keys(record).every((key) => ['caseId', 'requestSha256', 'error', 'runtimeRequest'].includes(key)) && isRecord(record.error)
         && Object.keys(record.error).length === 1 && ['timeout', 'transport_error', 'invalid_output', 'not_executed'].includes(record.error.code),
       'resume error record must preserve its original failure code');
       if (record.error.code !== 'not_executed') attemptedRecords.set(record.caseId, record);
@@ -192,7 +206,8 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
   const reasons = {
     timeout: ['timeout'], transport_error: ['aborted', 'transport_failure', 'redirect_blocked', 'http_error', 'collector_interrupted'],
     invalid_output: ['response_too_large', 'missing_response_body', 'invalid_utf8', 'invalid_json', 'invalid_response_envelope',
-      'model_or_engine_mismatch', 'invalid_assistant_reply', 'missing_selected_machine_output'],
+      'model_or_engine_mismatch', 'invalid_assistant_reply', 'missing_selected_machine_output', 'invalid_validated_output',
+      'final_validation_blocked', 'final_validation_failed'],
   };
   let bytes = 0;
   ensure(telemetry.resume === undefined || (isRecord(telemetry.resume)
@@ -206,6 +221,9 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
     const record = attemptedRecords.get(event?.caseId);
     ensure(isRecord(event) && record !== undefined && !seen.has(event.caseId), 'resume needs exactly one event for every attempted record');
     seen.add(event.caseId);
+    if (requestMode === 'langflow-v2') ensure(event.sessionId === record.runtimeRequest.requestId
+      && event.runtimeRequestSha256 === canonicalSha256(record.runtimeRequest), 'resume event runtime request/session binding changed');
+    else ensure(event.sessionId === undefined && event.runtimeRequestSha256 === undefined, 'legacy event cannot claim a v2 runtime request');
     const interrupted = event.outcome === 'collector_interrupted';
     if (interrupted) {
       // Operator recovery from independently retained server evidence. An absent client observation is never zero latency.
@@ -264,15 +282,20 @@ export async function collectBaselineCapture({
   maxCases = plan?.cases?.length, timeoutMs = 60_000, maxResponseBytes = 1024 * 1024,
   maxTotalResponseBytes = 16 * 1024 * 1024, stopOnError = true, continueOnModelMismatch = false,
   signal, fetchImpl = globalThis.fetch, onProgress, onCheckpoint,
-  resumeCapture, resumeTelemetry,
+  resumeCapture, resumeTelemetry, requestMode = 'legacy', catalog,
 } = {}) {
   validateOptions({ plan, system, maxCases, timeoutMs, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, fetchImpl, onProgress, onCheckpoint, outputSelector });
   const url = endpointUrl(endpoint, system.id);
   const selectedHeaders = requestHeaders(headers);
-  const prior = priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector });
-  // Fail before contacting any endpoint if a request would truncate or disclose fields outside the shared contract.
-  const requests = plan.cases.map((entry) => system.id === 'gemini' ? buildGeminiRequest(entry.request)
-    : buildLangflowRequest(entry.request, { sessionId: `baseline-${randomUUID()}` }));
+  ensure(['legacy', 'langflow-v2'].includes(requestMode) && (requestMode !== 'langflow-v2' || system.id === 'langflow'), 'requestMode must be legacy or Langflow-only langflow-v2');
+  ensure((requestMode === 'langflow-v2') === (system.adapterVersion === VALIDATED_BASELINE_ADAPTER_VERSION), 'request mode and response adapter version disagree');
+  // Parse ALL planned inputs before any endpoint call, including cases beyond this invocation's limit.
+  const requestBinding = requestMode === 'langflow-v2' ? prepareValidatedCollection(plan, catalog) : undefined;
+  const prior = priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector, requestMode, catalog, requestBinding });
+  const prepared = plan.cases.map((entry) => requestMode === 'langflow-v2'
+    ? buildBoundValidatedRequest(entry, catalog, `baseline-${randomUUID()}`)
+    : { body: system.id === 'gemini' ? buildGeminiRequest(entry.request) : buildLangflowRequest(entry.request, { sessionId: `baseline-${randomUUID()}` }) });
+  const requests = prepared.map((entry) => entry.body);
   const startedAt = prior?.startedAt ?? new Date().toISOString();
   const records = prior?.records ?? plan.cases.map((entry) => ({ caseId: entry.caseId, requestSha256: entry.requestSha256, error: { code: 'not_executed' } }));
   const events = prior?.events ?? [];
@@ -284,12 +307,13 @@ export async function collectBaselineCapture({
     const completedAt = new Date().toISOString();
     return structuredClone({
       capture: { schemaVersion: '1.0', kind: 'jeju-baseline-capture', planSha256: plan.planSha256,
-        system, startedAt, completedAt, records },
+        system, startedAt, completedAt, records, ...(requestBinding === undefined ? {} : { requestBinding }) },
       telemetry: { schemaVersion: '1.0', kind: 'jeju-baseline-collection-telemetry', runnerVersion: BASELINE_RUNNER_VERSION,
         planSha256: plan.planSha256, system: system.id, provenanceSha256: canonicalSha256(system), endpointSha256: canonicalSha256(url.href),
         startedAt, completedAt, plannedCases: plan.cases.length, attemptedCases: attempted, notExecutedCases: plan.cases.length - attempted,
         newAttemptedCases: newAttempted, ...(prior === null ? {} : { resume: prior.resume }),
-        totalResponseBytes: totalBytes, stoppedReason, timeoutMs, maxResponseBytes, maxTotalResponseBytes, maxCases, stopOnError, continueOnModelMismatch, events },
+        totalResponseBytes: totalBytes, stoppedReason, timeoutMs, maxResponseBytes, maxTotalResponseBytes, maxCases, stopOnError, continueOnModelMismatch,
+        ...(requestBinding === undefined ? {} : { requestMode, requestBinding }), events },
     });
   };
   for (let index = 0; index < plan.cases.length; index += 1) {
@@ -300,6 +324,7 @@ export async function collectBaselineCapture({
       stoppedReason ??= signal?.aborted ? 'aborted' : totalBytes >= maxTotalResponseBytes ? 'total_response_budget' : 'case_limit';
       continue;
     }
+    if (prepared[index].runtimeRequest !== undefined) identity.runtimeRequest = prepared[index].runtimeRequest;
     const controller = new AbortController();
     const userAbort = () => controller.abort('aborted');
     signal?.addEventListener('abort', userAbort, { once: true });
@@ -325,7 +350,7 @@ export async function collectBaselineCapture({
       const parsed = await limitedJson(response, Math.min(maxResponseBytes, maxTotalResponseBytes - totalBytes), controller.signal, !response.ok);
       responseBytes = parsed.responseBytes;
       if (!response.ok) throw new CollectionFailure('transport_error', 'http_error', { raw: parsed.raw });
-      const raw = unwrapResponse(parsed.raw, system, outputSelector);
+      const raw = unwrapResponse(parsed.raw, system, outputSelector, identity.runtimeRequest);
       records[index] = { ...identity, raw, measurements: { latencyMs: Math.max(0, performance.now() - started), costUsd: null },
         ...(system.id === 'langflow' ? { outputSelector: { ...outputSelector } } : {}) };
     } catch (error) {
@@ -346,6 +371,7 @@ export async function collectBaselineCapture({
     totalBytes += responseBytes;
     events.push({ caseId: entry.caseId, requestSha256: entry.requestSha256, captureRecordSha256: canonicalSha256(records[index]),
       outcome, httpStatus: status, responseBytes, latencyMs: Math.max(0, performance.now() - started),
+      ...(identity.runtimeRequest === undefined ? {} : { sessionId: identity.runtimeRequest.requestId, runtimeRequestSha256: canonicalSha256(identity.runtimeRequest) }),
       ...(rejectedRaw === undefined ? {} : { raw: rejectedRaw }) });
     try {
       const result = onProgress?.({ attempted, total: plan.cases.length, outcome });
