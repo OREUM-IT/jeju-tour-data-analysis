@@ -1,0 +1,63 @@
+name: Private Agent Gateway integration
+on:
+  push:
+    branches: [main, 'codex/**']
+    paths: ['services/agent-gateway/**', 'services/langflow/gateway_components.py', 'services/jeju-mcp/**', 'deploy/**', '.github/workflows/agent-gateway-docker.yml']
+  pull_request:
+    paths: ['services/agent-gateway/**', 'services/langflow/gateway_components.py', 'services/jeju-mcp/**', 'deploy/**', '.github/workflows/agent-gateway-docker.yml']
+permissions:
+  contents: read
+concurrency:
+  group: agent-gateway-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  private-gateway:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COMPOSE_PROJECT_NAME: oreumit-gateway-ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with: {node-version: '24.22.1'}
+      - name: Install locked MCP dependencies for real scope tests
+        run: npm --prefix services/jeju-mcp ci --ignore-scripts --no-audit --no-fund
+      - name: Verify auth, replay, scope policy, response validation and secret preservation
+        run: |
+          node --test services/agent-gateway/*.test.mjs services/jeju-mcp/tests/gateway-scopes.test.mjs
+          python3 -m unittest discover -s deploy/tests
+          python3 -m unittest discover -s deploy/tunnel -p 'test_*.py'
+      - name: Prepare private credentials and fictional catalog
+        run: |
+          python3 deploy/prepare.py
+          python3 deploy/prepare-langflow.py
+          node deploy/tests/make-ci-catalog.mjs
+          python3 deploy/prepare-gateway.py --init
+      - name: Start official Langflow and scoped MCP with dedicated database
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml up -d --build --wait --wait-timeout 300 jeju-mcp langflow-db langflow
+      - name: Provision separate fixed Gateway flow and capture its key privately
+        run: |
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml exec -T -e CI=true langflow python - < deploy/tests/seed-gateway-ci.py
+          python3 deploy/prepare-gateway.py --provision
+          python3 deploy/prepare-gateway.py --provision
+      - name: Start private Gateway and check authentication and upstream readiness
+        run: |
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml up -d --build --no-deps --wait --wait-timeout 90 agent-gateway
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml exec -T agent-gateway node /app/check.mjs --internal
+      - name: Test real scoped Langflow components without model inference
+        run: python3 deploy/tests/run-gateway-runtime-check.py
+      - name: Verify Gateway restart preserves private state and pinned flow
+        run: |
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml restart agent-gateway
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml up -d --no-deps --wait --wait-timeout 60 agent-gateway
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml exec -T agent-gateway node /app/check.mjs --internal
+      - name: Record verification boundary
+        if: always()
+        run: echo 'Fictional catalog, no Google inference, no Cloudflare account or tunnel changes. AWS and external Access/Tunnel acceptance require separate execution.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Redacted disposable failure diagnostics
+        if: failure()
+        run: python3 deploy/tests/ci-diagnostics.py
+      - name: Remove disposable CI project only
+        if: always()
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml down --volumes

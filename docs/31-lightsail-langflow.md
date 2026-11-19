@@ -1,5 +1,7 @@
 # AWS Langflow 내부 연결과 기존 Vertex 자격증명 등록
 
+후속 Gateway 구현과 실제 연결 절차는 [32 문서](32-agent-gateway-tunnel.md)를 따른다. 아래 AWS Vertex 단건 성공 기록은 유지하며 Gateway·Tunnel 배포 성공과 구분한다.
+
 2026-11-19 한국 시간. 사용자가 AWS `Ubuntu-1`의 실제 981곳 MCP·Langflow·전용 DB·Vertex 자격증명 등록에 이어 **`143b705` 적용 후 Vertex 단건 실응답 성공** 출력을 제공했다. Langflow는 41초에 Healthy가 됐고 `flowStatus:upgraded-vertex-client`, `vertexConfigured:true`다. 실제 요청은 HTTP 200·14.5초, 모델 호출 성공 4회·MCP 호출 성공 3회, 최종 검증 수락과 임시 실행 키 폐기를 확인했다. 후보 3곳은 미검증 실내 조건에 대해 `cannot_confirm`·`indoor_unverified`로 정상 안내했다. 단건 연결·검증 성공 범위이며 `productionReady:false`다. 다음은 **제한 Gateway 구현**이며 코드 구현·Access/Tunnel·Vercel 연결은 후속 단계다. AWS 결과는 사용자 제공 출력에 근거하며 작성자의 직접 원격 실행 결과가 아니다.
 
 ## 1. 추가되는 구성

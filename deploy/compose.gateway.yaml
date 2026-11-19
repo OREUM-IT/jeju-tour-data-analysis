@@ -1,0 +1,49 @@
+# Private Gateway overlay after catalog + Langflow. Host loopback only.
+services:
+  jeju-mcp:
+    env_file:
+      - .local/mcp.env
+      - .local/gateway-control.env
+  langflow:
+    networks: [mcp_private, langflow_db_private, langflow_egress, gateway_private]
+    volumes:
+      - type: bind
+        source: ./langflow/gateway-bootstrap.py
+        target: /opt/oreumit/gateway-bootstrap.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ../services/langflow/gateway_components.py
+        target: /opt/oreumit/gateway_components.py
+        read_only: true
+        bind: {create_host_path: false}
+  agent-gateway:
+    build:
+      context: ../services/agent-gateway
+    env_file: .local/gateway.env
+    ports: ["127.0.0.1:8790:8790"]
+    networks: [gateway_private, mcp_private, gateway_egress]
+    volumes: [gateway_state:/app/state]
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8790/healthz',{signal:AbortSignal.timeout(2000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+networks:
+  gateway_private: {internal: true}
+  gateway_egress: {}
+  gateway_ingress: {}
+volumes:
+  gateway_state:

@@ -1,0 +1,53 @@
+# Apply last, after compose.gateway.yaml. Access application/policy must exist
+# before creating the published route. Start cloudflared with --no-deps only.
+services:
+  agent-gateway:
+    env_file:
+      - .local/gateway-access.env
+    environment:
+      GATEWAY_MODE: access
+    networks:
+      - gateway_ingress
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.11.1@sha256:e613aadbc2d9511785d2e67a86b0c8ac18dd63a3f9af0d06faf04cbfdcb35f2d
+    user: "65532:65532"
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --metrics
+      - 127.0.0.1:2000
+      - run
+      - --token-file
+      - /run/secrets/tunnel-token
+    volumes:
+      - type: bind
+        source: ./.local/tunnel/token.runtime
+        target: /run/secrets/tunnel-token
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [gateway_ingress]
+    depends_on:
+      agent-gateway: {condition: service_healthy}
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, cloudflared, tunnel, --metrics, "127.0.0.1:2000", ready]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+networks:
+  gateway_ingress:
+    internal: false
