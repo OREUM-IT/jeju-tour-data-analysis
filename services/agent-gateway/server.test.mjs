@@ -117,6 +117,67 @@ test('Origin, Cookie, duplicate signed headers and unknown top-level execution c
   assert.equal(calls.length, 0);
 });
 
+test('Origin rejection reports only bounded boolean header diagnostics while every cookie remains forbidden', async t => {
+  const jwt = 'eyJ0eXAiOiJKV1QifQ.eyJzdWIiOiJjYW5hcnktc2VjcmV0In0.c2VjcmV0LXNpZ25hdHVyZQ';
+  const otherJwt = 'eyJ0eXAiOiJKV1QifQ.eyJzdWIiOiJvdGhlci1jYW5hcnkifQ.b3RoZXItc2lnbmF0dXJl';
+  const origin = 'https://private-canary.example.invalid';
+  const cases = [
+    [{ Origin: origin }, [true, false, false, false, false]],
+    [{ Cookie: '' }, [false, true, true, false, false]],
+    [{ Cookie: 'session=private-canary-cookie' }, [false, true, false, false, false]],
+    [{ Cookie: `CF_Authorization=${jwt}` }, [false, true, false, false, false]],
+    [{ Cookie: `CF_Authorization=${jwt}`, 'cf-access-jwt-assertion': '' }, [false, true, false, false, false]],
+    [{ Cookie: `CF_Authorization=${jwt}`, 'cf-access-jwt-assertion': jwt }, [false, true, false, true, true]],
+    [{ Cookie: `CF_Authorization=${otherJwt}`, 'cf-access-jwt-assertion': jwt }, [false, true, false, true, false]],
+    [{ Cookie: `CF_Authorization=${jwt}; session=private-canary-cookie`, 'cf-access-jwt-assertion': jwt }, [false, true, false, false, false]],
+    [{ Cookie: `CF_Authorization=${jwt}; CF_Authorization=${jwt}`, 'cf-access-jwt-assertion': jwt }, [false, true, false, false, false]],
+    [{ Cookie: `CF_Authorization="${jwt}"`, 'cf-access-jwt-assertion': jwt }, [false, true, false, false, false]],
+    [{ Cookie: 'CF_Authorization=', 'cf-access-jwt-assertion': jwt }, [false, true, false, false, false]],
+    [{ Origin: origin, Cookie: `CF_Authorization=${jwt}`, 'cf-access-jwt-assertion': jwt }, [true, true, false, true, true]],
+  ];
+  const keys = ['originPresent', 'cookiePresent', 'cookieEmpty', 'singleCfAuthorizationCookie', 'cookieMatchesAssertion'];
+  let accessCalls = 0;
+  for (const mode of ['private', 'access']) {
+    const app = await fixture(t, mode === 'access' ? { mode, publicHost: 'agent.example.invalid',
+      accessVerifier: async () => { accessCalls++; } } : {});
+    for (const [headers, expected] of cases) {
+      const signed = app.signed('/v1/recommend', input(), { headers: { Host: 'agent.example.invalid', ...headers } });
+      const result = await rawRequest(app.base, { headers: signed.headers, chunks: [signed.body] });
+      assert.equal(result.status, 403);
+      assert.deepEqual(result.value, { error: { code: 'ORIGIN_REJECTED',
+        headerContext: Object.fromEntries(keys.map((key, index) => [key, expected[index]])) } });
+      assert.ok(Object.values(result.value.error.headerContext).every(value => typeof value === 'boolean'));
+      for (const secret of [jwt, otherJwt, origin, 'private-canary-cookie', KEY]) assert.equal(result.text.includes(secret), false);
+    }
+    // An Access-shaped cookie still cannot pass the anonymous liveness route.
+    const health = await rawRequest(app.base, { method: 'GET', route: '/healthz',
+      headers: { Cookie: `CF_Authorization=${jwt}`, 'cf-access-jwt-assertion': jwt } });
+    assert.equal(health.status, 403);
+    assert.equal(health.value.error.headerContext.cookieMatchesAssertion, true);
+    assert.equal(app.calls.length, 0);
+  }
+  assert.equal(accessCalls, 0);
+});
+
+test('header diagnostic context is absent for authentication, routing and upstream failures', async t => {
+  const app = await fixture(t);
+  const anonymous = await fetch(app.base + '/readyz');
+  assert.equal(anonymous.status, 401);
+  assert.deepEqual(await anonymous.json(), { error: { code: 'AUTH_FAILED' } });
+  const unknown = await app.send(input(), { route: '/unknown' });
+  assert.deepEqual(await unknown.json(), { error: { code: 'NOT_FOUND' } });
+  // Even an upstream exception cannot attach arbitrary diagnostic contents to the public response.
+  const forged = await fixture(t, { upstream: { execute: async () => {
+    throw Object.assign(new Error('private-canary-error'), { code: 'ORIGIN_REJECTED', status: 403,
+      headerContext: { cookiePresent: 'private-canary-cookie' } });
+  } } });
+  const response = await forged.send();
+  const value = await response.json();
+  assert.equal(value.error.code, 'ORIGIN_REJECTED');
+  assert.equal('headerContext' in value.error, false);
+  assert.equal(JSON.stringify(value).includes('private-canary'), false);
+});
+
 test('access mode requires exact origin host and a verified Access JWT in addition to application HMAC', async t => {
   const verified = [];
   const accessVerifier = async token => {

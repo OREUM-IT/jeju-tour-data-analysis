@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Offline secret-file and public-check contracts; no Cloudflare account needed."""
 import base64
+import contextlib
 import hashlib
 import hmac
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import stat
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import configure
 
@@ -200,6 +202,22 @@ class PublicCheckTests(unittest.TestCase):
         self.ready = json.dumps({'ready': True, 'mode': 'access', 'flowVerified': True,
                                 'catalogPlaces': 981, 'productionReady': False}).encode()
 
+    def failed(self, responses):
+        with patch.object(checker, 'request', side_effect=responses), self.assertRaises(checker.PublicCheckError) as error:
+            checker.public_ready(self.access, self.service, {'GATEWAY_AUTH_KEY': APP_SECRET})
+        self.assertIsInstance(error.exception, configure.ConfigurationError)
+        diagnostic = error.exception.diagnostic
+        required = {'status', 'code', 'phase', 'httpStatus', 'bodyBytes', 'responseKind', 'modelExecuted', 'productionReady'}
+        self.assertTrue(required <= set(diagnostic) <= required | {'cloudflareCode', 'gatewayCode', 'gatewayHeaderContext'})
+        self.assertEqual(diagnostic['status'], 'failed')
+        self.assertEqual(diagnostic['code'], 'TUNNEL_PUBLIC_CHECK_FAILED')
+        self.assertIs(diagnostic['modelExecuted'], False)
+        self.assertIs(diagnostic['productionReady'], False)
+        for secret in [APP_SECRET, CLIENT_ID, CLIENT_SECRET]:
+            self.assertNotIn(secret, json.dumps(diagnostic))
+            self.assertNotIn(secret, str(error.exception))
+        return diagnostic, error.exception
+
     def test_signature_matches_gateway_exact_get_canonicalization(self):
         with patch.object(checker.time, 'time', return_value=1700000000), \
                 patch.object(checker.secrets, 'token_hex', return_value='f' * 32):
@@ -225,6 +243,191 @@ class PublicCheckTests(unittest.TestCase):
             with self.subTest(responses=responses), patch.object(checker, 'request', side_effect=responses), \
                     self.assertRaises(configure.ConfigurationError):
                 checker.public_ready(self.access, self.service, {'GATEWAY_AUTH_KEY': APP_SECRET})
+
+    def test_failure_diagnostic_identifies_each_public_authentication_phase(self):
+        cases = [
+            ([(200, b'unprotected')], 'anonymous', 200, len(b'unprotected'), 'text'),
+            ([(403, b''), (403, b'error code: 1010')], 'access_only', 403, len(b'error code: 1010'), 'text'),
+            ([(403, b''), (401, b''), (302, b'')], 'signed', 302, 0, 'empty'),
+            ([(403, b''), (401, b''), (200, b'[]')], 'readiness_response', 200, 2, 'json'),
+        ]
+        for responses, phase, status, size, kind in cases:
+            with self.subTest(phase=phase):
+                diagnostic, _ = self.failed(responses)
+                self.assertEqual((diagnostic['phase'], diagnostic['httpStatus'], diagnostic['bodyBytes'], diagnostic['responseKind']),
+                                 (phase, status, size, kind))
+
+    def test_response_classification_keeps_only_safe_bounded_metadata(self):
+        bodies = [(b'', 'empty'), (b'Forbidden', 'text'), (b'<!DOCTYPE html><html>Forbidden</html>', 'html'),
+                  (json.dumps({'error': {'code': 'AUTH_FAILED'}, 'secret': CLIENT_SECRET}).encode(), 'json'),
+                  (b'\x00\xff' + CLIENT_SECRET.encode(), 'binary')]
+        for body, kind in bodies:
+            with self.subTest(kind=kind):
+                diagnostic, _ = self.failed([(403, b''), (403, body)])
+                self.assertEqual(diagnostic['responseKind'], kind)
+                self.assertEqual(diagnostic['bodyBytes'], len(body))
+                if kind == 'json':
+                    self.assertEqual(diagnostic['gatewayCode'], 'AUTH_FAILED')
+                else:
+                    self.assertNotIn('gatewayCode', diagnostic)
+
+    def test_cloudflare_error_code_is_extracted_only_from_an_exact_ascii_error_body(self):
+        for body in [b'error code: 1010', b' \r\nerror code:\n1010\r\n\t', b'error code: 1000', b'error code: 1999']:
+            with self.subTest(body=body):
+                diagnostic, _ = self.failed([(403, b''), (403, body)])
+                self.assertEqual(diagnostic['cloudflareCode'], int(body.split(b':')[1].strip()))
+        malicious = [b'error code: 999', b'error code: 2000', b'error code: 01010',
+                     b'<html>error code: 1010</html>', b'error code: 1010 ' + CLIENT_SECRET.encode(),
+                     'error code: １０１０'.encode(), 'error code:\u00a01010'.encode()]
+        for body in malicious:
+            with self.subTest(body=body):
+                diagnostic, _ = self.failed([(403, b''), (403, body)])
+                self.assertNotIn('cloudflareCode', diagnostic)
+
+    def test_unknown_or_malicious_gateway_codes_never_become_diagnostic_strings(self):
+        for code in [CLIENT_SECRET, 'UNKNOWN_GATEWAY_CODE', 'AUTH_FAILED\n' + CLIENT_SECRET,
+                     {'secret': CLIENT_SECRET}, ['AUTH_FAILED'], 1010, None]:
+            with self.subTest(code=code):
+                body = json.dumps({'error': {'code': code}, 'raw': CLIENT_SECRET}).encode()
+                diagnostic, _ = self.failed([(403, b''), (401, b''), (403, body)])
+                self.assertNotIn('gatewayCode', diagnostic)
+                self.assertNotIn('cloudflareCode', diagnostic)
+
+    def test_origin_rejection_copies_only_allowlisted_boolean_header_context(self):
+        context = {'originPresent': False, 'cookiePresent': True, 'cookieEmpty': False,
+                   'singleCfAuthorizationCookie': True, 'cookieMatchesAssertion': False}
+        body = json.dumps({'error': {'code': 'ORIGIN_REJECTED', 'headerContext': context}}).encode()
+        diagnostic, _ = self.failed([(403, b''), (403, body)])
+        self.assertEqual(diagnostic['gatewayCode'], 'ORIGIN_REJECTED')
+        self.assertEqual(diagnostic['gatewayHeaderContext'], context)
+
+        malicious = {'originPresent': CLIENT_SECRET, 'cookiePresent': 1, 'cookieEmpty': 0,
+                     'singleCfAuthorizationCookie': 'true', 'cookieMatchesAssertion': True,
+                     'rawCookie': CLIENT_SECRET, 'unknownFlag': True}
+        body = json.dumps({'error': {'code': 'ORIGIN_REJECTED', 'headerContext': malicious}}).encode()
+        diagnostic, _ = self.failed([(403, b''), (403, body)])
+        self.assertEqual(diagnostic['gatewayHeaderContext'], {'cookieMatchesAssertion': True})
+        self.assertNotIn('rawCookie', json.dumps(diagnostic))
+        self.assertNotIn('unknownFlag', json.dumps(diagnostic))
+        self.assertNotIn(CLIENT_SECRET, json.dumps(diagnostic))
+
+    def test_header_context_is_ignored_for_other_codes_or_non_object_values(self):
+        context = {'originPresent': True, 'cookiePresent': True, 'cookieEmpty': False,
+                   'singleCfAuthorizationCookie': False, 'cookieMatchesAssertion': True}
+        cases = [('AUTH_FAILED', context), ('UNKNOWN_GATEWAY_CODE', context),
+                 ('ORIGIN_REJECTED', CLIENT_SECRET), ('ORIGIN_REJECTED', [context]),
+                 ('ORIGIN_REJECTED', None), ('ORIGIN_REJECTED', True)]
+        for code, value in cases:
+            with self.subTest(code=code, contextType=type(value).__name__):
+                body = json.dumps({'error': {'code': code, 'headerContext': value}}).encode()
+                diagnostic, _ = self.failed([(403, b''), (403, body)])
+                self.assertNotIn('gatewayHeaderContext', diagnostic)
+
+    def test_invalid_readiness_json_and_unexpected_shapes_fail_in_the_response_phase(self):
+        malformed = [b'{invalid json', b'null', b'[]', b'true', b'\xff',
+                     self.ready.replace(b'"ready": true', b'"ready": "true"'),
+                     self.ready.replace(b'"mode": "access"', b'"mode": "private"'),
+                     self.ready.replace(b'"catalogPlaces": 981', b'"catalogPlaces": 980'),
+                     self.ready.replace(b'"ready": true', b'"ready": false, "ready": true'),
+                     self.ready[:-1] + b', "extra": NaN}', b'[' * 2000 + b'0' + b']' * 2000]
+        for body in malformed:
+            with self.subTest(body=body[:60]):
+                diagnostic, _ = self.failed([(403, b''), (401, b''), (200, body)])
+                self.assertEqual(diagnostic['phase'], 'readiness_response')
+                self.assertEqual(diagnostic['httpStatus'], 200)
+                self.assertEqual(diagnostic['bodyBytes'], len(body))
+
+    def test_network_failures_are_unavailable_at_the_current_phase_without_raw_exception_text(self):
+        cases = [([], 'anonymous'), ([(403, b'')], 'access_only'), ([(403, b''), (401, b'')], 'signed')]
+        for completed, phase in cases:
+            with self.subTest(phase=phase):
+                diagnostic, _ = self.failed(completed + [checker.urllib.error.URLError(CLIENT_SECRET)])
+                self.assertEqual(diagnostic['phase'], phase)
+                self.assertIsNone(diagnostic['httpStatus'])
+                self.assertEqual(diagnostic['bodyBytes'], 0)
+                self.assertEqual(diagnostic['responseKind'], 'unavailable')
+
+    def test_real_request_sets_a_fixed_user_agent_without_overriding_service_token_values(self):
+        class Response(io.BytesIO):
+            status = 403
+
+            def read(self, amount=-1):
+                self.amount = amount
+                return super().read(amount)
+
+        for existing in [{}, {'User-Agent': 'wrong-client'}, {'uSeR-aGeNt': CLIENT_SECRET}]:
+            with self.subTest(headerNames=list(existing)):
+                response = Response(b'error code: 1010')
+                opener = Mock()
+                opener.open.return_value = response
+                headers = {'CF-Access-Client-Id': CLIENT_ID, 'CF-Access-Client-Secret': CLIENT_SECRET, **existing}
+                before = headers.copy()
+                with patch.object(checker.urllib.request, 'build_opener', return_value=opener) as build:
+                    self.assertEqual(checker.request(configure.PUBLIC_HOST, headers), (403, b'error code: 1010'))
+                self.assertEqual(headers, before)
+                self.assertEqual(len(build.call_args.args), 1)
+                self.assertIsInstance(build.call_args.args[0], checker.NoRedirect)
+                request = opener.open.call_args.args[0]
+                transmitted = {name.lower(): value for name, value in request.header_items()}
+                self.assertEqual(transmitted['user-agent'], 'oreumit-agent-check/1.0')
+                self.assertEqual(transmitted['cf-access-client-id'], CLIENT_ID)
+                self.assertEqual(transmitted['cf-access-client-secret'], CLIENT_SECRET)
+                self.assertEqual(request.full_url, 'https://agent.oreumit.com/readyz')
+                self.assertEqual(request.get_method(), 'GET')
+                self.assertEqual(opener.open.call_args.kwargs, {'timeout': 20})
+                self.assertEqual(response.amount, 65537)
+
+    def test_redirect_responses_are_not_followed_and_alternate_hosts_never_open(self):
+        response = checker.urllib.error.HTTPError('https://agent.oreumit.com/readyz', 302,
+                                                 'Found', {'Location': 'https://invalid.example/'}, io.BytesIO(b''))
+        opener = Mock()
+        opener.open.side_effect = response
+        with patch.object(checker.urllib.request, 'build_opener', return_value=opener):
+            self.assertEqual(checker.request(configure.PUBLIC_HOST, {}), (302, b''))
+        self.assertEqual(opener.open.call_count, 1)
+        self.assertIsNone(checker.NoRedirect().redirect_request(None, None, 302, 'Found', {}, 'https://invalid.example/'))
+        with patch.object(checker.urllib.request, 'build_opener') as build, self.assertRaises(configure.ConfigurationError):
+            checker.request('different.example', {})
+        build.assert_not_called()
+
+    def test_oversized_response_read_is_bounded_and_reports_only_the_limit_observation(self):
+        class Response(io.BytesIO):
+            status = 403
+
+            def read(self, amount=-1):
+                self.amount = amount
+                return super().read(amount)
+
+        response = Response(b'x' * 100_000 + CLIENT_SECRET.encode())
+        opener = Mock()
+        opener.open.return_value = response
+        with patch.object(checker.urllib.request, 'build_opener', return_value=opener), self.assertRaises(checker.PublicCheckError) as error:
+            checker.public_ready(self.access, self.service, {'GATEWAY_AUTH_KEY': APP_SECRET})
+        diagnostic = error.exception.diagnostic
+        self.assertEqual(diagnostic['phase'], 'anonymous')
+        self.assertEqual(diagnostic['httpStatus'], 403)
+        self.assertEqual(diagnostic['responseKind'], 'oversized')
+        self.assertEqual(diagnostic['bodyBytes'], 65537)
+        self.assertEqual(response.amount, 65537)
+        self.assertNotIn(CLIENT_SECRET, json.dumps(diagnostic))
+
+    def test_main_emits_only_safe_diagnostic_json_and_keeps_configuration_failures_generic(self):
+        diagnostic, error = self.failed([(403, b''), (403, b'error code: 1010')])
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(checker.sys, 'argv', ['check.py', '--scope', 'public']), \
+                patch.object(checker, 'check', side_effect=error), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            self.assertEqual(checker.main(), 1)
+        self.assertEqual(output.getvalue(), '')
+        self.assertEqual(json.loads(errors.getvalue()), diagnostic)
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(checker.sys, 'argv', ['check.py', '--scope', 'public']), \
+                patch.object(checker, 'check', side_effect=configure.ConfigurationError(CLIENT_SECRET)), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            self.assertEqual(checker.main(), 1)
+        self.assertEqual(output.getvalue(), '')
+        self.assertTrue(errors.getvalue().startswith('TUNNEL_CHECK_FAILED:'))
+        self.assertNotIn(CLIENT_SECRET, errors.getvalue())
 
     def test_runtime_checks_use_only_expected_service_commands(self):
         with patch.object(checker, 'run_compose', return_value=b'') as run:

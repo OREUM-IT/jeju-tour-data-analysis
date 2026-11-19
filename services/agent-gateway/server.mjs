@@ -51,7 +51,21 @@ function headersValid(req) {
       seen.add(key);
     }
   }
-  if (req.headers.origin !== undefined || req.headers.cookie !== undefined) throw new RequestError('ORIGIN_REJECTED', 403);
+  if (req.headers.origin !== undefined || req.headers.cookie !== undefined) {
+    const cookie = req.headers.cookie;
+    const assertion = req.headers['cf-access-jwt-assertion'];
+    const single = typeof assertion === 'string' && assertion.length > 0 && typeof cookie === 'string'
+      && /^CF_Authorization=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(cookie);
+    // Diagnostic shape only: none of these flags authenticates or permits a cookie.
+    // Never retain the header values on the error or include them in a response.
+    const error = new RequestError('ORIGIN_REJECTED', 403);
+    error.headerContext = {
+      originPresent: req.headers.origin !== undefined, cookiePresent: cookie !== undefined,
+      cookieEmpty: cookie === '', singleCfAuthorizationCookie: single,
+      cookieMatchesAssertion: single && cookie === `CF_Authorization=${assertion}`,
+    };
+    throw error;
+  }
 }
 
 export function createGatewayServer({ authKey, mode = 'private', publicHost, accessVerifier, state, upstream, now = Date.now }) {
@@ -106,7 +120,9 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
       const timeout = ['TimeoutError', 'AbortError'].includes(error?.name);
       const code = timeout ? 'UPSTREAM_TIMEOUT_NO_RETRY' : codes.has(error?.code) ? error.code : 'GATEWAY_UNAVAILABLE';
       const status = timeout ? 504 : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 502;
-      send(res, status, { error: { code }, ...(requestId ? { requestId } : {}) }, status === 429 ? { 'Retry-After': '120' } : {});
+      const diagnostic = code === 'ORIGIN_REJECTED' && error instanceof RequestError
+        ? { headerContext: error.headerContext } : {};
+      send(res, status, { error: { code, ...diagnostic }, ...(requestId ? { requestId } : {}) }, status === 429 ? { 'Retry-After': '120' } : {});
     }
   });
   server.headersTimeout = 5000; server.requestTimeout = 8000; server.keepAliveTimeout = 3000;

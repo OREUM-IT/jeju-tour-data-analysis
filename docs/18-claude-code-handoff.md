@@ -1,8 +1,8 @@
 # Claude Code 인수인계와 작업 재개 절차
 
-2026-11-19 후속: [제한 Gateway·Access/Tunnel 연결](32-agent-gateway-tunnel.md) 코드를 `codex/lightsail-agent-gateway`에서 구현했다. 앱 HMAC·Access JWT, 고정 Langflow 흐름, 영속 중복 실행/사용량 제한, 요청별 MCP 조건·8회 호출 정책과 최종 응답 검증을 포함한다. 비공개 Docker 및 공개 인증 검사를 위한 실행 절차를 제공하며, AWS Gateway 배포·Cloudflare 계정 설정·Tunnel 공개 연결은 사용자 실행 결과가 아직 없다. 실제 Vercel 설문 연결은 후속 단계다.
+2026-11-19 최신: [Gateway·Access/Tunnel PR #16](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/16)은 `main@2b44228`에 병합됐다. 사용자 AWS에서 Gateway 내부 준비와 `scope:connector`가 통과했다. 공개 요청의 Python 기본 User-Agent에서 Cloudflare `1010`을 확인했으며 앱 식별자 추가 후 사용자 요청은 Gateway의 `ORIGIN_REJECTED`까지 도착했다. [32 문서](32-agent-gateway-tunnel.md#공개-검사의-1010과-단계별-실패-확인)의 단계별 안전 진단으로 Origin/Cookie 중 실제 거부 원인을 확인한다. 공개 인증 전체 통과·새 Gateway 모델 실행·Vercel 연결은 아직 미완료다. 이 절보다 오래된 아래 기록의 'Gateway 미구현' 상태로 되돌아가지 않는다.
 
-2026-11-19 AWS 최신 진행: 사용자가 **`143b705` 적용 후 Vertex 실제 요청 1건 성공** 출력을 제공했다. Langflow는 41초에 Healthy가 됐고, 흐름은 `upgraded-vertex-client`, `vertexConfigured:true`다. 실제 요청은 HTTP 200·14.5초·최종 검증 수락으로 완료됐으며 모델 호출 기록 4회 모두 성공, MCP 도구 호출 3회 성공, 예상 밖 도구 호출 0회다. trace 1건은 정상 종료했고 임시 실행 키도 폐기됐다. 후보 3곳에 대한 `cannot_confirm`·`indoor_unverified`는 **미검증 실내 조건을 확정하지 않고 확인 필요를 정상 안내한 결과**다. [상세 실행 기록](31-lightsail-langflow.md#4-실제-모델-요청-1건-검사)은 사용자 제공 출력에 근거하며 작성자의 AWS 원격 실행 결과가 아니다. 단건 연결·검증 성공이며 추천 품질 전체나 운영 준비 완료를 뜻하지 않아 `productionReady:false`를 유지한다. [PR #14](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/14)는 CI 통과 후 `main@4579c25`에 병합됐다. 완료된 단건 요청을 다시 확인하기 위한 반복 실행은 필요하지 않다. 다음은 **제한 Gateway 구현 → Access/Tunnel → Vercel 연결**이며, 준비한 구현 계약은 31 문서 7절을 따른다.
+2026-11-19 AWS 최신 진행: 사용자가 **`143b705` 적용 후 Vertex 실제 요청 1건 성공** 출력을 제공했다. Langflow는 41초에 Healthy가 됐고, 흐름은 `upgraded-vertex-client`, `vertexConfigured:true`다. 실제 요청은 HTTP 200·14.5초·최종 검증 수락으로 완료됐으며 모델 호출 기록 4회 모두 성공, MCP 도구 호출 3회 성공, 예상 밖 도구 호출 0회다. trace 1건은 정상 종료했고 임시 실행 키도 폐기됐다. 후보 3곳에 대한 `cannot_confirm`·`indoor_unverified`는 **미검증 실내 조건을 확정하지 않고 확인 필요를 정상 안내한 결과**다. [상세 실행 기록](31-lightsail-langflow.md#4-실제-모델-요청-1건-검사)은 사용자 제공 출력에 근거하며 작성자의 AWS 원격 실행 결과가 아니다. 단건 연결·검증 성공이며 추천 품질 전체나 운영 준비 완료를 뜻하지 않아 `productionReady:false`를 유지한다. [PR #14](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/14)는 CI 통과 후 `main@4579c25`에 병합됐다. 완료된 단건 요청을 다시 확인하기 위한 반복 실행은 필요하지 않다. 이 단건 성공 이후 Gateway 구현·Tunnel 기동까지 진행했으며, 최신 공개 인증 상태와 다음 작업은 위 최신 문단을 따른다.
 
 2026-11-19 이전 AWS 단계: 사용자가 MCP·인증·PostgreSQL·pgvector 검사를 통과했다고 보고했다. `codex/lightsail-real-catalog`에서 [981곳 생성·연결 절차](30-lightsail-real-catalog.md)를 준비했다. 기존 bootstrap 브랜치 변경도 포함하며 main 병합은 아직 하지 않았다. AWS 직접 적용 결과와 로컬/CI 검증을 구분한다. 당시 단계는 JSON 카탈로그만 연결했으며, 이후 Langflow 내부 연결 결과는 위 최신 진행과 31 문서를 따른다. 관광 데이터의 DB 적재·Gateway·Tunnel·Vercel은 남아 있다. 사용자가 AWS를 준비한 사실을 원격 배포·DNS 변경의 포괄 승인으로 해석하지 않는다.
 
@@ -10,9 +10,11 @@
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
 
+**현재 연결 작업:** Gateway 코드는 PR #16으로 병합됐고 사용자 AWS에서 내부 준비·Tunnel 연결을 확인했다. `codex/tunnel-check-user-agent`는 공개 검사에 정직한 앱 User-Agent와 실패 단계·코드 진단을 추가한다. 사용자 최신 응답은 `anonymous:403`(HTML), `access_only:403`·`ORIGIN_REJECTED`다. Gateway는 Origin 또는 Cookie 존재를 차단하므로 실제 원인을 `error.headerContext`의 boolean만으로 확인해야 한다. 토큰 재입력이나 광범위한 Cookie/Origin 허용으로 해결했다고 가정하지 않는다. 공개 검사의 세 인증 단계가 통과한 뒤 Vercel 서버 어댑터로 진행한다. 아래 Vertex·평가 이력은 이전 단계 기록이다.
+
 **AWS 관측(사용자 제공 출력):** 실제 981곳 MCP·Langflow 1.13.3·전용 DB와 Vertex 자격증명 등록에 이어 `143b705` 적용 후 단건 실응답이 성공했다. Langflow Healthy 41초, `flowStatus:upgraded-vertex-client`, `vertexConfigured:true`다. HTTP 200·14.5초에 `status:passed`, `phase:complete`, `modelExecuted:true`, `finalValidationAccepted:true`, `temporaryApiKeyRevoked:true`를 반환했다. 정상 종료 trace 1건·미완료 0·실패 0, 모델 성공 4/4회, MCP 호출 성공 3회·예상 밖 도구 0회다. 후보 3곳의 `cannot_confirm`·`indoor_unverified`는 실내 조건을 확정할 근거가 없어 확인 필요를 안내한 정상 결과다. 자세한 session ID와 집계는 [31 문서 4절](31-lightsail-langflow.md#4-실제-모델-요청-1건-검사)에 있다. 작성자의 직접 AWS 실행은 아니다.
 
-**현재 단계:** [PR #14](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/14)는 CI 통과 후 `main@4579c25`에 병합됐다. 성공 상태 기록은 `codex/aws-vertex-success-handoff`에서 갱신한다. 초기 `get_llm()`의 불필요한 `GOOGLE_API_KEY` 요구는 소스·오프라인 재현으로 확인했고, 직접 Vertex 생성으로 바꾼 뒤 사용자 AWS 단건 결과로 재검증했다. 다음은 제한 Gateway 구현다. Gateway 코드는 아직 구현하지 않았으며 Access/Tunnel·Vercel 연결도 후속 단계다. 설치·카탈로그 생성·자격증명 등록·성공한 단건 검사와 기존 96문항 평가는 반복하지 않는다.
+**이전 Vertex 단계:** [PR #14](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/14)는 CI 통과 후 `main@4579c25`에 병합됐다. 성공 상태 기록은 `codex/aws-vertex-success-handoff`에서 갱신한다. 초기 `get_llm()`의 불필요한 `GOOGLE_API_KEY` 요구는 소스·오프라인 재현으로 확인했고, 직접 Vertex 생성으로 바꾼 뒤 사용자 AWS 단건 결과로 재검증했다. 다음은 제한 Gateway 구현다. Gateway 코드는 아직 구현하지 않았으며 Access/Tunnel·Vercel 연결도 후속 단계다. 설치·카탈로그 생성·자격증명 등록·성공한 단건 검사와 기존 96문항 평가는 반복하지 않는다.
 
 **이전 모델 평가(완료):** [PR #9](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/9)는 `main@4b41a03`에 병합됐다. [PR #10](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/10)의 `codex/agent-v2-evaluation`에서 [28 문서](28-agent-v2-evaluation.md)의 동일 981곳·새 v2 흐름·기존 템플릿 96문항 실측을 완료했다. [채점 집계](../reports/baseline-langflow-v2-live-20261119.json)는 정상 응답 73·실패 23·미실행 0이다. query/context만 쓰는 닫힌 템플릿 변환기, 전체 사전 검사, payload·재개 결합과 엄격한 최종 응답 확인을 추가했다. 전체 동작 정답은 기존과 같은 67/96이고 허용 밖 ID는 162/305→7/295, 확인 고지는 35/36→17/31이다. 원문 보존은 평가 후보 계약과의 일치를 보장하지 않으며 관심 선호·걷기·날짜 충돌의 차이가 남았다. 전체 품질 개선·일반 자연어 이해·모델 우열을 주장하지 않는다.
 
@@ -28,7 +30,7 @@
 
 | 항목 | 상태 |
 |---|---|
-| main | [PR #14](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/14) 병합 `4579c25`. 사용자 AWS 적용·실응답 성공 커밋은 `143b705`이며 상태 기록 브랜치는 `codex/aws-vertex-success-handoff`다 |
+| main | PR #16 병합 `2b44228`. 현재 공개 검사 수정은 `codex/tunnel-check-user-agent`이며 사용자 AWS의 Vertex 실응답 성공 커밋 `143b705` 기록은 보존한다 |
 | 단계 | 1 진단 ✅ · 2 데이터 기반 ✅ · 3 평가셋 ✅ · 오프라인 하네스 ✅ · 실제 Gemini·Langflow 각 96문항 수집·채점 ✅. MCP 카탈로그 v2·원본 요청 기반 최종 검증·Agent 실행 제한과 취소 전파 초기 구현 및 로컬 검증 완료. 같은 981곳의 새 96문항 평가도 완료. 사람 검수·보안 평가는 남음 |
 | 검사 | MCP 198개 + Gateway 10개 + Langflow Python 32개 = 240개 통과. `check_repository.py` 14개 항목 PASS. 실제 v2 SDK의 981곳·3도구, 981×4=3,924조건 모두 unknown, 과거 96문항 정답 해시 `--check` 유지 확인. 새 브랜치 CI는 PR의 최종 커밋에서 확인 |
 | 실제 수집·채점 | 같은 계획·정답 해시로 각 96문항 시도. [Gemini](../reports/baseline-gemini-live-20261119.json) 성공 92·실패 4, [Langflow](../reports/baseline-langflow-live-20261119.json) 성공 80·실패 16, 각각 미실행 0. Gemini 사람 검수 0/24, 비용 미측정, 합성 보안 14개 미실행 |
