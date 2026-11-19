@@ -8,6 +8,7 @@ The raw CSV snapshot ZIP is a local-only optional output, never a deliverable.
 from __future__ import annotations
 
 import collections
+import ast
 import csv
 from datetime import date, datetime
 import hashlib
@@ -716,6 +717,65 @@ def check_vertex_flow():
             "Vertex flow must resolve jeju-mcp without inline headers or server identifiers")
 
 
+def check_validated_vertex_flow():
+    """Pin the reviewed v2 graph and require that the tested helpers are the actual embedded code."""
+    root = ROOT / "services/langflow"
+    flow = read_json(root / "jeju-tour-agent-vertex-v2.flow.json")
+    text = json.dumps(flow, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    require(hashlib.sha256(text.encode()).hexdigest() == "020e2b0b05f9fa291ba18b91b9c10e78c8247b4c52deed217287c2cab989dc5e",
+            "Validated Vertex flow changed; review nested code, graph and credential references before updating the pin")
+    require(not re.search(r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----|AIza[A-Za-z0-9_-]{30,}|ya29\.[A-Za-z0-9_-]+", text)
+            and not re.search(r"[a-z0-9._-]+@[a-z0-9.-]+\.iam\.gserviceaccount\.com", text, re.I)
+            and not re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text, re.I),
+            "Validated flow contains a credential, account identifier or runtime UUID")
+    nodes = {node["data"]["type"]: node for node in flow["data"]["nodes"]}
+    require(len(flow["data"]["nodes"]) == len(nodes) == 6
+            and set(nodes) == {"ChatInput", "ChatOutput", "Agent", "MCPTools", "JejuPrepareRequest", "JejuFinalValidation"},
+            "Validated flow must have exactly the reviewed six components")
+    kind_by_id = {node["id"]: kind for kind, node in nodes.items()}
+    edges = {(kind_by_id[edge["source"]], kind_by_id[edge["target"]], edge["data"]["targetHandle"]["fieldName"])
+             for edge in flow["data"]["edges"]}
+    require(len(flow["data"]["edges"]) == len(edges) == 6 and edges == {
+        ("ChatInput", "JejuPrepareRequest", "original_request"),
+        ("JejuPrepareRequest", "Agent", "input_value"),
+        ("JejuPrepareRequest", "JejuFinalValidation", "prepared_request"),
+        ("MCPTools", "Agent", "tools"), ("Agent", "JejuFinalValidation", "agent_response"),
+        ("JejuFinalValidation", "ChatOutput", "input_value"),
+    }, "Validated flow must preserve the original request and have no final-validator bypass")
+    for kind, node in nodes.items():
+        for name, field in node["data"]["node"].get("template", {}).items():
+            if not isinstance(field, dict) or not (field.get("password") or field.get("name") == "api_key"):
+                continue
+            reference = "JEJU_VERTEX_SERVICE_ACCOUNT_JSON" if kind == "Agent" and name == "api_key" else (
+                "JEJU_MCP_TOKEN" if kind in {"JejuPrepareRequest", "JejuFinalValidation"} and name == "service_token" else None)
+            require(field.get("value") == reference and field.get("load_from_db") is True if reference
+                    else field.get("value") in ("", None), "Validated flow contains an inline or unexpected credential")
+    agent = nodes["Agent"]["data"]["node"]["template"]
+    require(agent["max_iterations"]["value"] == 4 and agent["n_messages"]["value"] == 0
+            and all(agent[name]["value"] is False for name in ("add_calculator_tool", "add_current_date_tool", "handle_parsing_errors")),
+            "Validated Agent budgets or history/tool settings changed")
+    base = read_json(root / "jeju-tour-agent-vertex.flow.json")
+    base_code = next(node for node in base["data"]["nodes"] if node["data"]["type"] == "Agent")["data"]["node"]["template"]["code"]["value"]
+    hook = "        result = await self._run_agent_with_model_remediation(_run_once)\n        self._agent_result = result"
+    replacement = "        result = await _guarded_agent_run(self, _run_once)\n        self._agent_result = result"
+    require(base_code.count(hook) == 1 and agent["code"]["value"] == base_code.replace(hook, replacement)
+            + "\n\n" + (root / "guarded_vertex_agent.py").read_text(encoding="utf-8"),
+            "Embedded Agent differs from reviewed baseline plus the tested execution guard")
+    component_source = (root / "validation_components.py").read_text(encoding="utf-8")
+    lines = component_source.splitlines(keepends=True)
+    parsed = ast.parse(component_source)
+    for kind in ("JejuPrepareRequest", "JejuFinalValidation"):
+        removed = {line for node in parsed.body if isinstance(node, ast.ClassDef) and node.name != kind
+                   for line in range(node.lineno - 1, node.end_lineno)}
+        expected = "".join(line for index, line in enumerate(lines) if index not in removed)
+        require(nodes[kind]["data"]["node"]["template"]["code"]["value"] == expected,
+                "Embedded validation component differs from the tested source")
+    mcp = nodes["MCPTools"]["data"]["node"]["template"]
+    require(mcp["mcp_server"]["value"] == {"name": "jeju-mcp-v2", "config": {}}
+            and mcp["headers"]["value"] == {} and mcp["tool_execution_timeout"]["value"] == 10,
+            "Validated flow must use the separately registered v2 MCP with bounded tool calls")
+
+
 BASELINE_METRICS_SHAPE = {
     "items": "count", "actionAccuracy": "ratio",
     "disallowedIds": {"returnedIds": "count", "rate": "nullable_ratio", "itemsWithViolation": "count",
@@ -862,6 +922,7 @@ def main():
         ("baseline harness self-check and publication boundary", check_baseline_summary),
         ("Langflow starter flow and settings example", check_langflow),
         ("reviewed Vertex flow and credential references", check_vertex_flow),
+        ("validated Vertex graph, credentials and tested source parity", check_validated_vertex_flow),
         ("external baseline aggregates when present", check_external_baseline_summaries),
         ("publication boundaries and archives", check_deliverables),
     ]
@@ -873,7 +934,7 @@ def main():
         except CheckError as error:
             failed = True
             print(f"FAIL: {label}: {error}", file=sys.stderr)
-        except (OSError, ValueError, KeyError, TypeError, IndexError, BadZipFile, ET.ParseError, subprocess.SubprocessError):
+        except (OSError, ValueError, KeyError, TypeError, IndexError, SyntaxError, BadZipFile, ET.ParseError, subprocess.SubprocessError):
             failed = True
             print(f"FAIL: {label}: missing, malformed or inconsistent artifact; no file contents printed", file=sys.stderr)
     print("Offline checks only; raw source CSVs, network services and optional local ZIP were not accessed.")

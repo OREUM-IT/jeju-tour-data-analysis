@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import { validateAgentCatalog } from './agent-catalog.mjs';
 
 export const MAX_CATALOG_BYTES = 32 * 1024 * 1024;
 export const MAX_PLACES = 100_000;
@@ -114,6 +115,20 @@ export function validateCatalog(input, { dataVersion } = {}) {
   return freeze(copy);
 }
 
+/** Operator-selected v2 catalog. Keep evidence grades intact; never flatten them into verified v1 facts. */
+export function validateAgentServerCatalog(input, { dataVersion } = {}) {
+  object(input, 'agent catalog');
+  onlyKeys(input, new Set(['schemaVersion', 'kind', 'dataMode', 'source', 'themeIds', 'basisPolicy', 'sources', 'places', 'diagnostics']), 'agent catalog');
+  let serialized;
+  try { serialized = JSON.stringify(input); } catch { throw new CatalogValidationError('agent catalog must be serializable JSON'); }
+  requireValue(Buffer.byteLength(serialized) <= MAX_CATALOG_BYTES, 'agent catalog exceeds the byte limit');
+  if (dataVersion !== undefined) requireValue(typeof dataVersion === 'string' && /^sha256:[a-f0-9]{64}$/u.test(dataVersion), 'dataVersion must be a SHA-256 content digest');
+  const copy = JSON.parse(serialized);
+  copy.dataVersion = dataVersion ?? `sha256:${createHash('sha256').update(serialized).digest('hex')}`;
+  try { return validateAgentCatalog(copy); }
+  catch { throw new CatalogValidationError('agent catalog does not match the v2 schema'); }
+}
+
 export async function loadCatalog(catalogPath) {
   requireValue(typeof catalogPath === 'string' && isAbsolute(catalogPath), 'an explicit absolute operator catalog path is required');
   const handle = await open(catalogPath, 'r');
@@ -129,7 +144,8 @@ export async function loadCatalog(catalogPath) {
     } catch {
       throw new CatalogValidationError('catalog must contain valid UTF-8 JSON');
     }
-    return validateCatalog(input, { dataVersion: `sha256:${createHash('sha256').update(bytes).digest('hex')}` });
+    const options = { dataVersion: `sha256:${createHash('sha256').update(bytes).digest('hex')}` };
+    return input?.schemaVersion === '2.0' ? validateAgentServerCatalog(input, options) : validateCatalog(input, options);
   } finally {
     await handle.close();
   }

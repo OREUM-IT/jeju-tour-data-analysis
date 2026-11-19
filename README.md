@@ -4,10 +4,11 @@
 
 ## 현재 상태
 
+- **카탈로그 v2·최종 검증 구현:** [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8) 병합 후 `codex/agent-catalog-v2-validation`에서 앱과 같은 981곳의 MCP, 원본 요청에 따른 최종 ID·필수 조건 검증, 검증 전 출력을 억제하는 [별도 Langflow 흐름](services/langflow/jeju-tour-agent-vertex-v2.flow.json)을 추가했습니다. 로컬 SDK·모의 모델 검사와 실제 Gemini 실행 요청 1건에서 미확인 실내 조건을 `cannot_confirm`으로 안내하는 동작을 확인했습니다. [27 문서](docs/27-agent-catalog-v2-validation.md)에 검증 범위와 한계를 기록합니다. 새 96문항 품질 평가는 미실행이며 운영 배포는 하지 않았습니다.
 - **실제 Gemini·Langflow 수집·채점 완료(2026-11-19):** 같은 계획의 96문항씩을 모두 시도했습니다. [Gemini 집계](reports/baseline-gemini-live-20261119.json)는 지정 모델 응답 92건·실패 4건(혼합 대체 모델 3건·시간 초과 1건), [Langflow 집계](reports/baseline-langflow-live-20261119.json)는 구조화 응답 80건·실패 16건이며 두 실행 모두 미실행 0건입니다. Google Developer API의 503을 진단한 뒤 [Vertex AI 인증](docs/26-langflow-vertex-auth.md)으로 같은 `gemini-3.8-flash`의 Langflow 응답·MCP 도구 호출을 수집했습니다. 결과와 한계는 [25 문서](docs/25-live-baseline-execution.md), 변경은 [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8)에 있습니다. Gemini 자유 문장 판정은 잠정 모델 검수이며 사람 검수는 0/24건, 두 실행의 비용은 미측정입니다. 카탈로그·날짜 문맥이 달라 모델 자체의 우열을 판단하지 않습니다. [채점기 자체 검사](reports/baseline-harness-self-check.json)는 별도의 oracle 검사입니다.
-- **운영·보안 설계 추가:** [Linux Docker 전환안](docs/21-linux-docker-production.md)과 [탈옥·프롬프트 주입 방어](docs/22-jailbreak-and-prompt-injection-defense.md)를 정리했습니다. 도구 실행 전 권한·예산 검사와 최종 장소 ID·필수 조건 검증을 제안합니다. [합성 평가 명세 14개](data/agent-security-cases.json)는 미실행이며 운영 방어가 구현·검증된 상태는 아닙니다. 현재 자료는 JSON 카탈로그, PostgreSQL + pgvector는 향후 검색 저장소 후보입니다.
-- **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. [3단계 평가셋](docs/23-agent-step3-evaluation-set.md)도 만들었습니다. 8개 페르소나 × 12개 슬롯 96문항의 정답을 규칙으로 계산하는 생성기·채점 함수·테스트와 이름·ID 없는 [집계 보고서](reports/evaluation-set-summary.json)가 있고, 질의와 정답 후보는 `.local`에만 둡니다. 다음은 사람 24문항 검수, 카탈로그 v2 연결, Agent 전체 시간 예산·호출 횟수·취소 전파 개선과 합성 보안 사례 14개 평가입니다. 작업 명세와 재개 프롬프트는 [인수인계 11·12절](docs/18-claude-code-handoff.md)에 있습니다.
-- **시각적 Agent 빌더:** 사용자 결정으로 [Langflow](docs/20-langflow-agent-builder.md)를 씁니다(Flowise는 2026-08-31 지원 종료). Langflow 1.13.3에서 jeju-mcp 도구 3개와 실제 모델 응답을 확인했습니다. [기본 시작 흐름](services/langflow/jeju-tour-agent.flow.json)과 키를 포함하지 않는 [Vertex AI 흐름](services/langflow/jeju-tour-agent-vertex.flow.json)을 제공합니다. 현재 MCP v1의 장소 7,561곳과 앱·평가셋의 981곳은 다르므로, 카탈로그 v2 연결 후 같은 자료에서 다시 비교해야 합니다.
+- **운영·보안 설계 추가:** [Linux Docker 전환안](docs/21-linux-docker-production.md)과 [탈옥·프롬프트 주입 방어](docs/22-jailbreak-and-prompt-injection-defense.md)를 정리했습니다. 최종 구조화 응답의 ID·필수 조건 검증은 [27 문서](docs/27-agent-catalog-v2-validation.md) 범위로 구현했지만 전체 도구 권한·비용 통제와 [합성 평가 14개](data/agent-security-cases.json)는 미완료입니다. 현재 자료는 JSON 카탈로그, PostgreSQL + pgvector는 향후 검색 저장소 후보입니다.
+- **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. [3단계 평가셋](docs/23-agent-step3-evaluation-set.md)도 만들었습니다. 8개 페르소나 × 12개 슬롯 96문항의 정답을 규칙으로 계산하는 생성기·채점 함수·테스트와 이름·ID 없는 [집계 보고서](reports/evaluation-set-summary.json)가 있고, 질의와 정답 후보는 `.local`에만 둡니다. 카탈로그 v2 연결·최종 구조화 응답 검증·Agent 90초 및 모델 4회 제한은 구현했습니다. 다음은 사람 24문항 검수, 새 흐름의 96문항 품질 평가, 원격 취소·비용 계측 보강과 합성 보안 사례 14개 평가입니다. 작업 명세와 재개 프롬프트는 [인수인계 11·12절](docs/18-claude-code-handoff.md)에 있습니다.
+- **시각적 Agent 빌더:** 사용자 결정으로 [Langflow](docs/20-langflow-agent-builder.md)를 씁니다(Flowise는 2026-08-31 지원 종료). Langflow 1.13.3에서 jeju-mcp 도구 3개와 실제 모델 응답을 확인했습니다. [기본 시작 흐름](services/langflow/jeju-tour-agent.flow.json)과 키를 포함하지 않는 [Vertex AI 흐름](services/langflow/jeju-tour-agent-vertex.flow.json)을 제공합니다. 기존 실측의 MCP v1 7,561곳과 앱·평가셋 981곳은 서로 다릅니다. [새 v2 흐름](services/langflow/jeju-tour-agent-vertex-v2.flow.json)은 같은 981곳과 최종 검증을 연결했으며, 이 버전의 전체 96문항 품질 평가는 남아 있습니다.
 - **다른 Claude Code 세션의 시작점:** [CLAUDE.md](CLAUDE.md) → [상세 인수인계·재개 절차](docs/18-claude-code-handoff.md) → [전체 AI AGENT MODEL 목록](docs/17-ai-agent-model-registry.md). 모델별 구현·실행·평가 상태는 [JSON 레지스트리](data/ai-agent-models.json)에서도 관리합니다.
 - 상세 설계와 읽기 전용 MCP 초기 구현 단계입니다. 장소 검색·상세·조건 검사 3개 도구를 로컬 검증했습니다. 전체 추천 Agent·학습 모델·운영 통합은 후속 작업입니다.
 - 기존 서비스: <https://jeju-tour-six.vercel.app/>. 관련 OREUM-IT 저장소의 소스 검토 결과는 아래 문서에 기록합니다.
@@ -42,6 +43,7 @@
 24. [AI Agent 기준선 채점: 오프라인 하네스·Gemini/Langflow 응답 가져오기·자체 검사](docs/24-agent-baseline-scoring.md)
 25. [실제 Gemini·Langflow 기준선 수집·중단 재개·잠정 판정](docs/25-live-baseline-execution.md)
 26. [Langflow Vertex AI 인증 연결: 서비스 계정·Credential·흐름 가져오기](docs/26-langflow-vertex-auth.md)
+27. [Agent 카탈로그 v2·원본 요청 기반 최종 검증·실행 제한](docs/27-agent-catalog-v2-validation.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 
@@ -60,7 +62,7 @@ Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·�
 - [Word 보고서](reports/jeju-personal-tour-agent-design.docx)
 - [PDF 열람본](reports/jeju-personal-tour-agent-design.pdf)
 - [Windows·macOS Ollama 연결 시험 안내](examples/ollama-tunnel/README.md) · [인증 Gateway 예제 ZIP](reports/ollama-tunnel-starter.zip): 모의 서버 테스트를 갖춘 연결 시험용 예제. 운영 Agent·MCP 서버 구현과 구분.
-- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트·Agent 카탈로그·평가셋·기준선 수집·채점 149개 테스트와 로컬 SDK 연결 확인. 기존 자료 7,561건 가져오기 검증. 공개 배포는 미완료.
+- [읽기 전용 MCP 서버 실행 안내](services/jeju-mcp/README.md): 서비스·HF 클라이언트·Agent 카탈로그·평가셋·기준선·최종 검증 179개 테스트와 로컬 SDK 연결 확인. 기존 v1 7,561곳과 별도 v2 981곳을 검증했습니다. 공개 배포는 미완료.
 - [Agent 카탈로그 커버리지](reports/agent-catalog-coverage.json): 앱 장소 981곳의 속성·근거 등급·테마별 개수만 담은 집계. 카탈로그 본체는 `.local` 전용입니다.
 - [평가셋 집계](reports/evaluation-set-summary.json): 96문항의 난이도·기대 동작·필수 조건 판정 개수와 정답 해시만 담은 집계. 질의와 정답 후보는 `.local` 전용입니다.
 - [기준선 하네스 자체 검사](reports/baseline-harness-self-check.json): 복원한 템플릿 96문항을 정답 기반 응답으로 채점한 집계. 실제 모델 비교·지연·비용·보안 검증 결과가 아닙니다.
