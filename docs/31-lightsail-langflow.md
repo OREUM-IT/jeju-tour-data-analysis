@@ -30,7 +30,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap docker compose -f deploy/compose
 sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/check-langflow.sh
 ```
 
-최초 브랜치 전환용 명령이다. 이미 `codex/lightsail-langflow`를 만들었다면 `git switch -c` 대신 `git switch codex/lightsail-langflow`를 사용한다. 원격 업데이트는 fetch 후 `git merge --ff-only origin/codex/lightsail-langflow`로 확인하며 강제 reset하지 않는다. 이 브랜치는 PR #11 위의 후속 변경이며 main에 자동 병합하지 않는다.
+최초 브랜치 전환용 명령이다. 이미 `codex/lightsail-langflow`를 만들었다면 `git switch -c` 대신 `git switch codex/lightsail-langflow`를 사용한다. 원격 업데이트는 fetch 후 `git merge --ff-only origin/codex/lightsail-langflow`로 확인하며 강제 reset하지 않는다. PR #11은 main에, PR #12는 작업 브랜치에 병합됐다. Langflow 구성과 단건 실행기를 main에 반영하는 후속 변경은 [PR #13](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/13)이다.
 
 첫 실행은 약 764MiB의 Langflow 이미지 다운로드·DB 마이그레이션 때문에 몇 분 걸릴 수 있다. 두 `up --no-deps` 명령은 새 DB와 Langflow만 시작한다. 이미 검증한 MCP와 기존 DB를 재생성하지 않는다.
 
@@ -91,7 +91,7 @@ sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compos
 
 성공 기준은 `status:passed`, `modelExecuted:true`, `finalValidationAccepted:true`, `temporaryApiKeyRevoked:true`와 완료된 실행 기록이다. `productionReady:false`는 유지한다. 모델명은 실행 설정이며 trace의 모델 표기를 Google이 서명한 응답 모델 식별자로 해석하지 않는다. `response_validated` 이후 실행 기록을 충분히 확인하지 못하면 `incomplete`로 보고한다. HTTP 시간 초과 뒤에는 원격 작업 중단이 보장되지 않으므로 출력의 sessionId·고정 오류 코드로 상태를 먼저 확인하고 명령을 반복하지 않는다. 키 삭제 실패는 `TEMPORARY_API_KEY_CLEANUP_FAILED`이며 해당 이름(sessionId)의 키를 관리자가 확인한다.
 
-`--check-only`는 요청 준비, 임시 키 생성·삭제, 읽기 전용 DB 기록 조회만 검사하며 모델을 호출하지 않는다. Docker CI에는 이 모드만 연결한다. 실제 AWS 모델 요청 성공 여부는 사용자의 실행 결과를 받은 뒤 별도로 기록한다.
+`--check-only`는 요청 준비, 임시 키 생성·삭제, 읽기 전용 DB 기록 조회만 검사하며 모델을 호출하지 않는다. 공식 Docker CI에서 이 모드의 준비·임시 키 생성/삭제·읽기 전용 DB 조회를 통과했다. CI에는 이 모드만 연결한다. 실제 AWS 모델 요청 성공 여부는 사용자의 실행 결과를 받은 뒤 별도로 기록한다.
 
 ## 5. 저장·재시작·문제 확인
 
@@ -110,7 +110,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/check-langflow.sh
 
 ## 6. 검증 범위와 다음 단계
 
-배포 코드의 단위 검사는 비밀 파일 보존·부분 실패·링크 거부, 인증 거부·MCP 등록 충돌·흐름 변조 거부, Vertex JSON·RSA·고정 OAuth 주소를 다룬다. 공식 이미지와 전용 DB의 [Docker CI 기동 검사](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44470507332)에서 로그인·SSRF 허용/거부·MCP 도구 발견·흐름 가져오기·재시작 보존을 통과했다. 초기 기동에서 로그 상위 디렉터리가 아직 없던 오류는 기존 볼륨 루트의 `/app/data/langflow.log`로 경로를 지정해 해결했다. **CI 카탈로그의 981곳은 모두 명시적인 허구 테스트 자료**이며 실제 제주 자료 검증이나 모델 성능 측정이 아니다. 실제 AWS 카탈로그 연결 성공은 30 문서의 사용자 PASS 출력, AWS Langflow 내부 기동·인증·SSRF·MCP·흐름 가져오기·DB 권한 성공은 이 문서 2절의 사용자 출력으로 별도 기록한다. Vertex 자격증명 등록과 기존 흐름 보존도 3절의 사용자 출력으로 확인했다. AWS 재시작 보존·실제 Vertex OAuth·모델 요청 성공까지 확인한 것은 아니다.
+배포 코드의 단위 검사는 비밀 파일 보존·부분 실패·링크 거부, 인증 거부·MCP 등록 충돌·흐름 변조 거부, Vertex JSON·RSA·고정 OAuth 주소를 다룬다. 공식 이미지와 전용 DB의 [Docker CI 기동 검사](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44477702783)에서 로그인·SSRF 허용/거부·MCP 도구 발견·흐름 가져오기·재시작 보존을 통과했다. 초기 기동에서 로그 상위 디렉터리가 아직 없던 오류는 기존 볼륨 루트의 `/app/data/langflow.log`로 경로를 지정해 해결했다. **CI 카탈로그의 981곳은 모두 명시적인 허구 테스트 자료**이며 실제 제주 자료 검증이나 모델 성능 측정이 아니다. 실제 AWS 카탈로그 연결 성공은 30 문서의 사용자 PASS 출력, AWS Langflow 내부 기동·인증·SSRF·MCP·흐름 가져오기·DB 권한 성공은 이 문서 2절의 사용자 출력으로 별도 기록한다. Vertex 자격증명 등록과 기존 흐름 보존도 3절의 사용자 출력으로 확인했다. AWS 재시작 보존·실제 Vertex OAuth·모델 요청 성공까지 확인한 것은 아니다.
 
 작성자의 로컬 Docker는 32GB 저장 공간과 VFS 드라이버 한도 때문에 공식 이미지의 실행 복사 단계에서 실패했다. 공식 이미지의 CI 실행 성공과 사용자가 제공한 AWS 기동 성공 출력은 별도의 근거로 기록한다. AWS의 150GB 여유 공간 부족을 관측한 것은 아니다.
 
