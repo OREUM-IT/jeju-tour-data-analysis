@@ -42,11 +42,11 @@ function readBody(req) {
     req.on('error', () => finish(new RequestError('INVALID_JSON', 400)));
   });
 }
-function headersValid(req) {
+function headersValid(req, mode) {
   const seen = new Set();
   for (let n = 0; n < req.rawHeaders.length; n += 2) {
     const key = req.rawHeaders[n].toLowerCase();
-    if (['host', 'content-type', 'content-length', 'cf-access-jwt-assertion'].includes(key) || key.startsWith('x-jeju-')) {
+    if (['host', 'content-type', 'content-length', 'cookie', 'cf-access-jwt-assertion'].includes(key) || key.startsWith('x-jeju-')) {
       if (seen.has(key)) throw new RequestError('INVALID_HEADERS', 400);
       seen.add(key);
     }
@@ -56,13 +56,19 @@ function headersValid(req) {
     const assertion = req.headers['cf-access-jwt-assertion'];
     const single = typeof assertion === 'string' && assertion.length > 0 && typeof cookie === 'string'
       && /^CF_Authorization=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(cookie);
-    // Diagnostic shape only: none of these flags authenticates or permits a cookie.
+    const matchesAssertion = single && cookie === `CF_Authorization=${assertion}`;
+    const protectedAccessRoute = mode === 'access'
+      && ((req.method === 'GET' && req.url === '/readyz') || (req.method === 'POST' && req.url === '/v1/recommend'));
+    // Cloudflare forwards this exact redundant cookie in the observed service-auth
+    // request. Passing the header filter still requires HMAC, exact Host, and full
+    // Access JWT verification below; cookies never supply missing authentication.
+    if (req.headers.origin === undefined && protectedAccessRoute && matchesAssertion) return;
     // Never retain the header values on the error or include them in a response.
     const error = new RequestError('ORIGIN_REJECTED', 403);
     error.headerContext = {
       originPresent: req.headers.origin !== undefined, cookiePresent: cookie !== undefined,
       cookieEmpty: cookie === '', singleCfAuthorizationCookie: single,
-      cookieMatchesAssertion: single && cookie === `CF_Authorization=${assertion}`,
+      cookieMatchesAssertion: matchesAssertion,
     };
     throw error;
   }
@@ -78,7 +84,7 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
     const signal = AbortSignal.any([disconnect.signal, AbortSignal.timeout(DEADLINE_MS)]);
     res.on('close', () => { if (!res.writableEnded) disconnect.abort(); });
     try {
-      headersValid(req);
+      headersValid(req, mode);
       if (req.method === 'GET' && req.url === '/healthz') { req.resume(); return send(res, 200, { ok: true, check: 'liveness_only' }); }
       if (!['/readyz', '/v1/recommend'].includes(req.url)) throw new RequestError('NOT_FOUND', 404);
       const method = req.url === '/readyz' ? 'GET' : 'POST';

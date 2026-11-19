@@ -10,7 +10,7 @@
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
 
-**현재 연결 작업:** Gateway 코드는 PR #16으로 병합됐고 사용자 AWS에서 내부 준비·Tunnel 연결을 확인했다. `codex/tunnel-check-user-agent`는 공개 검사에 정직한 앱 User-Agent와 실패 단계·코드 진단을 추가한다. 사용자 최신 응답은 `anonymous:403`(HTML), `access_only:403`·`ORIGIN_REJECTED`다. Gateway는 Origin 또는 Cookie 존재를 차단하므로 실제 원인을 `error.headerContext`의 boolean만으로 확인해야 한다. 토큰 재입력이나 광범위한 Cookie/Origin 허용으로 해결했다고 가정하지 않는다. 공개 검사의 세 인증 단계가 통과한 뒤 Vercel 서버 어댑터로 진행한다. 아래 Vertex·평가 이력은 이전 단계 기록이다.
+**현재 연결 작업:** Gateway 코드는 PR #16으로 병합됐고 사용자 AWS에서 내부 준비·Tunnel 연결을 확인했다. `codex/tunnel-check-user-agent`는 공개 검사에 정직한 앱 User-Agent와 실패 단계·코드 진단을 추가한다. 사용자 진단으로 `originPresent:false`, `cookieEmpty:false`, `singleCfAuthorizationCookie:true`, `cookieMatchesAssertion:true`를 확인했다. Cloudflare JWT 헤더와 같은 단일 `CF_Authorization` 쿠키를 Access 모드의 두 보호 경로에서 수용하도록 수정한다. HMAC·Host·JWT 검증과 Origin·일반/추가 쿠키 거부는 유지한다. 적용 후 공개 검사 전체 성공을 별도로 확인해야 한다. 공개 검사의 세 인증 단계가 통과한 뒤 Vercel 서버 어댑터로 진행한다. 아래 Vertex·평가 이력은 이전 단계 기록이다.
 
 **AWS 관측(사용자 제공 출력):** 실제 981곳 MCP·Langflow 1.13.3·전용 DB와 Vertex 자격증명 등록에 이어 `143b705` 적용 후 단건 실응답이 성공했다. Langflow Healthy 41초, `flowStatus:upgraded-vertex-client`, `vertexConfigured:true`다. HTTP 200·14.5초에 `status:passed`, `phase:complete`, `modelExecuted:true`, `finalValidationAccepted:true`, `temporaryApiKeyRevoked:true`를 반환했다. 정상 종료 trace 1건·미완료 0·실패 0, 모델 성공 4/4회, MCP 호출 성공 3회·예상 밖 도구 0회다. 후보 3곳의 `cannot_confirm`·`indoor_unverified`는 실내 조건을 확정할 근거가 없어 확인 필요를 안내한 정상 결과다. 자세한 session ID와 집계는 [31 문서 4절](31-lightsail-langflow.md#4-실제-모델-요청-1건-검사)에 있다. 작성자의 직접 AWS 실행은 아니다.
 
