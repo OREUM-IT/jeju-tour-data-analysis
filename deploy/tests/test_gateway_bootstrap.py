@@ -81,6 +81,9 @@ class GatewayBootstrapTests(unittest.TestCase):
         self.assertEqual(result['apiKey'], SECRET)
         stored = client.state['flows'][result['flowId']]
         self.assertEqual(stored['name'], gateway.FLOW_NAME)
+        self.assertEqual(stored['access_type'], 'PRIVATE')
+        self.assertFalse(stored['webhook'] or stored['mcp_enabled'] or stored['is_component'])
+        self.assertNotIn('last_tested_version', stored)
         self.assertEqual(client.state['flows']['existing-aws-flow'], previous)
         self.assertEqual(result['flowSha256'], gateway.flow_sha256(stored['data']))
         self.assertEqual(client.state['keys'][KEY_ID]['expires_at'], '2026-12-19T00:00:00+00:00')
@@ -130,7 +133,7 @@ class GatewayBootstrapTests(unittest.TestCase):
         again = Langflow(first.state)
         self.assertEqual(run(again)['flowId'], created['flowId'])
         self.assertFalse(any(method == 'POST' and route == '/api/v1/flows/' for method, route, _ in again.calls))
-        for field in ('data', 'description', 'endpoint_name'):
+        for field in ('data', 'description', 'endpoint_name', 'access_type'):
             state = copy.deepcopy(first.state)
             stored = state['flows'][created['flowId']]
             if field == 'data':

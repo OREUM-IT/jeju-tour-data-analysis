@@ -105,6 +105,15 @@ def prepare(root, *, provision=False, runner=subprocess.run):
             result = runner(compose + ['exec', '-T', 'langflow', 'python', '/opt/oreumit/gateway-bootstrap.py', '--provision'],
                             capture_output=True, timeout=180, check=False)
             if result.returncode or len(result.stdout) > 16 * 1024:
+                # The inner bootstrap emits fixed codes on failure; preserve only
+                # that bounded code, never its stdout/stderr or a credential value.
+                try:
+                    failure = json.loads(result.stdout) if len(result.stdout) <= 16 * 1024 else {}
+                    code = failure.get('code') if failure.get('status') == 'failed' else None
+                except (ValueError, AttributeError):
+                    code = None
+                if isinstance(code, str) and re.fullmatch(r'GATEWAY_[A-Z_]{1,80}', code):
+                    raise ValueError(code)
                 raise ValueError('GATEWAY_PROVISIONING_FAILED_OUTPUT_WITHHELD')
             try:
                 value = json.loads(result.stdout)
@@ -135,7 +144,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     try:
         print(json.dumps(prepare(ROOT / '.local', provision=args.provision)))
-    except Exception:
-        print(json.dumps({'status': 'failed', 'code': 'GATEWAY_PREPARATION_FAILED',
+    except Exception as error:
+        code = str(error) if isinstance(error, ValueError) and re.fullmatch(r'[A-Z_]{1,90}', str(error)) else 'GATEWAY_PREPARATION_FAILED'
+        print(json.dumps({'status': 'failed', 'code': code,
                           'details': 'Settings preserved. Review permissions or incomplete provisioning marker; no secret output.'}))
         raise SystemExit(1)

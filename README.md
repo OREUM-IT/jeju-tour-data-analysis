@@ -1,5 +1,7 @@
 # 제주도 맞춤 개인 관광 페르소나(테마) 추천 AI Agent
 
+2026-11-19 후속: [제한 Gateway·Access/Tunnel 연결](docs/32-agent-gateway-tunnel.md) 코드를 `codex/lightsail-agent-gateway`에서 구현했다. 앱 HMAC·Access JWT, 고정 Langflow 흐름, 영속 중복 실행/사용량 제한, 요청별 MCP 조건·8회 호출 정책과 최종 응답 검증을 포함한다. 비공개 Docker 및 공개 인증 검사를 위한 실행 절차를 제공하며, AWS Gateway 배포·Cloudflare 계정 설정·Tunnel 공개 연결은 사용자 실행 결과가 아직 없다. 실제 Vercel 설문 연결은 후속 단계다.
+
 2026-11-19 AWS 최신 진행: 사용자가 **`143b705` 적용 후 Vertex 실제 요청 1건 성공** 출력을 제공했다. Langflow는 41초에 Healthy가 됐고, 흐름은 `upgraded-vertex-client`, `vertexConfigured:true`다. 실제 요청은 HTTP 200·14.5초·최종 검증 수락으로 완료됐으며 모델 호출 기록 4회 모두 성공, MCP 도구 호출 3회 성공, 예상 밖 도구 호출 0회다. trace 1건은 정상 종료했고 임시 실행 키도 폐기됐다. 후보 3곳에 대한 `cannot_confirm`·`indoor_unverified`는 **미검증 실내 조건을 확정하지 않고 확인 필요를 정상 안내한 결과**다. [상세 실행 기록](docs/31-lightsail-langflow.md#4-실제-모델-요청-1건-검사)은 사용자 제공 출력에 근거하며 작성자의 AWS 원격 실행 결과가 아니다. 단건 연결·검증 성공이며 추천 품질 전체나 운영 준비 완료를 뜻하지 않아 `productionReady:false`를 유지한다. [PR #14](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/14)는 CI 통과 후 `main@4579c25`에 병합됐다. 완료된 단건 요청을 다시 확인하기 위한 반복 실행은 필요하지 않다. 다음은 **제한 Gateway 구현 → Access/Tunnel → Vercel 연결**이며, 준비한 구현 계약은 31 문서 7절을 따른다.
 
 관광 설문을 여행 선호도와 실행 제약으로 변환하고, 그 근거를 설명하는 개인화 추천 Agent의 기획 저장소입니다. 처음 지정된 논문 **2504.09277은 SynthTRIPs**(관광 추천기 평가용 합성 질의 생성 틀)로 확인되어 평가셋 설계에 쓰고, **LAG는 2508.05509 Logic-Augmented Generation**을 Agent 추론 비교 실험으로 검토합니다(2026-11-18 사용자 결정, [19 문서](docs/19-agent-step2-data-foundation.md)). LAG를 RAG의 오타나 동의어로 해석하지 않습니다.
@@ -21,6 +23,8 @@
 - 문항·점수·일정·평가 목표는 검증 전 제안입니다. 기존 서비스에서 확인한 사실과 새 제안을 구분합니다.
 
 ## 문서 읽는 순서
+
+현재 AWS 후속 실행은 [32. 제한 Gateway·Cloudflare Access/Tunnel 연결](docs/32-agent-gateway-tunnel.md)을 따른다.
 
 1. [제품 목표와 시스템 설계](docs/01-product-and-architecture.md)
 2. [기존 서비스·저장소 검토](docs/05-existing-service-review.md)

@@ -9,12 +9,14 @@ class RequestError extends Error {
   constructor(code, status) { super(code); this.code = code; this.status = status; }
 }
 const MAX_BODY = 32 * 1024;
-const DEADLINE_MS = 110_000;
+// Includes body and Access authentication. Scope revocation gets a separate 3s
+// cleanup window; even with the 5s header limit this fits the 120s caller budget.
+const DEADLINE_MS = 105_000;
 const allowedFields = new Set(['schemaVersion', 'query', 'timezone', 'visitDate', 'filters', 'excludedIds', 'requirements']);
 const codes = new Set(['AUTH_FAILED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'BUSY', 'STATE_UNAVAILABLE',
   'INVALID_RECOMMENDATION_REQUEST', 'BODY_TOO_LARGE', 'INVALID_JSON', 'INVALID_HEADERS', 'BODY_TIMEOUT',
   'METHOD_NOT_ALLOWED', 'NOT_FOUND', 'ORIGIN_REJECTED', 'UNSUPPORTED_MEDIA_TYPE', 'ACCESS_REQUIRED',
-  'FLOW_CHANGED', 'MCP_NOT_READY', 'RECOMMENDATION_BLOCKED', 'FINAL_VALIDATION_REJECTED', 'TOO_MANY_PLACES']);
+  'FLOW_CHANGED', 'MCP_NOT_READY', 'RECOMMENDATION_BLOCKED', 'FINAL_VALIDATION_REJECTED', 'TOO_MANY_PLACES', 'SCOPE_CLEANUP_FAILED']);
 function send(res, status, value, extra = {}) {
   if (res.destroyed || res.writableEnded) return;
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
@@ -57,7 +59,9 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
     || (mode === 'access' && (typeof accessVerifier !== 'function' || !/^[a-z0-9.-]+$/.test(publicHost)))) throw new Error('GATEWAY_CONFIG_INVALID');
   const server = http.createServer(async (req, res) => {
     let requestId, reserved = false, submitted = false, complete = false;
+    const deadlineMs = now() + DEADLINE_MS;
     const disconnect = new AbortController();
+    const signal = AbortSignal.any([disconnect.signal, AbortSignal.timeout(DEADLINE_MS)]);
     res.on('close', () => { if (!res.writableEnded) disconnect.abort(); });
     try {
       headersValid(req);
@@ -74,7 +78,7 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
         if (req.headers.host !== publicHost) throw new RequestError('ACCESS_REQUIRED', 401);
         await accessVerifier(req.headers['cf-access-jwt-assertion']);
       }
-      if (method === 'GET') return send(res, 200, { ...await upstream.ready(disconnect.signal), mode });
+      if (method === 'GET') return send(res, 200, { ...await upstream.ready(signal), mode });
       let input;
       try { input = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)); }
       catch { throw new RequestError('INVALID_JSON', 400); }
@@ -86,9 +90,8 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
       const started = now();
       state.reserve({ subject: auth.subject, nonce: auth.nonce, requestId, now: started });
       reserved = true;
-      const signal = AbortSignal.any([disconnect.signal, AbortSignal.timeout(DEADLINE_MS)]);
       const result = await upstream.execute({ ...input, requestId }, {
-        subjectHash: createHash('sha256').update(auth.subject).digest('hex'), deadlineMs: started + DEADLINE_MS,
+        subjectHash: createHash('sha256').update(auth.subject).digest('hex'), deadlineMs,
         signal, onSubmitted: () => { submitted = true; },
       });
       complete = true;

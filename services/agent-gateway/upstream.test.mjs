@@ -226,6 +226,40 @@ test('preparation mismatch and aborted model request clean up the scope without 
   assert.equal((await timed.mcpCall('/gateway/readyz', undefined, true)).activeScopes, 0);
 });
 
+test('failed scope cleanup does not replace the original model timeout or trigger another model submission', async t => {
+  const controller = new AbortController();
+  const originalTimeout = new DOMException('canary-original-model-timeout', 'TimeoutError');
+  const { upstream, network, mcpCall } = await fixture(t, { fetchOverride: async (url, config, { langflowUrl }) => {
+    if (config.method === 'DELETE') return Response.json({ error: 'canary-private-cleanup-body' }, { status: 503 });
+    if (url.startsWith(langflowUrl + '/api/v1/run/')) {
+      controller.abort(originalTimeout);
+      throw originalTimeout;
+    }
+  } });
+  let submitted = 0;
+  await assert.rejects(upstream.execute(request(), context({ signal: controller.signal,
+    onSubmitted: () => { submitted++; } })), error => error === originalTimeout);
+  assert.equal(submitted, 1);
+  assert.equal(network.filter(call => call.url.includes('/api/v1/run/')).length, 1);
+  const cleanup = network.filter(call => call.config.method === 'DELETE');
+  assert.equal(cleanup.length, 1);
+  assert.equal(cleanup[0].config.signal.aborted, false);
+  // A failed revoke is not falsely reported as a released scope; TTL remains the fail-closed bound.
+  assert.equal((await mcpCall('/gateway/readyz', undefined, true)).activeScopes, 1);
+});
+
+test('otherwise accepted recommendation is withheld if scope cleanup fails', async t => {
+  const { upstream, calls, network, mcpCall } = await fixture(t, { fetchOverride: async (_url, config) => {
+    if (config.method === 'DELETE') throw new Error('canary-private-cleanup-exception');
+  } });
+  await assert.rejects(upstream.execute(request(), context()), error => hasCode('SCOPE_CLEANUP_FAILED')(error)
+    && error.status === 503 && !error.message.includes('canary'));
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  assert.equal(network.filter(call => call.url.endsWith('/gateway/validate-response')).length, 1);
+  assert.equal(network.filter(call => call.config.method === 'DELETE').length, 1);
+  assert.equal((await mcpCall('/gateway/readyz', undefined, true)).activeScopes, 1);
+});
+
 test('HTTP upstream rejection never echoes response content and still releases its registered scope', async t => {
   const { upstream, calls, mcpCall } = await fixture(t, { run: async ({ res }) => json(res, { error: 'canary-secret-provider-detail' }, 500) });
   await assert.rejects(upstream.execute(request(), context()), error => hasCode('UPSTREAM_REJECTED')(error) && !error.message.includes('canary'));

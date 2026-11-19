@@ -116,7 +116,9 @@ def tunnel_token(content):
     require(isinstance(content, bytes) and 0 < len(content) <= MAX_BYTES)
     token = content.removesuffix(b'\n').removesuffix(b'\r')
     require(re.fullmatch(rb'[A-Za-z0-9+/]+={0,2}', token) is not None)
-    # cloudflared's remotely managed tunnel token is base64 TunnelToken JSON.
+    # Project scope: base64 TunnelToken JSON using Cloudflare's default global
+    # endpoint. cloudflared also supports nonempty e (e.g. FedRAMP), which this
+    # deployment deliberately does not enable.
     decoded = json.loads(base64.b64decode(token, validate=True))
     require(isinstance(decoded, dict) and {'a', 't', 's'} <= set(decoded) <= {'a', 't', 's', 'e'}
             and decoded.get('e', '') == ''

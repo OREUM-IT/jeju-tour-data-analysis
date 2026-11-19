@@ -147,7 +147,11 @@ def build_flow(client, template, source, setup):
         edge(ids['Agent'], 'Agent', 'response', ids['JejuFinalValidation'], 'agent_response'),
         edge(ids['JejuFinalValidation'], 'JejuFinalValidation', 'message', ids['ChatOutput'], 'input_value'),
     ]
-    flow.update(name=FLOW_NAME, endpoint_name=None, last_tested_version=VERSION,
+    # last_tested_version belongs to exported templates, not FlowCreate/FlowRead
+    # in Langflow 1.13.3. Do not require an ignored field in stored metadata.
+    flow.pop('last_tested_version', None)
+    flow.update(name=FLOW_NAME, endpoint_name=None, access_type='PRIVATE',
+                webhook=False, mcp_enabled=False, is_component=False,
                 description='별도 Gateway flow. 원본 요청 범위의 세 도구만 사용하며 모델4회/90초·출력2048토큰과 최종 검증을 적용한다. 운영 준비 완료를 뜻하지 않는다.')
     return flow
 
@@ -168,7 +172,8 @@ def checked_flow(client, flow, *, provision):
     except (ValueError, TypeError, AttributeError):
         raise GatewayBootstrapError('GATEWAY_FLOW_ID_INVALID') from None
     stored = payload(client.get(f'/api/v1/flows/{flow_id}'))
-    require(all(stored.get(key) == flow.get(key) for key in ('name', 'data', 'endpoint_name', 'description', 'last_tested_version', 'tags')),
+    require(all(stored.get(key) == flow.get(key) for key in ('name', 'data', 'endpoint_name', 'description', 'tags',
+                                                           'access_type', 'webhook', 'mcp_enabled', 'is_component')),
             'GATEWAY_EXISTING_FLOW_DIFFERS')
     return flow_id
 

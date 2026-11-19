@@ -91,7 +91,7 @@ export function createUpstream({ flowId, flowSha256, langflowApiKey, mcpToken, c
     return { ready: true, flowVerified: true, catalogPlaces: 981, productionReady: false };
   }
   async function execute(request, { subjectHash, deadlineMs, signal, onSubmitted = () => {} }) {
-    let registered = false;
+    let registered = false, primaryError;
     try {
       await ready(signal);
       const prepared = await call(mcpUrl, '/gateway/scopes', { method: 'POST', headers: controlAuth,
@@ -115,10 +115,20 @@ export function createUpstream({ flowId, flowSha256, langflowApiKey, mcpToken, c
       require(response.placeIds.length <= 5, 'TOO_MANY_PLACES', 422);
       return { schemaVersion: '1.0', status: 'accepted', requestId: request.requestId,
         response, catalogVersion: prepared.catalogVersion, policyVersion: prepared.policyVersion, productionReady: false };
+    } catch (error) {
+      primaryError = error;
+      throw error;
     } finally {
       // Revoke even after disconnect/timeout; do not reuse the aborted request signal.
-      if (registered) await call(mcpUrl, `/gateway/scopes/${request.requestId}`,
-        { method: 'DELETE', headers: controlAuth, timeout: 3000 });
+      if (registered) {
+        try {
+          await call(mcpUrl, `/gateway/scopes/${request.requestId}`, { method: 'DELETE', headers: controlAuth, timeout: 3000 });
+        } catch {
+          // Keep a primary timeout classified as timeout; a successful result is
+          // still withheld if its scope could not be revoked.
+          if (!primaryError) throw new UpstreamError('SCOPE_CLEANUP_FAILED', 503);
+        }
+      }
     }
   }
   return { ready, execute };

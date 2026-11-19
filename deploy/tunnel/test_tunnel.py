@@ -120,6 +120,16 @@ class ConfigurationTests(unittest.TestCase):
             self.token()
         self.assertFalse(runtime.exists())
 
+    def test_token_allows_long_secret_and_empty_endpoint_but_rejects_custom_endpoint(self):
+        value = json.loads(base64.b64decode(TOKEN))
+        value['s'] = base64.b64encode(b'f' * 48).decode('ascii')
+        value['e'] = ''
+        encoded = base64.b64encode(json.dumps(value).encode())
+        self.assertEqual(configure.tunnel_token(encoded), encoded)
+        value['e'] = 'fed'
+        with self.assertRaises(configure.ConfigurationError):
+            configure.tunnel_token(base64.b64encode(json.dumps(value).encode()))
+
     def test_wrong_owner_and_hardlinks_are_rejected(self):
         path = self.root / 'gateway.env'
         with self.assertRaises(configure.ConfigurationError):

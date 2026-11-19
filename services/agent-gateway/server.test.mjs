@@ -93,7 +93,7 @@ test('only liveness is anonymous; signed readiness and recommendation do not exp
   assert.equal(execution.request.requestId, output.requestId);
   assert.match(execution.context.subjectHash, /^[a-f0-9]{64}$/u);
   assert.notEqual(execution.context.subjectHash, 'test-member');
-  assert.equal(execution.context.deadlineMs, NOW + 110_000);
+  assert.equal(execution.context.deadlineMs, NOW + 105_000);
   assert.equal(JSON.stringify(output).includes(KEY), false);
 });
 
@@ -135,6 +135,28 @@ test('access mode requires exact origin host and a verified Access JWT in additi
   assert.equal(calls.length, 0);
   assert.equal((await send({ Host: 'agent.example.invalid', 'cf-access-jwt-assertion': 'valid-access-test-token' })).status, 200);
   assert.equal(calls.filter(call => call.kind === 'execute').length, 1);
+});
+
+test('Access verification time consumes the original HTTP deadline instead of granting a fresh execution window', async t => {
+  let clock;
+  const accessVerifier = async token => {
+    assert.equal(token, 'valid-access-test-token');
+    // Simulate five seconds spent waiting for Access certificates without sleeping.
+    clock.value += 5000;
+    await Promise.resolve();
+  };
+  const app = await fixture(t, { mode: 'access', publicHost: 'agent.example.invalid', accessVerifier });
+  clock = app.clock;
+  const request = app.signed('/v1/recommend', input(), { headers: {
+    Host: 'agent.example.invalid', 'cf-access-jwt-assertion': 'valid-access-test-token',
+  } });
+  const response = await rawRequest(app.base, { headers: request.headers, chunks: [request.body] });
+  assert.equal(response.status, 200);
+  const execution = app.calls.find(call => call.kind === 'execute');
+  assert.equal(clock.value, NOW + 5000);
+  assert.equal(execution.context.deadlineMs, NOW + 105_000);
+  assert.equal(execution.context.deadlineMs - clock.value, 100_000);
+  assert.equal(execution.context.signal.aborted, false);
 });
 
 test('fixed length and chunked oversized bodies, invalid UTF-8 and malformed JSON never reach upstream', async t => {
@@ -216,4 +238,21 @@ test('pre-submission errors and state failures are sanitized and never advertise
   const unavailable = await send();
   assert.equal(unavailable.status, 503);
   assert.equal((await unavailable.json()).error.code, 'STATE_UNAVAILABLE');
+});
+
+test('scope cleanup failure after submission blocks a successful result and preserves the uncertain execution lease', async t => {
+  let submissions = 0;
+  const upstream = { ready: async () => ({}), execute: async (_request, context) => {
+    submissions++; context.onSubmitted();
+    throw Object.assign(new Error('canary-cleanup-provider-detail'), { code: 'SCOPE_CLEANUP_FAILED', status: 503 });
+  } };
+  const { send } = await fixture(t, { upstream });
+  const response = await send();
+  assert.equal(response.status, 503);
+  const output = await response.json();
+  assert.deepEqual(output.error, { code: 'SCOPE_CLEANUP_FAILED' });
+  assert.equal('response' in output, false);
+  assert.equal(JSON.stringify(output).includes('canary'), false);
+  assert.equal((await send()).status, 429);
+  assert.equal(submissions, 1);
 });
