@@ -289,6 +289,8 @@ export async function collectBaselineCapture({
   const selectedHeaders = requestHeaders(headers);
   ensure(['legacy', 'langflow-v2'].includes(requestMode) && (requestMode !== 'langflow-v2' || system.id === 'langflow'), 'requestMode must be legacy or Langflow-only langflow-v2');
   ensure((requestMode === 'langflow-v2') === (system.adapterVersion === VALIDATED_BASELINE_ADAPTER_VERSION), 'request mode and response adapter version disagree');
+  ensure(requestMode !== 'langflow-v2' || (outputSelector.outputIndex === 0 && outputSelector.componentId === 'ChatOutput-jejuV2'),
+    'validated Langflow mode requires outputIndex 0 and ChatOutput-jejuV2');
   // Parse ALL planned inputs before any endpoint call, including cases beyond this invocation's limit.
   const requestBinding = requestMode === 'langflow-v2' ? prepareValidatedCollection(plan, catalog) : undefined;
   const prior = priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector, requestMode, catalog, requestBinding });

@@ -14,7 +14,7 @@ import { baselineInputs } from './helpers/baseline-fixture.mjs';
 
 const inputs = baselineInputs();
 const plan = createBaselinePlan(inputs);
-const selector = { outputIndex: 0, componentId: 'ChatOutput-v2-fixture' };
+const selector = { outputIndex: 0, componentId: 'ChatOutput-jejuV2' };
 const system = { id: 'langflow', modelId: 'fixture-model', promptVersion: 'fixture-v2', toolVersion: 'fixture-mcp-v2', adapterVersion: VALIDATED_BASELINE_ADAPTER_VERSION };
 const output = (value) => ({ outputs: [{ outputs: [{ component_id: selector.componentId,
   results: { message: { sender: 'Machine', text: typeof value === 'string' ? value : JSON.stringify(value),
@@ -117,6 +117,13 @@ test('v2 resume preserves failed attempts and checks mode, catalog, payload and 
   }
   await assert.rejects(collect({ catalog: { ...inputs.catalog, diagnostics: { changed: true } }, resumeCapture: first.capture, resumeTelemetry: first.telemetry }), /catalog/);
   await assert.rejects(collect({ requestMode: 'legacy', resumeCapture: first.capture, resumeTelemetry: first.telemetry }), /mode/);
+  // An all-failed capture has no successful outputSelector field to compare. The pinned v2 selector still applies.
+  for (const outputSelector of [{ ...selector, outputIndex: 1 }, { ...selector, componentId: 'Agent-jejuV2' }]) {
+    let calls = 0;
+    await assert.rejects(collect({ outputSelector, resumeCapture: first.capture, resumeTelemetry: first.telemetry,
+      fetchImpl: async () => { calls++; return json({}); } }), /requires outputIndex 0 and ChatOutput-jejuV2/);
+    assert.equal(calls, 0);
+  }
 });
 
 test('v2 importer requires bound inputs and refuses identity changes or human overrides', async () => {
