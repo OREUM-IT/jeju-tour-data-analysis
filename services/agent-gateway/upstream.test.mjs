@@ -69,8 +69,10 @@ async function fixture(t, options = {}) {
       let final = { schemaVersion: '1.0', requestId: original.requestId, action: 'cannot_confirm', placeIds,
         requirementClaims: placeIds.map(placeId => ({ placeId, requirement: 'indoor_required', verdict: 'unknown' })),
         confirmationNotice: true, noticeTopics: ['indoor_unverified'] };
+      if (options.agent) final = options.agent(final);
       const accepted = await mcpCall('/gateway/validate-response', { request: original, response: final, expectedCatalogVersion: prepared.catalogVersion });
       assert.equal(accepted.status, 'accepted');
+      final = accepted.response; // Match the real Langflow Final component's publication boundary.
       if (options.final) final = options.final(final);
       let raw = envelope(final, original.requestId);
       if (options.raw) raw = options.raw(raw);
@@ -146,6 +148,22 @@ test('real signed HTTP Gateway → mock Langflow → real scoped MCP completes w
   assert.equal(calls.filter(call => call.method === 'POST').length, 1);
 });
 
+test('missing model claims and false passes become evidence-backed candidates before final Gateway publication', async t => {
+  for (const claims of [[], 'malformed', [{ placeId: fixtureCatalog.places[0].id, requirement: 'indoor_required', verdict: 'pass' }]]) {
+    const { upstream, calls, mcpCall } = await fixture(t, { agent: value => ({ ...value, action: 'recommend',
+      requirementClaims: claims, confirmationNotice: false, noticeTopics: [], reply: 'unchecked text must not escape' }) });
+    const result = await upstream.execute(request(), context());
+    assert.equal(result.response.action, 'cannot_confirm');
+    assert.equal(result.response.placeIds.length, 3);
+    assert.ok(result.response.requirementClaims.every(claim => claim.verdict === 'unknown'));
+    assert.deepEqual(result.response.noticeTopics, ['indoor_unverified']);
+    assert.equal(result.response.confirmationNotice, true);
+    assert.equal(JSON.stringify(result).includes('unchecked text'), false);
+    assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+    assert.equal((await mcpCall('/gateway/readyz', undefined, true)).activeScopes, 0);
+  }
+});
+
 test('changed approved graph or bad readiness blocks before any model submission or scope creation', async t => {
   const first = await fixture(t); first.changeFlow();
   await assert.rejects(first.upstream.execute(request(), context()), hasCode('FLOW_CHANGED'));
@@ -175,7 +193,7 @@ test('untrusted final source, session, request identity, unknown places and unkn
     { final: final => {
       const placeIds = fixtureCatalog.places.slice(0, 6).map(place => place.id);
       return { ...final, placeIds, requirementClaims: placeIds.map(placeId => ({ placeId, requirement: 'indoor_required', verdict: 'unknown' })) };
-    }, code: 'TOO_MANY_PLACES' },
+    }, code: 'FINAL_VALIDATION_REJECTED' },
     { final: () => ({ status: 'blocked', code: 'VALIDATION_FAILED', message: 'private-canary' }), code: 'RECOMMENDATION_BLOCKED' },
   ];
   for (const item of cases) {

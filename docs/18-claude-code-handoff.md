@@ -1,5 +1,7 @@
 # Claude Code 인수인계와 작업 재개 절차
 
+2026-11-19 후보 표시 완화: 사용자가 운영 설문에서 “조건과 장소를 확인할 수 없어 AI 결과를 표시하지 않았어요”를 보고하고 후보를 먼저 보여 달라고 요청했다. 이 문구는 Gateway HTTP 422와 웹 음식점 제외 처리에서 공통으로 발생하므로 개별 요청의 원인은 아직 확정하지 않았다. `codex/gateway-candidate-recovery`는 Gateway에 등록된 원본 요청 범위 안에서 모델이 선택한 장소 ID만 남기고, 조건 판정·확인 안내를 서버 근거로 재구성한 뒤 기존 엄격한 최종 검증을 다시 통과시킨다. 일반 `/validate-response`와 기준선 평가는 바꾸지 않는다. MCP 서비스만 새 이미지로 적용하면 기존 Langflow 흐름·Gateway 프로토콜과 호환된다. 구현·로컬 검증과 사용자 AWS 적용은 구분하며 아직 이번 수정의 AWS 적용·실제 웹 추천 성공은 확인하지 않았다. 적용 절차는 [32 문서](32-agent-gateway-tunnel.md#후보-표시-완화-적용)를 따른다.
+
 2026-11-19 웹 연결 최신: [앱 PR #33](https://github.com/OREUM-IT/jeju-tour/pull/33)에 Vercel 설문 서버 어댑터·로그인 연동·AI 결과 화면을 구현했다. 실제 앱 `main@ba28cbb` 기반이며 서버·설문 24개, 비밀 등록 15개, 신규/기존 브라우저 18개 검사가 통과했다. AWS 기존 비밀 3개는 사용자가 Preview 브랜치에 등록했고 Vercel 메타데이터로 확인했다. 등록 후 `7ec1360` Preview가 READY이고 `/api/agent/status`의 HTTP 200·`enabled:true`·`configured:true`를 확인했다. 다음은 로그인 사용자의 실제 추천 결과 확인이다. 웹 PR의 최신 배포 상태와 [연결 안내](https://github.com/OREUM-IT/jeju-tour/blob/codex/vercel-agent-gateway/docs/agent-gateway-vercel.md)를 우선 확인한다. 기존 Gateway·Langflow 설치를 반복하지 않으며 Production과 `productionReady:true` 전환은 하지 않았다.
 
 2026-11-19 최신: Gateway·Access/Tunnel PR #16은 `main@2b44228`에 병합됐다. [PR #17](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/17)의 `7890060`을 적용한 사용자 AWS에서 **공개 인증 검사 `scope:public`, `status:passed`**를 확인했다. 검사기의 실제 앱 User-Agent와 Gateway의 동일 JWT 단일 인증 쿠키 호환 처리로 403 원인을 해결했다. [32 문서 성공 기록](32-agent-gateway-tunnel.md#aws-공개-인증-검사-성공)을 근거로 Vercel 서버 어댑터·서버 비밀 설정·Preview 연결로 이어간다. 공개 검사는 모델 미실행이며 새 Gateway의 추천 실행과 운영 준비는 아직 미완료다. 아래 과거 기록의 Gateway 미구현 상태로 되돌아가지 않는다.
@@ -11,6 +13,8 @@
 기준일: 2026-11-19 (한국 시간, 실제 Gemini·Langflow 각 96문항 수집·채점 반영). 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 [19 문서](19-agent-step2-data-foundation.md)의 단계로 구현하는 것이다. 이 문서는 다음 세션이 그대로 이어받을 상태, 재개 절차, 다음 작업 명세를 담는다. 0절이 최신 상태다. 1절 이하는 이전 세션의 기록과 절차를 포함한다. 과거 상태보다 확인 시점이 최근인 근거를 우선하고, 새 결과가 생기면 근거와 함께 갱신한다.
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
+
+**추가 운영 확인:** 앱 PR #34·#35는 사용자 병합으로 `main@840baa177ef25b1d97f1f030ed2929d05280eef3`에 반영됐고 Production 배포 `dpl_CPuN5ABqAyaBkHj7p798eKtb7q5C`는 READY다. 운영 `jeju-tour-six.vercel.app` 상태 API가 `enabled:true,configured:true`를 반환했으며, 실제 브라우저에서 설문 저장→새로고침→불러오기로 답변과 Q02 단계 복원을 확인했다. 해당 점검 브라우저는 비로그인이어서 모델 POST는 실행하지 않았다. 이후 사용자가 실제 AI 결과 차단 문구를 알려 후보 표시 완화 작업으로 진행했다. 아래 과거 PR 상태보다 이 최신 기록을 우선한다.
 
 **현재 연결 작업:** 사용자 AWS에 `7890060`을 적용한 후 `scope:public`, `status:passed`, `runtimeChecked:true`를 확인했다. Access 서비스 인증과 앱 HMAC·JWT·고정 흐름/카탈로그 준비 검사가 통과했다. 수정 전 실제 헤더는 Origin 없음·JWT 헤더와 동일한 단일 CF 인증 쿠키였으며, 이 경우만 Access 보호 경로에서 수용한다. 다음은 Vercel 설문 서버 어댑터·서버 비밀 설정·Preview 검사다. `modelExecuted:false`, `productionReady:false`이며 새 Gateway 경로의 실제 모델 추천을 성공했다고 기록하지 않는다. 아래 Vertex·평가 이력은 이전 단계 기록이다.
 

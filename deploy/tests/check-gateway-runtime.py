@@ -94,6 +94,21 @@ async def check(control_token):
             final.set(prepared_request=prepared_message, agent_response=Message(text=json.dumps(response), session_id=request_id))
             accepted = await final.validate_response()
             assert json.loads(accepted.text) == response
+            # Same real final component + scoped MCP: keep selected catalog IDs when
+            # the model forgets claims/notices; the server supplies actual evidence.
+            incomplete = {'schemaVersion': '1.0', 'requestId': request_id,
+                          'action': 'recommend', 'placeIds': ids,
+                          'requirementClaims': [], 'confirmationNotice': False, 'noticeTopics': []}
+            final.set(agent_response=Message(text=json.dumps(incomplete), session_id=request_id))
+            recovered = await final.validate_response()
+            assert json.loads(recovered.text) == response
+            # Gateway rechecks the published response; projection must be stable.
+            rechecked = await client.post('/gateway/validate-response',
+                headers={'Authorization': 'Bearer ' + service_token}, json={
+                    'request': original, 'response': json.loads(recovered.text),
+                    'expectedCatalogVersion': prepared['catalogVersion']})
+            assert rechecked.status_code == 200 and rechecked.json()['status'] == 'accepted'
+            assert rechecked.json()['response'] == response
             released = await client.delete('/gateway/scopes/' + request_id, headers=headers)
             assert released.status_code == 200
             active.remove(request_id)

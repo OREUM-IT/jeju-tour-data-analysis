@@ -4,6 +4,7 @@ import test from 'node:test';
 import { BASIS_POLICY } from '../src/agent-catalog.mjs';
 import { validateAgentServerCatalog } from '../src/catalog.mjs';
 import { createGatewayScopes, GatewayScopeError } from '../src/gateway-scopes.mjs';
+import { createRuntimeValidator } from '../src/recommendation-validation.mjs';
 import { createMcpHttpServer } from '../src/server.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -37,6 +38,15 @@ const registration = (value = request(), extra = {}) => ({ request: value, princ
 const tool = (name, args, requestId = ID) => ({ requestId, name, arguments: args });
 const throwsCode = (callback, code, status) => assert.throws(callback, error => error instanceof GatewayScopeError
   && error.code === code && (status === undefined || error.status === status));
+const recommendation = (placeIds = ['p2'], extra = {}) => ({ schemaVersion: '1.0', requestId: ID,
+  action: 'recommend', placeIds, requirementClaims: [], confirmationNotice: false, noticeTopics: [], ...extra });
+function validationFixture({ original = request(), extraPlaces = [] } = {}) {
+  const input = catalog(extraPlaces), scopes = createGatewayScopes({ catalog: input, now: NOW });
+  const prepared = scopes.register(registration(original));
+  const body = response => ({ request: original, response, expectedCatalogVersion: prepared.catalogVersion });
+  return { scopes, prepared, body, strict: createRuntimeValidator({ catalog: input, now: NOW }),
+    validate: response => scopes.validate(body(response)) };
+}
 
 test('registration preserves immutable input, exact request binding, one active scope and tombstones', () => {
   const scopes = createGatewayScopes({ catalog: catalog(), now: NOW });
@@ -153,18 +163,128 @@ test('constraint checks reconstruct every original condition and preserve indivi
   assert.equal(result.status, 'accepted');
 });
 
-test('final validation rejects changed request, catalog and false claims without returning unsafe response', () => {
+test('final validation recomputes false claims but rejects changed request and catalog binding', () => {
   const scopes = createGatewayScopes({ catalog: catalog(), now: NOW });
   const original = request({ requirements: [{ type: 'indoor_required', value: true }] });
   const prepared = scopes.register(registration(original));
   const body = { request: original, expectedCatalogVersion: prepared.catalogVersion,
     response: { schemaVersion: '1.0', requestId: ID, action: 'recommend', placeIds: ['p2'],
       requirementClaims: [{ placeId: 'p2', requirement: 'indoor_required', verdict: 'pass' }], confirmationNotice: false, noticeTopics: [] } };
-  const blocked = scopes.validate(body);
-  assert.equal(blocked.status, 'blocked');
-  assert.equal('response' in blocked, false);
+  const result = scopes.validate(body);
+  assert.equal(result.status, 'accepted');
+  assert.equal(result.response.action, 'cannot_confirm');
+  assert.deepEqual(result.response.requirementClaims, [{ placeId: 'p2', requirement: 'indoor_required', verdict: 'unknown' }]);
+  assert.equal(result.response.confirmationNotice, true);
+  assert.deepEqual(result.response.noticeTopics, ['indoor_unverified']);
   throwsCode(() => scopes.validate({ ...body, request: request() }), 'GATEWAY_REQUEST_MISMATCH', 409);
   throwsCode(() => scopes.validate({ ...body, expectedCatalogVersion: 'sha256:' + '0'.repeat(64) }), 'GATEWAY_CATALOG_MISMATCH', 409);
+});
+
+test('already accepted responses up to five places are unchanged and recovery is idempotent', () => {
+  const { validate, strict, body } = validationFixture();
+  const response = recommendation(['p2', 'p1']);
+  const original = structuredClone(response);
+  assert.deepEqual(validate(response), strict.validate(body(response)));
+  assert.deepEqual(response, original);
+  const recovered = validate({ ...response, requirementClaims: null });
+  assert.equal(recovered.status, 'accepted');
+  assert.deepEqual(recovered.response, response);
+  assert.deepEqual(validate(recovered.response), recovered);
+});
+
+test('malformed or missing claims and missing notices recover selected IDs using every registered requirement', () => {
+  const original = request({ requirements: [
+    { type: 'indoor_required', value: true, date: '2026-11-22' },
+    { type: 'open_at', value: '10:00', date: '2026-11-20' },
+    { type: 'wheelchair', value: true },
+    { type: 'budget_cap', value: 30_000, unit: 'KRW_per_person_per_day' },
+  ] });
+  const { validate, strict, body, prepared } = validationFixture({ original });
+  const responses = [
+    recommendation(['p1']),
+    recommendation(['p1'], { requirementClaims: null }),
+    recommendation(['p1'], { requirementClaims: [{ placeId: 'p1', requirement: 'indoor_required', verdict: ['pass'] }] }),
+    recommendation(['p1'], { requirementClaims: original.requirements.map(entry => ({ placeId: 'p1', requirement: entry.type, verdict: 'pass' })) }),
+    { schemaVersion: '1.0', requestId: ID, action: 'cannot_confirm', placeIds: ['p1'], privateModelProse: 'Must never be returned.' },
+  ];
+  for (const response of responses) {
+    const unchanged = structuredClone(response);
+    assert.equal(strict.validate(body(response)).status, 'blocked');
+    const recovered = validate(response);
+    assert.equal(recovered.status, 'accepted');
+    assert.deepEqual(recovered.response, recommendation(['p1'], { action: 'cannot_confirm', confirmationNotice: true,
+      requirementClaims: [
+        { placeId: 'p1', requirement: 'indoor_required', verdict: 'unknown' },
+        { placeId: 'p1', requirement: 'open_at', verdict: 'pass' },
+        { placeId: 'p1', requirement: 'wheelchair', verdict: 'unknown' },
+        { placeId: 'p1', requirement: 'budget_cap', verdict: 'unknown' },
+      ], noticeTopics: ['indoor_unverified', 'wheelchair_unverified', 'cost_unknown'] }));
+    assert.deepEqual(recovered.reasons, []);
+    for (const key of ['requestSha256', 'catalogSha256', 'catalogVersion', 'policyVersion', 'candidateCount']) assert.equal(recovered[key], prepared[key]);
+    assert.deepEqual(validate(recovered.response), recovered);
+    assert.equal(strict.validate(body(recovered.response)).status, 'accepted');
+    assert.deepEqual(response, unchanged);
+  }
+});
+
+test('recovery drops unknown, excluded, out-of-filter, duplicate and verified failing selections without inventing places', () => {
+  const original = request({ requirements: [{ type: 'indoor_required', value: true }] });
+  const { validate } = validationFixture({ original,
+    extraPlaces: [place('failed', '합성 야외 전시관', { attributes: { indoor: verified(false) } })] });
+  const response = recommendation(['food', 'p2', 'failed', 'p2', 'excluded', 'p1', 'missing', 'east', 'other-text']);
+  const recovered = validate(response);
+  assert.equal(recovered.status, 'accepted');
+  assert.deepEqual(recovered.response.placeIds, ['p2', 'p1']);
+  assert.deepEqual(recovered.response.requirementClaims, [
+    { placeId: 'p2', requirement: 'indoor_required', verdict: 'unknown' },
+    { placeId: 'p1', requirement: 'indoor_required', verdict: 'pass' },
+  ]);
+  assert.equal(recovered.response.action, 'cannot_confirm');
+  assert.deepEqual(recovered.response.noticeTopics, ['indoor_unverified']);
+  assert.deepEqual(validate(recovered.response), recovered);
+});
+
+test('recovery requires an exact response identity and bounded explicit ID strings, never prose extraction', () => {
+  const { validate } = validationFixture({ original: request({ requirements: [{ type: 'indoor_required', value: true }] }) });
+  for (const response of [null, JSON.stringify(recommendation()), [recommendation()], {},
+    recommendation(['p2'], { schemaVersion: '2.0' }), recommendation(['p2'], { requestId: OTHER_ID }),
+    recommendation(['p2'], { action: ['recommend'] }), recommendation(['p2'], { action: 'ask_clarification' }),
+    recommendation(['p2'], { action: 'impossible' }), recommendation('p2'), recommendation([]),
+    recommendation(Array(51).fill('p2')), recommendation(['p2', 1]), recommendation([['p2']]),
+    recommendation([null]), recommendation(['']), recommendation([' p2']), recommendation(['x'.repeat(161)]),
+    { schemaVersion: '1.0', requestId: ID, action: 'recommend', text: 'Choose p2.' }]) {
+    const blocked = validate(response);
+    assert.equal(blocked.status, 'blocked');
+    assert.equal('response' in blocked, false);
+  }
+});
+
+test('no eligible model selection remains blocked even when other catalog candidates are available', () => {
+  const { validate, strict, body, prepared } = validationFixture({
+    original: request({ requirements: [{ type: 'indoor_required', value: true }] }),
+    extraPlaces: [place('failed', '합성 야외 전시관', { attributes: { indoor: verified(false) } })],
+  });
+  assert.ok(prepared.candidateCount > 0);
+  for (const ids of [['missing'], ['excluded', 'food', 'east'], ['failed']]) {
+    const response = recommendation(ids);
+    const blocked = validate(response);
+    assert.equal(blocked.status, 'blocked');
+    assert.deepEqual(blocked, strict.validate(body(response)));
+    assert.equal('response' in blocked, false);
+  }
+});
+
+test('more than five valid selections are capped in model order and no requirements produce ordinary recommend', () => {
+  const extraPlaces = Array.from({ length: 7 }, (_, index) => place(`extra-${index}`, `합성 추가 ${index}`));
+  const { validate, strict, body } = validationFixture({ extraPlaces });
+  const ordered = ['extra-6', 'extra-2', 'p2', 'extra-4', 'p1', 'extra-0', 'extra-1'];
+  const response = recommendation(ordered);
+  assert.equal(strict.validate(body(response)).status, 'accepted');
+  const recovered = validate(response);
+  assert.deepEqual(recovered.response, recommendation(ordered.slice(0, 5)));
+  assert.deepEqual(validate(recovered.response), recovered);
+  const malformed = validate({ ...response, requirementClaims: 'untrusted', noticeTopics: ['cost_unknown'] });
+  assert.deepEqual(malformed, recovered);
 });
 
 test('deadline and process restart fail closed without carrying scopes into a fresh process', () => {
@@ -222,6 +342,26 @@ test('concurrent HTTP calls reserve at most eight tool executions and malformed 
   assert.equal(responses.filter(response => response.status === 429).length, 4);
   assert.equal((await call('/gateway/scopes', registration(), { token: CONTROL })).status, 409);
   assert.equal((await call('/gateway/tools/call', tool('places.search', {}))).status, 429);
+});
+
+test('HTTP recovery is confined to the registered Gateway route and its final response revalidates unchanged', async t => {
+  const { call } = await serverFixture(t);
+  const original = request({ requirements: [{ type: 'indoor_required', value: true }] });
+  const prepared = await (await call('/gateway/scopes', registration(original), { token: CONTROL })).json();
+  const body = { request: original, expectedCatalogVersion: prepared.catalogVersion,
+    response: recommendation(['p2'], { requirementClaims: [{ placeId: 'p2', requirement: 'indoor_required', verdict: 'pass' }] }) };
+  const unscoped = await (await call('/validate-response', body)).json();
+  assert.equal(unscoped.status, 'blocked');
+  assert.equal('response' in unscoped, false);
+  const recovered = await (await call('/gateway/validate-response', body)).json();
+  assert.equal(recovered.status, 'accepted');
+  assert.equal(recovered.response.action, 'cannot_confirm');
+  assert.deepEqual(recovered.response.placeIds, ['p2']);
+  const rechecked = await (await call('/gateway/validate-response', { ...body, response: recovered.response })).json();
+  assert.deepEqual(rechecked, recovered);
+  assert.equal((await call('/gateway/validate-response', { ...body, request: request() })).status, 409);
+  await call('/gateway/scopes/' + ID, undefined, { method: 'DELETE', token: CONTROL });
+  assert.equal((await call('/gateway/validate-response', body)).status, 404);
 });
 
 test('legacy SDK and unscoped validation remain available alongside scoped routes', async t => {

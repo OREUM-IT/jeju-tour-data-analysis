@@ -15,6 +15,8 @@ const copy = (value) => structuredClone(value);
 const aggregate = (entries) => entries.some(entry => entry.status === 'fail') ? 'fail'
   : entries.some(entry => entry.status === 'unknown') ? 'unknown' : 'pass';
 const definitions = new Map(AGENT_TOOL_DEFINITIONS.map(definition => [definition.name, definition]));
+const confirmationTopics = Object.freeze({ indoor_required: 'indoor_unverified', open_at: 'hours_unverified',
+  wheelchair: 'wheelchair_unverified', budget_cap: 'cost_unknown' });
 const checkArguments = z.object({
   ids: definitions.get('places.get').inputSchema.shape.ids,
   requirements: z.object({
@@ -92,7 +94,46 @@ export function createGatewayScopes({ catalog, now } = {}) {
       && typeof body.expectedCatalogVersion === 'string', 400, 'INVALID_VALIDATION_ENVELOPE');
     const scope = bound(body.request);
     require(body.expectedCatalogVersion === scope.prepared.catalogVersion, 409, 'GATEWAY_CATALOG_MISMATCH');
-    return validator.validate({ ...body, request: scope.prepared.request });
+    const input = { ...body, request: scope.prepared.request };
+    const original = validator.validate(input);
+    if (original.status === 'accepted' && original.response.placeIds.length <= 5) return original;
+
+    // Recover only explicit model-selected IDs bound to this original request. Never
+    // extract IDs from prose, invent replacements, or trust model-authored claims.
+    const raw = body.response;
+    if (!record(raw) || !['schemaVersion', 'requestId', 'action', 'placeIds'].every(key => Object.hasOwn(raw, key))
+      || raw.schemaVersion !== '1.0' || raw.requestId !== scope.prepared.request.requestId
+      || !['recommend', 'cannot_confirm'].includes(raw.action)
+      || !Array.isArray(raw.placeIds) || raw.placeIds.length === 0 || raw.placeIds.length > 50
+      || !raw.placeIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 160 && id === id.trim())) return original;
+    const request = scope.prepared.request;
+    const candidates = new Map(scope.candidates.map(place => [place.id, place]));
+    const seen = new Set(), placeIds = [], requirementClaims = [], topics = new Set();
+    // Use the first strict check's trusted server time; a second strict check below
+    // still rejects a result if evidence expires while this response is constructed.
+    const at = Date.parse(original.evaluatedAt);
+    for (const placeId of raw.placeIds) {
+      if (seen.has(placeId)) continue;
+      seen.add(placeId);
+      const place = candidates.get(placeId);
+      if (!place) continue; // Includes original exclusions, filters and unknown catalog IDs.
+      const claims = request.requirements.map(entry => {
+        const date = entry.date ?? request.visitDate;
+        const requirement = { ...entry, ...(date === undefined ? {} : { date }) };
+        return { placeId, requirement: entry.type, verdict: runtimeRequirementEvidence(place, requirement, at).verdict };
+      });
+      if (claims.some(claim => claim.verdict === 'fail')) continue;
+      placeIds.push(placeId);
+      requirementClaims.push(...claims);
+      for (const claim of claims) if (claim.verdict === 'unknown') topics.add(confirmationTopics[claim.requirement]);
+      if (placeIds.length === 5) break;
+    }
+    if (placeIds.length === 0) return original;
+    const response = { schemaVersion: '1.0', requestId: request.requestId,
+      action: topics.size ? 'cannot_confirm' : 'recommend', placeIds, requirementClaims,
+      confirmationNotice: topics.size > 0, noticeTopics: [...topics] };
+    const checked = validator.validate({ ...input, response });
+    return checked.status === 'accepted' ? checked : original;
   }
   function release(requestId) {
     require(typeof requestId === 'string' && REQUEST_ID.test(requestId), 400, 'INVALID_GATEWAY_REQUEST_ID');
