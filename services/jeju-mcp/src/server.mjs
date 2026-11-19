@@ -7,6 +7,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { loadCatalog } from './catalog.mjs';
 import { registerTools } from './tools.mjs';
+import { createRuntimeValidator, RecommendationValidationError } from './recommendation-validation.mjs';
 
 const MAX_BODY = 128 * 1024;
 const DEFAULT_CATALOG = fileURLToPath(new URL('../fixtures/catalog.json', import.meta.url));
@@ -64,7 +65,7 @@ function readBody(req) {
   });
 }
 
-export function createMcpHttpServer({ catalog, token, allowedOrigins = [] }) {
+export function createMcpHttpServer({ catalog, token, allowedOrigins = [], now }) {
   if (typeof token !== 'string' || !/^[\x21-\x7e]{32,256}$/.test(token)) {
     throw new Error('MCP_SERVICE_TOKEN requires 32–256 non-space ASCII characters.');
   }
@@ -78,6 +79,7 @@ export function createMcpHttpServer({ catalog, token, allowedOrigins = [] }) {
     } catch { return true; }
   })) throw new Error('Allowed origins must be exact HTTP(S) origins.');
   const origins = new Set(allowedOrigins);
+  const validator = catalog.schemaVersion === '2.0' ? createRuntimeValidator({ catalog, now }) : null;
   const active = new Set();
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -91,7 +93,8 @@ export function createMcpHttpServer({ catalog, token, allowedOrigins = [] }) {
       req.resume();
       return json(res, 200, { ok: true, check: 'liveness_only' });
     }
-    if (!['/mcp', '/readyz'].includes(req.url)) {
+    const validationRoute = validator !== null && ['/prepare-request', '/validate-response'].includes(req.url);
+    if (!['/mcp', '/readyz'].includes(req.url) && !validationRoute) {
       req.resume();
       return json(res, 404, { error: 'Route not available.' });
     }
@@ -103,7 +106,8 @@ export function createMcpHttpServer({ catalog, token, allowedOrigins = [] }) {
       req.resume();
       return req.method === 'GET'
         ? json(res, 200, { ready: true, dataMode: catalog.dataMode,
-          placeCount: catalog.places.length, readOnly: true, productionReady: false })
+          placeCount: catalog.places.length, readOnly: true, productionReady: false,
+          ...(validator ? { catalogSchemaVersion: catalog.schemaVersion, dataVersion: catalog.dataVersion } : {}) })
         : json(res, 405, { error: 'Method not allowed.' }, { Allow: 'GET' });
     }
     if (req.method !== 'POST') {
@@ -117,6 +121,26 @@ export function createMcpHttpServer({ catalog, token, allowedOrigins = [] }) {
     if (Number(req.headers['content-length'] || 0) > MAX_BODY) {
       req.resume();
       return json(res, 413, { error: 'Request body too large.' });
+    }
+    if (validationRoute) {
+      try {
+        const body = await readBody(req);
+        if (res.destroyed) return;
+        if (req.url === '/prepare-request') return json(res, 200, validator.prepare(body));
+        if (body === null || typeof body !== 'object' || Array.isArray(body)
+          || !Object.hasOwn(body, 'request') || !Object.hasOwn(body, 'response')
+          || typeof body.expectedCatalogVersion !== 'string'
+          || Object.keys(body).some(key => !['request', 'response', 'expectedCatalogVersion'].includes(key))) {
+          return json(res, 400, { error: { code: 'INVALID_VALIDATION_ENVELOPE' } });
+        }
+        return json(res, 200, validator.validate(body));
+      } catch (error) {
+        if (error instanceof RecommendationValidationError) {
+          return json(res, 400, { error: { code: error.code, issues: error.issues } });
+        }
+        return json(res, error instanceof HttpError ? error.status : 500,
+          { error: { code: error instanceof HttpError ? 'INVALID_HTTP_REQUEST' : 'VALIDATION_UNAVAILABLE' } });
+      }
     }
     let mcp;
     let cleanup;

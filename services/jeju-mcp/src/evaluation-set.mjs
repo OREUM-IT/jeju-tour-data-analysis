@@ -3,6 +3,8 @@
 // judged pass/fail from `verified` evidence; everything else stays `unknown` and is carried as a separate signal.
 import { validateAgentCatalog, validateThemeMap } from './agent-catalog.mjs';
 import { canonicalSha256, createRng } from './evaluation-rng.mjs';
+import { DAY_MS, KST_OFFSET_MS, TIME, EvaluationSetError, parseYmd, minutesOf, requirementEvidence } from './constraint-evidence.mjs';
+export { EvaluationSetError, requirementEvidence } from './constraint-evidence.mjs';
 
 export const EVALUATION_SET_SCHEMA_VERSION = '1.0';
 export const EVALUATION_SET_KIND = 'jeju-agent-evaluation-set';
@@ -40,19 +42,8 @@ const MAX_QUERY_LENGTH = 200; // the upper limit the reference method gives its 
 /** Place-ID prefixes of the reference app. Used to keep IDs out of query text and of the committed summary. */
 export const PLACE_ID_PREFIX = /(?:^|[^a-z0-9])(?:kk|osm|cur|vj|nv|bf|olle|trail|hy|drama|bike|hub)-[a-z0-9]/iu;
 const STAY = 'stay';
-const DAY_MS = 86_400_000;
-const KST_OFFSET_MS = 9 * 3_600_000;
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 const SHA256 = /^[a-f0-9]{64}$/u;
-const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/u;
-
-export class EvaluationSetError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'EvaluationSetError';
-    this.code = 'INVALID_EVALUATION_SET';
-  }
-}
 
 const ensure = (condition, message) => { if (!condition) throw new EvaluationSetError(message); };
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -67,23 +58,11 @@ const countBy = (items, key) => items.reduce((acc, item) => {
 }, {});
 const sortedObject = (object) => Object.fromEntries(Object.keys(object).sort().map((key) => [key, object[key]]));
 
-function parseYmd(ymd) {
-  const match = typeof ymd === 'string' ? /^(\d{4})-(\d\d)-(\d\d)$/u.exec(ymd) : null;
-  ensure(match, 'dates must be YYYY-MM-DD');
-  const ms = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  ensure(new Date(ms).toISOString().slice(0, 10) === ymd, `invalid calendar date ${ymd}`);
-  return ms;
-}
 const addDays = (ymd, days) => new Date(parseYmd(ymd) + days * DAY_MS).toISOString().slice(0, 10);
 const daysBetween = (from, to) => Math.round((parseYmd(to) - parseYmd(from)) / DAY_MS);
 function koreanDate(ymd) {
   const date = new Date(parseYmd(ymd));
   return `${date.getUTCMonth() + 1}월 ${date.getUTCDate()}일(${WEEKDAYS[date.getUTCDay()]})`;
-}
-function minutesOf(time) {
-  const match = TIME.exec(time ?? '');
-  ensure(match, 'times must be HH:MM');
-  return Number(match[1]) * 60 + Number(match[2]);
 }
 function koreanTime(time) {
   const minutes = minutesOf(time);
@@ -219,61 +198,6 @@ export function validateEvaluationSpec(spec, personas, themeMap) {
   ensure(matching.ignoredPhrases.every((phrase) => everyCue.every((word) => !phrase.includes(word) || phrase.length > word.length)
     && !everyCue.includes(phrase)), 'queryAuthoring.cueMatching.ignoredPhrases must not equal a cue word');
   return { themeIds, zoneIds, categoryIds };
-}
-
-/**
- * Evidence for one hard requirement on one place at instant `atMs`.
- * verdict: pass/fail only from a `verified` attribute whose validity interval covers `atMs`; otherwise `unknown`.
- * signal/tier describe what non-verified evidence says so an agent can rank and explain; they never become a verdict.
- */
-export function requirementEvidence(place, requirement, atMs) {
-  const none = { verdict: 'unknown', signal: 'none', tier: null, basis: null };
-  // A verification must exist on the evaluation day and still hold at the end of the day the requirement applies to.
-  const neededUntil = requirement.date === undefined ? atMs : Math.max(atMs, parseYmd(requirement.date) + DAY_MS - KST_OFFSET_MS);
-  const graded = (attribute, satisfied, judgeable = true) => {
-    const valid = attribute.basis === 'verified' && Date.parse(attribute.verifiedAt) <= atMs && neededUntil <= Date.parse(attribute.validUntil);
-    const signal = satisfied ? 'supports' : 'contradicts';
-    if (valid && judgeable) return { verdict: satisfied ? 'pass' : 'fail', signal, tier: 'verified', basis: 'verified' };
-    const tier = attribute.basis === 'inferred' || attribute.basis === 'computed' ? 'inferred' : 'reported';
-    return { verdict: 'unknown', signal, tier, basis: attribute.basis };
-  };
-  const attributes = place.attributes;
-  switch (requirement.type) {
-    case 'wheelchair': {
-      // Being on a barrier-free list is not the same fact as wheelchair access, so even a verified listing stays unknown.
-      if (attributes.barrierFree?.value?.listed === true) return graded(attributes.barrierFree, true, false);
-      if (attributes.designations?.value?.includes('bf')) return graded(attributes.designations, true, false);
-      return none;
-    }
-    case 'indoor_required':
-      return typeof attributes.indoor?.value === 'boolean' ? graded(attributes.indoor, attributes.indoor.value) : none;
-    case 'open_at': {
-      const hours = attributes.hours?.value;
-      if (!isRecord(hours) || !finite(hours.openMin) || !finite(hours.closeMin)) return none;
-      const at = minutesOf(requirement.value);
-      const close = hours.closeMin < hours.openMin ? hours.closeMin + 1440 : hours.closeMin;
-      const open = (hours.openMin <= at && at < close) || (hours.openMin <= at + 1440 && at + 1440 < close);
-      return graded(attributes.hours, open, plainDailyWindow(hours));
-    }
-    case 'budget_cap':
-      return none; // Catalog v2 has no cost attribute at all.
-    default:
-      throw new EvaluationSetError(`unknown hard requirement ${requirement.type}`);
-  }
-}
-
-/**
- * Weekly closures and break times live in free text that these rules do not parse, so only a plain daily window may be
- * judged: no text, or exactly "매일 HH:MM~HH:MM" that agrees with the numbers. A zero-length window is not judged.
- */
-function plainDailyWindow(hours) {
-  if (hours.openMin === hours.closeMin) return false;
-  if (hours.text === null) return true;
-  const match = /^매일 (\d\d):(\d\d)~(\d\d):(\d\d)$/u.exec(hours.text);
-  if (match === null) return false;
-  const open = Number(match[1]) * 60 + Number(match[2]);
-  const close = Number(match[3]) * 60 + Number(match[4]);
-  return open % 1440 === hours.openMin % 1440 && close % 1440 === hours.closeMin % 1440;
 }
 
 /** The conflict a trip statement really contains, computed from its own dates; null when the statement is consistent. */

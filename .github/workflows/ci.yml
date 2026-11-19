@@ -102,3 +102,8 @@ jobs:
 
       - name: Test the Ollama gateway with a mock upstream (10 tests)
         run: node --test examples/ollama-tunnel/gateway.test.mjs
+
+      - name: Test guarded Langflow components without providers
+        # Standard-library stubs exercise time limits and validation/output boundaries.
+        # The installed Langflow integration is checked separately in the local environment.
+        run: python3 -m unittest discover -s services/langflow/tests

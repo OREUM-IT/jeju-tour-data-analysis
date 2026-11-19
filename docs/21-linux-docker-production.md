@@ -4,6 +4,8 @@
 
 현재 검증 기준은 [20 Langflow 로컬 안내](20-langflow-agent-builder.md)의 Langflow **1.13.3 패키지**다. 로컬 설치·버전 조회·MCP 세 도구 연결 결과를 운영 컨테이너 검증으로 확대하지 않는다. 같은 번호의 공식 Docker 이미지가 존재하거나 그대로 호환된다고 확인하지 않았다.
 
+사용자 지시(2026-11-19): 아래 구성 때문에 Linux 운영 호스트·cloudflared·Agent Gateway 구축이 필요한 단계에 도달하면 작업을 멈추고 필요한 환경을 먼저 알린다. 현재 개발 환경의 로컬 구현·검증과 운영 호스트 준비는 구분한다.
+
 ## 1. 현재 로컬 설정은 유지한다
 
 - [langflow.env.example](../services/langflow/langflow.env.example)의 `LANGFLOW_HOST=127.0.0.1`, `LANGFLOW_AUTO_LOGIN=false`, `LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1`을 변경하지 않는다.

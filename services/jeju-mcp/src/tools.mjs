@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { executeAgentTool, registerAgentTools } from './agent-tools.mjs';
 
 const idsSchema = z.array(z.string().min(1).max(160)).min(1).max(20)
   .refine((ids) => new Set(ids).size === ids.length, 'ids must be unique');
@@ -133,6 +134,7 @@ function check(args, catalog, context) {
 }
 
 export function executeTool(name, input, catalog, context = {}) {
+  if (catalog.schemaVersion === '2.0') return executeAgentTool(name, input, catalog, context);
   const definition = TOOL_DEFINITIONS.find((item) => item.name === name);
   if (!definition) throw new ToolInputError('unknown tool');
   const parsed = definition.inputSchema.safeParse(input);
@@ -143,6 +145,7 @@ export function executeTool(name, input, catalog, context = {}) {
 }
 
 export function registerTools(server, catalog) {
+  if (catalog.schemaVersion === '2.0') return registerAgentTools(server, catalog);
   for (const definition of TOOL_DEFINITIONS) {
     server.registerTool(definition.name, {
       description: definition.description,
