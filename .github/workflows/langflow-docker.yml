@@ -36,6 +36,8 @@ jobs:
         run: |
           bash deploy/check-catalog.sh
           bash deploy/check-langflow.sh
+      - name: Check live runner preparation and temporary API-key cleanup without inference
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python - --check-only < deploy/langflow/run-once.py
       - name: Restart Langflow and its database, then verify encrypted credentials and flow persisted
         run: |
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml restart langflow-db langflow
