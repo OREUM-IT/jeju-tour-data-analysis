@@ -44,7 +44,8 @@ services:
       LANGFLOW_AUTO_LOGIN: "false"
       LANGFLOW_ENABLE_SIGNUP: "false"
       LANGFLOW_CONFIG_DIR: /app/data/langflow
-      LANGFLOW_LOG_FILE: /app/data/langflow/logs/langflow.log
+      # The logger opens this before creating LANGFLOW_CONFIG_DIR.
+      LANGFLOW_LOG_FILE: /app/data/langflow.log
       LANGFLOW_ALEMBIC_LOG_TO_STDOUT: "true"
       LANGFLOW_SSRF_PROTECTION_ENABLED: "true"
       LANGFLOW_SSRF_ALLOWED_HOSTS: jeju-mcp
