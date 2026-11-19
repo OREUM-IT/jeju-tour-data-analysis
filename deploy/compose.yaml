@@ -1,0 +1,71 @@
+# Private fixture bootstrap, not the production Agent. No model calls or tunnel.
+name: oreumit-bootstrap
+services:
+  jeju-mcp:
+    build:
+      context: ../services/jeju-mcp
+    env_file: .local/mcp.env
+    environment:
+      # Explicit fixture choice: no silent expectation of real tourism data.
+      MCP_CATALOG_PATH: /app/fixtures/catalog.json
+    ports:
+      - "127.0.0.1:8788:8788"
+    networks: [mcp_private]
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8788/readyz',{headers:{Authorization:'Bearer '+process.env.MCP_SERVICE_TOKEN},signal:AbortSignal.timeout(3000)}).then(async r=>{const b=await r.json();if(!r.ok||!b.ready||b.dataMode!=='fixture'||b.productionReady!==false)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  postgres:
+    build:
+      context: ./postgres
+    env_file: .local/db.env
+    environment:
+      POSTGRES_USER: bootstrap_admin
+      POSTGRES_DB: jeju_sandbox
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No host port. Not connected to MCP yet; no tourism data is loaded.
+    networks: [db_private]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/run/postgresql:size=16m,mode=3775
+    security_opt: [no-new-privileges:true]
+    shm_size: 128m
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U bootstrap_admin -d jeju_sandbox"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+networks:
+  mcp_private:
+    internal: true
+  db_private:
+    internal: true
+volumes:
+  pgdata:

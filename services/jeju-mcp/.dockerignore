@@ -1,0 +1,9 @@
+*
+!package.json
+!package-lock.json
+!src/
+!src/**
+!fixtures/
+!fixtures/catalog.json
+!scripts/
+!scripts/check-client.mjs

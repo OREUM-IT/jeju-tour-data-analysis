@@ -1,0 +1,31 @@
+name: Private Docker bootstrap
+on:
+  push:
+    branches: [main, 'codex/**']
+    paths: ['deploy/**', 'services/jeju-mcp/**', '.github/workflows/docker-bootstrap.yml']
+  pull_request:
+    paths: ['deploy/**', 'services/jeju-mcp/**', '.github/workflows/docker-bootstrap.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Check private credential generation
+        run: python3 -m unittest discover -s deploy/tests
+      - name: Generate disposable CI credentials and validate Compose
+        run: |
+          python3 deploy/prepare.py
+          docker compose -f deploy/compose.yaml config --quiet
+      - name: Build and start private fixture services
+        run: docker compose -f deploy/compose.yaml up -d --build --wait --wait-timeout 120
+      - name: Exercise MCP protocol, authentication and pgvector
+        run: bash deploy/check.sh
+      - name: Remove this job's disposable containers and database
+        if: always()
+        run: docker compose -f deploy/compose.yaml down --volumes

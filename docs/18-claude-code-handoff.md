@@ -4,6 +4,8 @@
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
 
+**Lightsail 준비 추가:** PR #10은 `main@b1be980`에 병합됐다. 사용자가 Lightsail `Running`, Docker hello-world·Compose 성공을 보고한 뒤 [29 비공개 Docker 기동](29-lightsail-docker-bootstrap.md)을 별도 `codex/lightsail-docker-bootstrap` 브랜치에서 준비했다. MCP fixture·PostgreSQL/pgvector 기동 파일과 키 자동 생성·검사·CI를 제공한다. Codex 환경에서 컨테이너 검증했으며 AWS는 사용자가 실행 결과를 확인해야 한다. DB와 MCP 데이터 연결·Langflow 배포·Tunnel·Vercel은 이 변경에 포함하지 않는다. 아래의 기존 모델 평가와 인프라 승인 범위를 혼동하지 않는다.
+
 **현재 작업:** [PR #9](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/9)는 `main@4b41a03`에 병합됐다. [PR #10](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/10)의 `codex/agent-v2-evaluation`에서 [28 문서](28-agent-v2-evaluation.md)의 동일 981곳·새 v2 흐름·기존 템플릿 96문항 실측을 완료했다. [채점 집계](../reports/baseline-langflow-v2-live-20261119.json)는 정상 응답 73·실패 23·미실행 0이다. query/context만 쓰는 닫힌 템플릿 변환기, 전체 사전 검사, payload·재개 결합과 엄격한 최종 응답 확인을 추가했다. 전체 동작 정답은 기존과 같은 67/96이고 허용 밖 ID는 162/305→7/295, 확인 고지는 35/36→17/31이다. 원문 보존은 평가 후보 계약과의 일치를 보장하지 않으며 관심 선호·걷기·날짜 충돌의 차이가 남았다. 전체 품질 개선·일반 자연어 이해·모델 우열을 주장하지 않는다.
 
 **직전 v2 구현(PR #9, 로컬 검증 완료):** 사용자가 다음 단계 진행을 승인했고 [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8)은 `main@354fe507`에 병합됐다. 새 브랜치 `codex/agent-catalog-v2-validation`에서 [27 문서](27-agent-catalog-v2-validation.md)의 981곳 카탈로그 v2 MCP와 원본 요청 기반 최종 검증, Agent 90초·모델 4회 제한·검증 전 출력 억제를 갖춘 별도 Langflow 흐름을 구현했다. v2 서버 8789의 실제 SDK, 모의 모델 통합, 실제 Gemini 실행 요청 1건을 확인했다. 실제 요청은 12.165초에 `accepted`·`cannot_confirm`·후보 5개와 실내 확인 안내를 반환했다. 이후 미사용 remediation 재시도 경로를 제거하고 최종 파일을 모의 검사로 재검증했으며 추가 Google 실행은 하지 않았다. 기존 기준선 v1 8788과 집계는 보존한다. 당시 남아 있던 새 96문항 평가는 이번 28 문서에서 완료했고 사람 검수 0/24·보안 14개 실행·비용 측정은 남아 있다.
