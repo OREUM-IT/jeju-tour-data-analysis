@@ -90,7 +90,7 @@ git status --short &&
 test -z "$(git status --porcelain)" &&
 git fetch origin refs/heads/codex/lightsail-vertex-client:refs/remotes/origin/codex/lightsail-vertex-client &&
 git merge --ff-only origin/codex/lightsail-vertex-client &&
-sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml up -d --no-deps --force-recreate --wait --wait-timeout 180 langflow &&
+sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml up -d --no-deps --force-recreate --wait --wait-timeout 300 langflow &&
 sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python /opt/oreumit/bootstrap.py --upgrade-vertex-client &&
 sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python - --run-once < deploy/langflow/run-once.py
 ```
@@ -99,16 +99,7 @@ sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compos
 
 `deploy/langflow/run-once.py`는 기존 AWS 흐름과 자격증명을 검사한 뒤 합성 요청 **한 건**을 제출한다. 질문은 실내 방문 조건이 필요한 장소 후보 최대 3곳이며, 현재 미확인 근거를 고려한 기대 결과는 `cannot_confirm`과 `indoor_unverified` 안내다. 이 한 요청은 기존 Vertex API 사용료가 발생할 수 있고, 기존 Agent 제한에 따라 내부 모델 호출은 최대 4회다. 자동 재시도·모델 변경·한도 상향은 하지 않는다.
 
-```bash
-cd ~/oreumit-agent &&
-git status --short &&
-test -z "$(git status --porcelain)" &&
-git fetch origin refs/heads/codex/lightsail-vertex-client:refs/remotes/origin/codex/lightsail-vertex-client &&
-git merge --ff-only origin/codex/lightsail-vertex-client &&
-sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python - --run-once < deploy/langflow/run-once.py
-```
-
-실행기는 stdin으로 전달하므로 컨테이너 재생성이 필요 없다. 로그인 JWT로 임시 Langflow 실행용 API 키(10분 만료)를 만들고, `x-api-key`로 한 요청을 보낸 뒤 정상·오류 경로 모두 삭제를 시도한다. 키와 원문 응답은 출력하지 않는다. 관리 API의 실행 결과에서 지정된 `ChatOutput-jejuV2`와 최종 검증 컴포넌트 출처만 선택하고, 동일한 원본 요청·카탈로그 버전으로 MCP에 한 번 더 검증한다. 같은 session/flow에 속한 PostgreSQL trace/span의 상태·종료 시각·종류·도구 이름만 읽어 성공한 모델 호출과 MCP 도구 호출을 확인한다. 프롬프트·원문 응답·오류·Credential DB 값은 조회하지 않는다.
+위 적용 블록은 마지막 줄에서 실제 요청까지 제출한다. 결과를 확인하기 전에 블록을 반복하지 않는다. 흐름 업그레이드를 완료한 뒤 실행기만 갱신하는 경우에는 실행기를 stdin으로 전달하므로 추가 컨테이너 재생성이 필요 없다. 로그인 JWT로 임시 Langflow 실행용 API 키(10분 만료)를 만들고, `x-api-key`로 한 요청을 보낸 뒤 정상·오류 경로 모두 삭제를 시도한다. 키와 원문 응답은 출력하지 않는다. 관리 API의 실행 결과에서 지정된 `ChatOutput-jejuV2`와 최종 검증 컴포넌트 출처만 선택하고, 동일한 원본 요청·카탈로그 버전으로 MCP에 한 번 더 검증한다. 같은 session/flow에 속한 PostgreSQL trace/span의 상태·종료 시각·종류·도구 이름만 읽어 성공한 모델 호출과 MCP 도구 호출을 확인한다. 프롬프트·원문 응답·오류·Credential DB 값은 조회하지 않는다.
 
 성공 기준은 `status:passed`, `modelExecuted:true`, `finalValidationAccepted:true`, `temporaryApiKeyRevoked:true`와 완료된 실행 기록이다. `productionReady:false`는 유지한다. 모델명은 실행 설정이며 trace의 모델 표기를 Google이 서명한 응답 모델 식별자로 해석하지 않는다. `response_validated` 이후 실행 기록을 충분히 확인하지 못하면 `incomplete`로 보고한다. HTTP 시간 초과 뒤에는 원격 작업 중단이 보장되지 않으므로 출력의 sessionId·고정 오류 코드로 상태를 먼저 확인하고 명령을 반복하지 않는다. 키 삭제 실패는 `TEMPORARY_API_KEY_CLEANUP_FAILED`이며 해당 이름(sessionId)의 키를 관리자가 확인한다.
 
