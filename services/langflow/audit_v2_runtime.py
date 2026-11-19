@@ -108,7 +108,7 @@ def build_audit(*, capture, telemetry, record_hashes, db, flow_artifact_bytes, f
     row = db.execute('SELECT data FROM flow WHERE id=?', (normalized_flow_id,)).fetchone()
     require(row is not None and json.loads(row['data']) == artifact['data'], 'Registered flow differs from artifact')
     cases, all_model, all_tools, all_traces = [], [], [], []
-    stored = {'user': 0, 'validatedFinal': 0, 'rawAgent': 0, 'otherMachine': 0, 'other': 0}
+    stored = {'user': 0, 'finalGate': 0, 'rawAgent': 0, 'otherMachine': 0, 'other': 0}
     for entry in entries:
         traces = list(db.execute('SELECT id,flow_id,status,start_time,end_time,total_latency_ms,total_tokens FROM trace WHERE session_id=? ORDER BY start_time', (entry['sessionId'],)))
         require(all(trace['flow_id'] == normalized_flow_id for trace in traces), 'Session reused by another flow')
@@ -124,7 +124,7 @@ def build_audit(*, capture, telemetry, record_hashes, db, flow_artifact_bytes, f
             source = (json.loads(message['properties'] or '{}').get('source') or {}).get('id')
             if message['sender'] == 'User': stored['user'] += 1
             elif source == 'Agent-jejuV2' or message['sender_name'] == 'Agent': stored['rawAgent'] += 1
-            elif message['sender'] == 'Machine' and source == 'JejuFinalValidation-v2': stored['validatedFinal'] += 1
+            elif message['sender'] == 'Machine' and source == 'JejuFinalValidation-v2': stored['finalGate'] += 1
             elif message['sender'] == 'Machine': stored['otherMachine'] += 1
             else: stored['other'] += 1
     active_jobs = db.execute("SELECT count(*) FROM job WHERE status IN ('in_progress','pending','queued')").fetchone()[0]

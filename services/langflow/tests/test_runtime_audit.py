@@ -67,7 +67,7 @@ class RuntimeAuditTests(unittest.TestCase):
         self.assertEqual(aggregate['model']['calls'], 1)
         self.assertEqual(aggregate['model']['inputTokens'], 20)
         self.assertEqual(aggregate['tools']['byName']['places.search'], 1)
-        self.assertEqual(aggregate['storedMessages'], {'user': 1, 'validatedFinal': 1, 'rawAgent': 0, 'otherMachine': 0, 'other': 0})
+        self.assertEqual(aggregate['storedMessages'], {'user': 1, 'finalGate': 1, 'rawAgent': 0, 'otherMachine': 0, 'other': 0})
         self.assertIsNone(aggregate['costUsd'])
         self.assertEqual(result['perCase'][0]['sessionId'], SESSION)
         self.assertNotIn(SESSION, json.dumps(aggregate))

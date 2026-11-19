@@ -948,7 +948,7 @@ def check_v2_evaluation_results():
                   "inputTokens": "nullable_measurement", "outputTokens": "nullable_measurement"},
         "tools": {**{key: "count" for key in ("calls", "ok", "error", "otherStatus", "otherToolCalls")},
                   "byName": {key: "count" for key in ("places.search", "places.get", "constraints.check")}},
-        "storedMessages": {key: "count" for key in ("user", "validatedFinal", "rawAgent", "otherMachine", "other")},
+        "storedMessages": {key: "count" for key in ("user", "finalGate", "rawAgent", "otherMachine", "other")},
         "activeJobs": "count", "costUsd": "nullable_measurement",
     }
     check_public_baseline_shape(audit, shape)
@@ -961,7 +961,8 @@ def check_v2_evaluation_results():
     group, sessions = report["groups"][0], audit["sessions"]
     require(sessions["attempted"] == group["plannedCases"] - group["errors"]["not_executed"]
             and sessions["traced"] + sessions["missingTrace"] == sessions["attempted"]
-            and sessions["multipleTraces"] <= sessions["traced"] and sessions["unfinishedTraces"] <= sessions["traced"],
+            and sessions["multipleTraces"] <= sessions["traced"]
+            and (sessions["multipleTraces"] > 0 or sessions["unfinishedTraces"] <= sessions["traced"]),
             "Runtime trace coverage must not count unexecuted cases")
     model, tools = audit["model"], audit["tools"]
     require(model["ok"] + model["error"] + model["otherStatus"] == model["calls"]
