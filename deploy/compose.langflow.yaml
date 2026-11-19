@@ -1,0 +1,113 @@
+# Add after compose.yaml and compose.catalog.yaml. No public Agent endpoint.
+services:
+  langflow-db:
+    build:
+      context: ./langflow-db
+    env_file: .local/langflow-db.env
+    environment:
+      POSTGRES_USER: langflow_admin
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - langflow_pgdata:/var/lib/postgresql/data
+    networks: [langflow_db_private]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/run/postgresql:size=16m,mode=3775
+    security_opt: [no-new-privileges:true]
+    shm_size: 128m
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 256
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U langflow_admin -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+  langflow:
+    image: langflowai/langflow:1.13.3@sha256:0dea79f5a557e1602b5514973484332f479cdb6b71cceb098536ecc231b02d7d
+    user: "1000:0"
+    env_file:
+      - .local/langflow.env
+      - .local/mcp.env
+    environment:
+      LANGFLOW_HOST: 0.0.0.0
+      LANGFLOW_PORT: "7860"
+      LANGFLOW_WORKERS: "1"
+      LANGFLOW_AUTO_LOGIN: "false"
+      LANGFLOW_ENABLE_SIGNUP: "false"
+      LANGFLOW_CONFIG_DIR: /app/data/langflow
+      # The logger opens this before creating LANGFLOW_CONFIG_DIR.
+      LANGFLOW_LOG_FILE: /app/data/langflow.log
+      LANGFLOW_ALEMBIC_LOG_TO_STDOUT: "true"
+      LANGFLOW_SSRF_PROTECTION_ENABLED: "true"
+      LANGFLOW_SSRF_ALLOWED_HOSTS: jeju-mcp
+      LANGFLOW_CONNECTOR_SSRF_VALIDATION_ENABLED: "true"
+      LANGFLOW_CONNECTOR_SSRF_ALLOW_LOOPBACK: "false"
+      DO_NOT_TRACK: "true"
+    command: [langflow, run, --host, 0.0.0.0, --port, "7860", --workers, "1"]
+    ports:
+      - "127.0.0.1:7860:7860"
+    volumes:
+      - langflow_data:/app/data
+      - type: bind
+        source: ./langflow/bootstrap.py
+        target: /opt/oreumit/bootstrap.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./langflow/check-ssrf.py
+        target: /opt/oreumit/check-ssrf.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ./langflow/set-vertex.py
+        target: /opt/oreumit/set-vertex.py
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ../services/langflow/jeju-tour-agent-vertex-v2.flow.json
+        target: /opt/oreumit/agent-v2.flow.json
+        read_only: true
+        bind: {create_host_path: false}
+    networks: [mcp_private, langflow_db_private, langflow_egress]
+    depends_on:
+      langflow-db: {condition: service_healthy}
+      jeju-mcp: {condition: service_healthy}
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=256m,mode=1777"]
+    mem_limit: 3g
+    cpus: 2.0
+    pids_limit: 512
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,json; b=json.load(urllib.request.urlopen('http://127.0.0.1:7860/health_check',timeout=5)); assert all(b.get(k)=='ok' for k in ('status','db','chat'))"
+      interval: 15s
+      timeout: 8s
+      retries: 20
+      start_period: 90s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+networks:
+  langflow_db_private:
+    internal: true
+  langflow_egress: {}
+volumes:
+  langflow_pgdata:
+  langflow_data:

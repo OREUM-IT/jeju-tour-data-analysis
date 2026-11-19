@@ -1,5 +1,7 @@
 # Claude Code 시작 안내
 
+2026-11-19 AWS 최신 진행: 사용자가 실제 981곳 카탈로그·MCP 세 도구·인증·파일 해시 검사의 PASS를 제공했다. 서버는 x86_64·메모리 7.6GiB·디스크 여유 150GB다. 다음 [Langflow 내부 구성](docs/31-lightsail-langflow.md)은 `codex/lightsail-langflow`의 [PR #12](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/12)에서 준비하며, [PR #11](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/11) 위의 후속 변경이다. 공식 Docker 이미지의 기동·인증·MCP 도구 발견·흐름 가져오기·재시작 보존을 CI에서 통과했다(허구 테스트 카탈로그 사용). 기존 Vertex 자격증명을 stdin으로 등록하는 명령도 준비했다. 실제 모델 호출과 Gateway·Tunnel·Vercel은 별도 단계다. AWS Langflow 적용은 아직 확인하지 않았다.
+
 2026-11-19 최신 AWS 진행: 사용자가 MCP·인증·PostgreSQL·pgvector 검사를 통과했다고 보고했다. `codex/lightsail-real-catalog`에서 [981곳 생성·연결 절차](docs/30-lightsail-real-catalog.md)를 준비했다. 기존 bootstrap 브랜치 변경도 포함하며 main 병합은 아직 하지 않았다. AWS 직접 적용 결과와 로컬/CI 검증을 구분한다. 이 단계는 JSON 카탈로그만 연결하고 DB 적재·Langflow·Gateway·Tunnel·Vercel은 다음 단계다. 사용자가 AWS를 준비한 사실을 원격 배포·DNS 변경의 포괄 승인으로 해석하지 않는다.
 
 2026-11-19 추가: 사용자가 Lightsail 서버 생성·Docker 설치 성공을 보고하고 다음 단계를 요청했다. [29 문서](docs/29-lightsail-docker-bootstrap.md)의 비공개 fixture 기동 파일을 `main@b1be980` 기준으로 준비했다. 이는 기존 모델 평가 코드와 별개이며 사용자 AWS에 직접 접속·배포하지 않았다. 실제 관광 데이터·Langflow·Tunnel·Gateway·Vercel 공개 연결로 범위를 확대하지 않는다. 세부 실행·검증·비밀값 보존 절차는 29 문서를 따른다.

@@ -1,5 +1,7 @@
 # 제주도 맞춤 개인 관광 페르소나(테마) 추천 AI Agent
 
+2026-11-19 AWS 최신 진행: 사용자가 실제 981곳 카탈로그·MCP 세 도구·인증·파일 해시 검사의 PASS를 제공했다. 서버는 x86_64·메모리 7.6GiB·디스크 여유 150GB다. 다음 [Langflow 내부 구성](docs/31-lightsail-langflow.md)은 `codex/lightsail-langflow`의 [PR #12](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/12)에서 준비하며, [PR #11](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/11) 위의 후속 변경이다. 공식 Docker 이미지의 기동·인증·MCP 도구 발견·흐름 가져오기·재시작 보존을 CI에서 통과했다(허구 테스트 카탈로그 사용). 기존 Vertex 자격증명을 stdin으로 등록하는 명령도 준비했다. 실제 모델 호출과 Gateway·Tunnel·Vercel은 별도 단계다. AWS Langflow 적용은 아직 확인하지 않았다.
+
 관광 설문을 여행 선호도와 실행 제약으로 변환하고, 그 근거를 설명하는 개인화 추천 Agent의 기획 저장소입니다. 처음 지정된 논문 **2504.09277은 SynthTRIPs**(관광 추천기 평가용 합성 질의 생성 틀)로 확인되어 평가셋 설계에 쓰고, **LAG는 2508.05509 Logic-Augmented Generation**을 Agent 추론 비교 실험으로 검토합니다(2026-11-18 사용자 결정, [19 문서](docs/19-agent-step2-data-foundation.md)). LAG를 RAG의 오타나 동의어로 해석하지 않습니다.
 
 ## 현재 상태
@@ -50,6 +52,7 @@
 28. [카탈로그 v2 Agent 96문항 평가: 템플릿 요청 변환·별도 수집·비교 한계](docs/28-agent-v2-evaluation.md)
 29. [Lightsail Docker 설치 이후: 비공개 MCP·PostgreSQL·pgvector 기동](docs/29-lightsail-docker-bootstrap.md)
 30. [AWS MCP에 실제 981곳 카탈로그 연결](docs/30-lightsail-real-catalog.md)
+31. [AWS Langflow 내부 연결과 기존 Vertex 자격증명 등록](docs/31-lightsail-langflow.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 
