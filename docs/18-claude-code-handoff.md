@@ -1,5 +1,7 @@
 # Claude Code 인수인계와 작업 재개 절차
 
+2026-11-19 최신 AWS 진행: 사용자가 MCP·인증·PostgreSQL·pgvector 검사를 통과했다고 보고했다. `codex/lightsail-real-catalog`에서 [981곳 생성·연결 절차](30-lightsail-real-catalog.md)를 준비했다. 기존 bootstrap 브랜치 변경도 포함하며 main 병합은 아직 하지 않았다. AWS 직접 적용 결과와 로컬/CI 검증을 구분한다. 이 단계는 JSON 카탈로그만 연결하고 DB 적재·Langflow·Gateway·Tunnel·Vercel은 다음 단계다. 사용자가 AWS를 준비한 사실을 원격 배포·DNS 변경의 포괄 승인으로 해석하지 않는다.
+
 기준일: 2026-11-19 (한국 시간, 실제 Gemini·Langflow 각 96문항 수집·채점 반영). 목표는 기존 Vercel 제주 관광 앱을 활용하는 개인화 Agent를 [19 문서](19-agent-step2-data-foundation.md)의 단계로 구현하는 것이다. 이 문서는 다음 세션이 그대로 이어받을 상태, 재개 절차, 다음 작업 명세를 담는다. 0절이 최신 상태다. 1절 이하는 이전 세션의 기록과 절차를 포함한다. 과거 상태보다 확인 시점이 최근인 근거를 우선하고, 새 결과가 생기면 근거와 함께 갱신한다.
 
 ## 0. 지금 이어받을 상태 (2026-11-19)

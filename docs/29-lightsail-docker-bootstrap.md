@@ -62,6 +62,8 @@ Node `24.22.1-bookworm-slim`과 upstream `pgvector/pgvector:pg17` 이미지를 �
 
 검증 환경에서 MCP SDK 초기화·도구 3개 호출, 토큰 없는 readiness 401, 인증된 fixture/readOnly/productionReady=false, PostgreSQL 17.12·pgvector 0.8.7의 거리 연산을 확인했다. Docker inspect로 MCP 호스트 바인딩 `127.0.0.1:8788`, DB 공개 포트 없음, MCP UID 1000과 두 컨테이너의 읽기 전용 루트 파일시스템을 확인했다. 별도 시험 테이블의 값이 DB 컨테이너 재시작 후 유지됨을 확인한 뒤 시험 테이블을 제거했다. 비밀값 생성·재실행 보존·symlink 거부 3개 검사, 저장소 오프라인 검사 14개, 새 workflow actionlint도 통과했다. 이 결과는 사용자 AWS 검증이나 백업 복구 시험을 대신하지 않는다.
 
+사용자는 이후 AWS에서 이 초기 검사를 통과했다고 보고했다. 실제 981곳 전환은 [30 문서](30-lightsail-real-catalog.md)의 명령과 별도 검사를 따른다.
+
 ## 5. 다음 연결 순서
 
 1. AWS에서 위 비공개 기동·도구·DB 검사 결과를 확인한다.

@@ -2,16 +2,16 @@ name: Private Docker bootstrap
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['deploy/**', 'services/jeju-mcp/**', '.github/workflows/docker-bootstrap.yml']
+    paths: ['deploy/**', 'services/jeju-mcp/**', 'data/theme-category-map.json', 'data/persona-prototypes.json', '.github/workflows/docker-bootstrap.yml']
   pull_request:
-    paths: ['deploy/**', 'services/jeju-mcp/**', '.github/workflows/docker-bootstrap.yml']
+    paths: ['deploy/**', 'services/jeju-mcp/**', 'data/theme-category-map.json', 'data/persona-prototypes.json', '.github/workflows/docker-bootstrap.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   bootstrap:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -26,6 +26,13 @@ jobs:
         run: docker compose -f deploy/compose.yaml up -d --build --wait --wait-timeout 120
       - name: Exercise MCP protocol, authentication and pgvector
         run: bash deploy/check.sh
+      - name: Generate the pinned private 981-place catalog
+        run: python3 deploy/export-catalog.py
+      - name: Switch only MCP to the real catalog and check its hash
+        run: |
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml config --quiet
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml up -d --no-deps --wait --wait-timeout 120 jeju-mcp
+          bash deploy/check-catalog.sh
       - name: Remove this job's disposable containers and database
         if: always()
         run: docker compose -f deploy/compose.yaml down --volumes

@@ -4,7 +4,8 @@
 
 ## 현재 상태
 
-- **Lightsail 다음 단계:** [비공개 Docker 기동 안내](docs/29-lightsail-docker-bootstrap.md)와 [Compose](deploy/compose.yaml)를 추가했습니다. 가상 데이터 MCP와 PostgreSQL·pgvector를 독립 실행하는 초기 구성입니다. 검증 환경에서 MCP SDK·인증·DB 연산을 확인했으며 실제 AWS 적용, 관광 데이터/DB 연동, Langflow·Tunnel·Vercel 연결 완료를 뜻하지 않습니다.
+- **AWS 실제 카탈로그 연결 준비:** 사용자가 비공개 MCP·인증·PostgreSQL·pgvector 성공을 보고했습니다. [981곳 카탈로그 연결](docs/30-lightsail-real-catalog.md)에 Docker 생성기·읽기 전용 마운트·v2 인증/해시 검사를 추가했습니다. AWS 적용은 해당 명령 실행 뒤 확인하며, DB 적재·Langflow·Gateway·Vercel 연결은 다음 단계입니다.
+- **Lightsail 초기 구성:** [비공개 Docker 기동 안내](docs/29-lightsail-docker-bootstrap.md)와 [Compose](deploy/compose.yaml)를 추가했습니다. 가상 데이터 MCP와 PostgreSQL·pgvector를 독립 실행하는 초기 구성입니다. 검증 환경에서 MCP SDK·인증·DB 연산을 확인했으며 실제 AWS 적용, 관광 데이터/DB 연동, Langflow·Tunnel·Vercel 연결 완료를 뜻하지 않습니다.
 - **v2 96문항 실측·채점 완료:** [PR #9](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/9) 병합(`main@4b41a03`) 후 [PR #10](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/10)에서 같은 981곳·새 최종 검증 흐름을 평가했습니다. [채점 집계](reports/baseline-langflow-v2-live-20261119.json)는 정상 응답 73·실패 23·미실행 0입니다. 허용 밖 ID는 162/305에서 7/295로 줄었지만 전체 동작 정답은 67/96으로 같고 확인 고지는 35/36에서 17/31로 낮아졌습니다. [28 문서](docs/28-agent-v2-evaluation.md)에 관심 테마·걷기·날짜 충돌의 계약 차이와 비교 한계를 기록했습니다. 전체 품질 개선이나 모델 우열을 주장하지 않습니다.
 - **카탈로그 v2·최종 검증 구현:** [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8) 병합 후 `codex/agent-catalog-v2-validation`에서 앱과 같은 981곳의 MCP, 원본 요청에 따른 최종 ID·필수 조건 검증, 검증 전 출력을 억제하는 [별도 Langflow 흐름](services/langflow/jeju-tour-agent-vertex-v2.flow.json)을 추가했습니다. 로컬 SDK·모의 모델 검사와 실제 Gemini 실행 요청 1건에서 미확인 실내 조건을 `cannot_confirm`으로 안내하는 동작을 확인했습니다. [27 문서](docs/27-agent-catalog-v2-validation.md)에 검증 범위와 한계를 기록합니다. 이후 별도 96문항 평가를 완료했으며 운영 배포는 하지 않았습니다.
 - **실제 Gemini·Langflow 수집·채점 완료(2026-11-19):** 같은 계획의 96문항씩을 모두 시도했습니다. [Gemini 집계](reports/baseline-gemini-live-20261119.json)는 지정 모델 응답 92건·실패 4건(혼합 대체 모델 3건·시간 초과 1건), [Langflow 집계](reports/baseline-langflow-live-20261119.json)는 구조화 응답 80건·실패 16건이며 두 실행 모두 미실행 0건입니다. Google Developer API의 503을 진단한 뒤 [Vertex AI 인증](docs/26-langflow-vertex-auth.md)으로 같은 `gemini-3.8-flash`의 Langflow 응답·MCP 도구 호출을 수집했습니다. 결과와 한계는 [25 문서](docs/25-live-baseline-execution.md), 변경은 [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8)에 있습니다. Gemini 자유 문장 판정은 잠정 모델 검수이며 사람 검수는 0/24건, 두 실행의 비용은 미측정입니다. 카탈로그·날짜 문맥이 달라 모델 자체의 우열을 판단하지 않습니다. [채점기 자체 검사](reports/baseline-harness-self-check.json)는 별도의 oracle 검사입니다.
@@ -48,6 +49,7 @@
 27. [Agent 카탈로그 v2·원본 요청 기반 최종 검증·실행 제한](docs/27-agent-catalog-v2-validation.md)
 28. [카탈로그 v2 Agent 96문항 평가: 템플릿 요청 변환·별도 수집·비교 한계](docs/28-agent-v2-evaluation.md)
 29. [Lightsail Docker 설치 이후: 비공개 MCP·PostgreSQL·pgvector 기동](docs/29-lightsail-docker-bootstrap.md)
+30. [AWS MCP에 실제 981곳 카탈로그 연결](docs/30-lightsail-real-catalog.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 
