@@ -1,3 +1,4 @@
+import ast
 import contextlib
 import copy
 import importlib.util
@@ -19,6 +20,7 @@ MCP_NODE = next(node['data']['node'] for node in TEMPLATE['data']['nodes'] if no
 ENVIRONMENT = {'LANGFLOW_SUPERUSER': 'operator', 'LANGFLOW_SUPERUSER_PASSWORD': 'private-password-' + 'p' * 40,
                'MCP_SERVICE_TOKEN': 'm' * 64}
 FLOW_ID = 'e7b2be4f-a8da-492d-9736-5d234bf91a22'
+VERSION_TOKEN = '2a4ee450-c0fe-47ae-a8ca-413b2b4b889c'
 
 
 class Response:
@@ -89,10 +91,24 @@ class Langflow:
             return Response(node)
         if route == '/api/v1/flows/':
             flow = copy.deepcopy(kwargs['json'])
-            flow.update(id=FLOW_ID, updated_at='2026-11-19T00:00:00Z', user_id='database-owner')
+            flow.update(id=FLOW_ID, updated_at='2026-11-19T00:00:00Z', user_id='database-owner',
+                        version_token=VERSION_TOKEN)
             self.state['flows'][FLOW_ID] = flow
             return Response(flow, 201)
         raise AssertionError('Unexpected endpoint; model execution is forbidden in bootstrap tests.')
+
+    def patch(self, route, **kwargs):
+        self.calls.append(('PATCH', route, kwargs))
+        if route == f'/api/v1/flows/{FLOW_ID}':
+            flow = self.state['flows'][FLOW_ID]
+            if kwargs['headers']['If-Match'] != flow['version_token']:
+                return Response(status=409)
+            if set(kwargs['json']) != {'data'}:
+                raise AssertionError('Migration may only patch graph data.')
+            flow['data'] = copy.deepcopy(kwargs['json']['data'])
+            flow['version_token'] = 'f243ca63-2d0a-4c97-a418-bbd51eb420ca'
+            return Response(flow)
+        raise AssertionError('Unexpected flow mutation.')
 
 
 class MCP:
@@ -104,6 +120,114 @@ class MCP:
 
 
 class LangflowBootstrapTest(unittest.TestCase):
+    def legacy_state(self):
+        client = Langflow()
+        bootstrap.bootstrap(client, MCP(), ENVIRONMENT, TEMPLATE)
+        existing = client.state['flows'][FLOW_ID]
+        node = next(node['data']['node'] for node in existing['data']['nodes'] if node['data']['type'] == 'MCPTools')
+        existing['data'] = bootstrap.deployment_flow(TEMPLATE, node, direct_vertex=False)['data']
+        return client.state
+
+    def test_known_old_flow_requires_explicit_upgrade_and_preserves_identity_and_credentials(self):
+        state = self.legacy_state()
+        before = copy.deepcopy(state)
+        denied = Langflow(state)
+        with self.assertRaisesRegex(bootstrap.BootstrapError, '^EXISTING_FLOW_DIFFERS$'):
+            bootstrap.bootstrap(denied, MCP(), ENVIRONMENT, TEMPLATE)
+        self.assertEqual(state, before)
+        self.assertFalse(any(method == 'PATCH' for method, _, _ in denied.calls))
+        client = Langflow(state)
+        result = bootstrap.bootstrap(client, MCP(), ENVIRONMENT, TEMPLATE, upgrade_vertex_client=True)
+        self.assertEqual(result['flowStatus'], 'upgraded-vertex-client')
+        writes = [kwargs for method, _, kwargs in client.calls if method == 'PATCH']
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(set(writes[0]['json']), {'data'})
+        self.assertEqual(writes[0]['headers'], {'If-Match': VERSION_TOKEN})
+        for key in ('variables', 'credential_values', 'server'):
+            self.assertEqual(state[key], before[key])
+        outer = lambda flow: {key: value for key, value in flow.items() if key not in ('data', 'version_token')}
+        self.assertEqual(outer(state['flows'][FLOW_ID]), outer(before['flows'][FLOW_ID]))
+        again = Langflow(state)
+        repeated = bootstrap.bootstrap(again, MCP(), ENVIRONMENT, TEMPLATE, upgrade_vertex_client=True)
+        self.assertEqual(repeated['flowStatus'], 'preserved-existing')
+        self.assertFalse(any(method == 'PATCH' for method, _, _ in again.calls))
+
+    def test_upgrade_refuses_unrecognized_edits_and_concurrent_graph_changes(self):
+        state = self.legacy_state()
+        agent = next(node for node in state['flows'][FLOW_ID]['data']['nodes'] if node['data']['type'] == 'Agent')
+        agent['data']['node']['template']['code']['value'] += '\n# User edit must survive\n'
+        before = copy.deepcopy(state)
+        client = Langflow(state)
+        with self.assertRaisesRegex(bootstrap.BootstrapError, '^EXISTING_FLOW_DIFFERS$'):
+            bootstrap.bootstrap(client, MCP(), ENVIRONMENT, TEMPLATE, upgrade_vertex_client=True)
+        self.assertEqual(state, before)
+        self.assertFalse(any(method == 'PATCH' for method, _, _ in client.calls))
+        client = Langflow(self.legacy_state())
+        original_patch = client.patch
+
+        def edit_before_patch(route, **kwargs):
+            client.state['flows'][FLOW_ID]['version_token'] = '5dfb23ce-a520-47dc-a6e9-2f14a98daf42'
+            client.state['flows'][FLOW_ID]['data']['edges'].pop()
+            return original_patch(route, **kwargs)
+        with patch.object(client, 'patch', side_effect=edit_before_patch):
+            with self.assertRaisesRegex(bootstrap.BootstrapError, '^HTTP_STATUS_REJECTED$'):
+                bootstrap.bootstrap(client, MCP(), ENVIRONMENT, TEMPLATE, upgrade_vertex_client=True)
+        self.assertEqual(len(client.state['flows'][FLOW_ID]['data']['edges']), 5)
+        self.assertEqual(sum(method == 'PATCH' for method, _, _ in client.calls), 1)
+
+    def test_vertex_patch_preserves_policy_and_agent_guard_and_rejects_unknown_source(self):
+        original = next(node['data']['node']['template']['code']['value'] for node in TEMPLATE['data']['nodes']
+                        if node['data']['type'] == 'Agent')
+        changed = bootstrap.patch_vertex_client(original)
+
+        def without_llm_method(code):
+            tree = ast.parse(code)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    node.body = [item for item in node.body
+                                 if not (isinstance(item, ast.FunctionDef) and item.name == '_get_llm')]
+            return ast.dump(tree, include_attributes=False)
+        self.assertEqual(without_llm_method(original), without_llm_method(changed))
+        self.assertIn('await self.arequire_model_provider_policy(ModelProviderPolicyPurpose.USE)', changed)
+        self.assertIn('result = await _guarded_agent_run(self, _run_once)', changed)
+        self.assertIn('GUARDED_AGENT_MAX_SECONDS = 90.0', changed)
+        self.assertIn('GUARDED_AGENT_MODEL_CALL_LIMIT = 4', changed)
+        with self.assertRaisesRegex(bootstrap.BootstrapError, '^VERTEX_CLIENT_SOURCE_MISMATCH$'):
+            bootstrap.patch_vertex_client(original.replace('"max_retries": 1, "timeout": 60',
+                                                           '"max_retries": 5, "timeout": 60'))
+
+    def test_direct_vertex_client_uses_only_service_account_and_enforces_model_allowlist(self):
+        original = next(node['data']['node']['template']['code']['value'] for node in TEMPLATE['data']['nodes']
+                        if node['data']['type'] == 'Agent')
+        changed = bootstrap.patch_vertex_client(original)
+        method = next(node for node in ast.walk(ast.parse(changed))
+                      if isinstance(node, ast.FunctionDef) and node.name == '_get_llm')
+        namespace = {}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), 'vertex-method-test', 'exec'), namespace)
+        calls = []
+        credentials = object()
+        google = types.ModuleType('google')
+        oauth2 = types.ModuleType('google.oauth2')
+        oauth2.service_account = types.SimpleNamespace(Credentials=types.SimpleNamespace(
+            from_service_account_info=lambda *_, **__: credentials))
+        google.oauth2 = oauth2
+        sdk = types.ModuleType('langchain_google_genai')
+        sdk.ChatGoogleGenerativeAI = lambda **kwargs: calls.append(kwargs) or kwargs
+        fake = types.SimpleNamespace(
+            model=[{'name': 'gemini-3.8-flash', 'provider': 'Google Generative AI'}],
+            api_key=json.dumps({'serviceAccount': {'project_id': 'example-project'}, 'location': 'global'}),
+            _get_max_tokens_value=lambda: 2048)
+        with patch.dict(sys.modules, {'google': google, 'google.oauth2': oauth2, 'langchain_google_genai': sdk}):
+            result = namespace['_get_llm'](fake)
+            self.assertIs(result['credentials'], credentials)
+            self.assertEqual(result, {'model': 'gemini-3.8-flash', 'streaming': True, 'vertexai': True,
+                                     'credentials': credentials, 'project': 'example-project', 'location': 'global',
+                                     'google_api_key': None, 'max_retries': 1, 'timeout': 60, 'max_output_tokens': 2048})
+            fake.model[0]['name'] = 'unreviewed-model'
+            with self.assertRaisesRegex(ValueError, '^VERTEX_MODEL_SELECTION_INVALID$'):
+                namespace['_get_llm'](fake)
+        self.assertEqual(len(calls), 1)
+
     def test_first_import_and_idempotent_rerun_preserve_local_flow_and_credentials(self):
         first = Langflow()
         unrelated = {'name': '기존 로컬 실험', 'data': {'keep': True}}
@@ -244,7 +368,7 @@ class LangflowBootstrapTest(unittest.TestCase):
              patch.object(Path, 'read_text', return_value=json.dumps(TEMPLATE)), \
              patch.object(bootstrap, 'bootstrap', side_effect=RuntimeError('private response body and token')), \
              contextlib.redirect_stdout(output):
-            self.assertEqual(bootstrap.main(), 1)
+            self.assertEqual(bootstrap.main([]), 1)
         self.assertEqual(json.loads(output.getvalue()), {
             'status': 'failed', 'code': 'LANGFLOW_BOOTSTRAP_FAILED', 'modelExecuted': False,
         })

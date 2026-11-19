@@ -76,18 +76,30 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/check-langflow.sh
 
 ## 4. 실제 모델 요청 1건 검사
 
-`deploy/langflow/run-once.py`는 기존 AWS 흐름과 자격증명을 검사한 뒤 합성 요청 **한 건**을 제출한다. 질문은 실내 방문 조건이 필요한 장소 후보 최대 3곳이며, 현재 미확인 근거를 고려한 기대 결과는 `cannot_confirm`과 `indoor_unverified` 안내다. 이 한 요청은 기존 Vertex API 사용료가 발생할 수 있고, 기존 Agent 제한에 따라 내부 모델 호출은 최대 4회다. 자동 재시도·모델 변경·한도 상향은 하지 않는다.
+최초 AWS 실행은 HTTP 500으로 2.7초 만에 실패했다. 사용자 출력에서 종료된 실패 trace 1개, 모델·도구 span 0개, 임시 API 키 삭제 성공을 확인했다. 공급자 호출 성공이나 검증된 추천으로 집계하지 않는다.
+
+코드 검토와 별도의 오프라인 재현에서 초기화 차단 원인을 확인했다. Langflow 1.13.3의 공통 `get_llm()`은 `GOOGLE_API_KEY` 유무를 먼저 검사하고, 이후에야 Vertex 서비스 계정 override를 적용한다. AWS에 등록한 `JEJU_VERTEX_SERVICE_ACCOUNT_JSON`만으로는 이 공통 경로가 모델 클라이언트를 만들지 못한다. 실패 trace 자체가 내부 예외를 확정한 것은 아니며, 이 원인은 SDK 소스와 네트워크 없는 재현으로 확인했다.
+
+`codex/lightsail-vertex-client` 수정은 AWS 사본의 `_get_llm()` 반환 부분만 서비스 계정을 받는 `ChatGoogleGenerativeAI(vertexai=True, google_api_key=None)`로 바꾼다. 기존 공급자 정책 검사와 지정 모델 `gemini-3.8-flash`, global 위치, SDK 60초·재시도 0회, Agent 90초·모델 최대 4회 제한을 유지한다. 기존 평가용 공개 흐름 파일은 변경하지 않는다. 수정 적용 후 AWS 재실행 성공 여부는 아직 미확인이다.
+
+기존 흐름에는 아래 명령으로 수정을 적용한다. `bootstrap.py`는 파일 단위 bind mount이므로 Git 갱신 뒤 Langflow 컨테이너만 재생성해 새 파일을 연결한다. 기존 환경변수·DB·볼륨을 그대로 사용한다. `--upgrade-vertex-client`는 전체 그래프가 알려진 구버전과 정확히 일치할 때만 `data`를 갱신하며, `If-Match`로 동시 편집을 거부한다. 수정된 흐름은 그대로 보존하고, 알 수 없는 사용자 변경은 덮어쓰지 않는다. Flow ID·설명·폴더·자격증명은 보존한다.
 
 ```bash
 cd ~/oreumit-agent &&
 git status --short &&
 test -z "$(git status --porcelain)" &&
-git fetch origin refs/heads/codex/lightsail-langflow:refs/remotes/origin/codex/lightsail-langflow &&
-git merge --ff-only origin/codex/lightsail-langflow &&
+git fetch origin refs/heads/codex/lightsail-vertex-client:refs/remotes/origin/codex/lightsail-vertex-client &&
+git merge --ff-only origin/codex/lightsail-vertex-client &&
+sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml up -d --no-deps --force-recreate --wait --wait-timeout 300 langflow &&
+sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python /opt/oreumit/bootstrap.py --upgrade-vertex-client &&
 sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python - --run-once < deploy/langflow/run-once.py
 ```
 
-실행기는 stdin으로 전달하므로 컨테이너 재생성이 필요 없다. 로그인 JWT로 임시 Langflow 실행용 API 키(10분 만료)를 만들고, `x-api-key`로 한 요청을 보낸 뒤 정상·오류 경로 모두 삭제를 시도한다. 키와 원문 응답은 출력하지 않는다. 관리 API의 실행 결과에서 지정된 `ChatOutput-jejuV2`와 최종 검증 컴포넌트 출처만 선택하고, 동일한 원본 요청·카탈로그 버전으로 MCP에 한 번 더 검증한다. 같은 session/flow에 속한 PostgreSQL trace/span의 상태·종료 시각·종류·도구 이름만 읽어 성공한 모델 호출과 MCP 도구 호출을 확인한다. 프롬프트·원문 응답·오류·Credential DB 값은 조회하지 않는다.
+검사에는 일회용 RSA 키·가상 서비스 계정으로 실제 SDK 클라이언트를 생성하는 단계가 있다. `GOOGLE_API_KEY`·`GEMINI_API_KEY`를 제거하고 소켓/DNS 연결을 차단하므로 Google OAuth·모델 호출 없이 초기화 경로를 확인한다. Docker CI에서는 비어 있는 테스트 DB에 구버전을 가져온 뒤, 일반 검사 거부 → 명시적 갱신 → 재실행 보존도 확인한다.
+
+`deploy/langflow/run-once.py`는 기존 AWS 흐름과 자격증명을 검사한 뒤 합성 요청 **한 건**을 제출한다. 질문은 실내 방문 조건이 필요한 장소 후보 최대 3곳이며, 현재 미확인 근거를 고려한 기대 결과는 `cannot_confirm`과 `indoor_unverified` 안내다. 이 한 요청은 기존 Vertex API 사용료가 발생할 수 있고, 기존 Agent 제한에 따라 내부 모델 호출은 최대 4회다. 자동 재시도·모델 변경·한도 상향은 하지 않는다.
+
+위 적용 블록은 마지막 줄에서 실제 요청까지 제출한다. 결과를 확인하기 전에 블록을 반복하지 않는다. 흐름 업그레이드를 완료한 뒤 실행기만 갱신하는 경우에는 실행기를 stdin으로 전달하므로 추가 컨테이너 재생성이 필요 없다. 로그인 JWT로 임시 Langflow 실행용 API 키(10분 만료)를 만들고, `x-api-key`로 한 요청을 보낸 뒤 정상·오류 경로 모두 삭제를 시도한다. 키와 원문 응답은 출력하지 않는다. 관리 API의 실행 결과에서 지정된 `ChatOutput-jejuV2`와 최종 검증 컴포넌트 출처만 선택하고, 동일한 원본 요청·카탈로그 버전으로 MCP에 한 번 더 검증한다. 같은 session/flow에 속한 PostgreSQL trace/span의 상태·종료 시각·종류·도구 이름만 읽어 성공한 모델 호출과 MCP 도구 호출을 확인한다. 프롬프트·원문 응답·오류·Credential DB 값은 조회하지 않는다.
 
 성공 기준은 `status:passed`, `modelExecuted:true`, `finalValidationAccepted:true`, `temporaryApiKeyRevoked:true`와 완료된 실행 기록이다. `productionReady:false`는 유지한다. 모델명은 실행 설정이며 trace의 모델 표기를 Google이 서명한 응답 모델 식별자로 해석하지 않는다. `response_validated` 이후 실행 기록을 충분히 확인하지 못하면 `incomplete`로 보고한다. HTTP 시간 초과 뒤에는 원격 작업 중단이 보장되지 않으므로 출력의 sessionId·고정 오류 코드로 상태를 먼저 확인하고 명령을 반복하지 않는다. 키 삭제 실패는 `TEMPORARY_API_KEY_CLEANUP_FAILED`이며 해당 이름(sessionId)의 키를 관리자가 확인한다.
 

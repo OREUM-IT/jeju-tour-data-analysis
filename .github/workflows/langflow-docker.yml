@@ -32,6 +32,8 @@ jobs:
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml config --quiet
       - name: Start official Langflow image with private MCP and dedicated PostgreSQL
         run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml up -d --build --wait --wait-timeout 300 jeju-mcp langflow-db langflow
+      - name: Construct Vertex client without API keys or network and migrate only the known legacy flow
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T -e CI=true langflow python - --migration < deploy/tests/check-vertex-runtime.py
       - name: Check authentication, database, SSRF and three real MCP tool calls
         run: |
           bash deploy/check-catalog.sh
