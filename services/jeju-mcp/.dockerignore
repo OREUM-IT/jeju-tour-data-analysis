@@ -7,3 +7,4 @@
 !fixtures/catalog.json
 !scripts/
 !scripts/check-client.mjs
+!scripts/check-v2.mjs

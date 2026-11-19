@@ -4,6 +4,8 @@
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
 
+**실제 카탈로그 연결 추가:** 사용자는 AWS에서 29 문서의 bootstrap PASS를 보고했다. 이어 [30 문서](30-private-real-catalog-connection.md)에 고정 소스의 981곳 재생성·별도 MCP v2 컨테이너 실행을 추가했다. 검증 환경에서 원본 목록 해시 일치·981곳·3,924조건 unknown·최종 검증의 거짓 pass/가짜 ID 차단과 재실행 시 자료 보존을 확인했다. 사용자 AWS는 새 `check-catalog.sh` 결과를 아직 받지 못했다. v2는 별도 키·포트·내부 네트워크를 사용하며 원본 앱·기존 fixture·DB·모델 흐름·Vercel·Cloudflare는 변경하지 않는다. 원자료·카탈로그·덤프는 `.local`만 사용하고 공개 CI에 올리지 않는다.
+
 **Lightsail 준비 추가:** PR #10은 `main@b1be980`에 병합됐다. 사용자가 Lightsail `Running`, Docker hello-world·Compose 성공을 보고한 뒤 [29 비공개 Docker 기동](29-lightsail-docker-bootstrap.md)을 별도 `codex/lightsail-docker-bootstrap` 브랜치에서 준비했다. MCP fixture·PostgreSQL/pgvector 기동 파일과 키 자동 생성·검사·CI를 제공한다. Codex 환경에서 컨테이너 검증했으며 AWS는 사용자가 실행 결과를 확인해야 한다. DB와 MCP 데이터 연결·Langflow 배포·Tunnel·Vercel은 이 변경에 포함하지 않는다. 아래의 기존 모델 평가와 인프라 승인 범위를 혼동하지 않는다.
 
 **현재 작업:** [PR #9](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/9)는 `main@4b41a03`에 병합됐다. [PR #10](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/10)의 `codex/agent-v2-evaluation`에서 [28 문서](28-agent-v2-evaluation.md)의 동일 981곳·새 v2 흐름·기존 템플릿 96문항 실측을 완료했다. [채점 집계](../reports/baseline-langflow-v2-live-20261119.json)는 정상 응답 73·실패 23·미실행 0이다. query/context만 쓰는 닫힌 템플릿 변환기, 전체 사전 검사, payload·재개 결합과 엄격한 최종 응답 확인을 추가했다. 전체 동작 정답은 기존과 같은 67/96이고 허용 밖 ID는 162/305→7/295, 확인 고지는 35/36→17/31이다. 원문 보존은 평가 후보 계약과의 일치를 보장하지 않으며 관심 선호·걷기·날짜 충돌의 차이가 남았다. 전체 품질 개선·일반 자연어 이해·모델 우열을 주장하지 않는다.

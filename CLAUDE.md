@@ -1,5 +1,7 @@
 # Claude Code 시작 안내
 
+추가 연결: 사용자가 AWS의 bootstrap PASS를 확인하고 실제 자료 연결을 요청했다. [30 문서](docs/30-private-real-catalog-connection.md)의 고정 소스 재생성·별도 MCP v2 파일을 준비하고 Codex Docker에서 981곳·3,924조건 unknown·최종 판정 차단을 검증했다. 사용자 AWS의 새 결과는 아직 미확인이다. 공개 CI는 실제 카탈로그를 내려받지 않는다. 자료 재생성은 비공개 `.local` 안에서만 수행하며 기존 fixture·DB·키를 보존한다.
+
 2026-11-19 추가: 사용자가 Lightsail 서버 생성·Docker 설치 성공을 보고하고 다음 단계를 요청했다. [29 문서](docs/29-lightsail-docker-bootstrap.md)의 비공개 fixture 기동 파일을 `main@b1be980` 기준으로 준비했다. 이는 기존 모델 평가 코드와 별개이며 사용자 AWS에 직접 접속·배포하지 않았다. 실제 관광 데이터·Langflow·Tunnel·Gateway·Vercel 공개 연결로 범위를 확대하지 않는다. 세부 실행·검증·비밀값 보존 절차는 29 문서를 따른다.
 
 이 저장소는 제주 관광 Agent의 설계·자료 검토·읽기 전용 MCP 초기 구현이다. 먼저 [인수인계](docs/18-claude-code-handoff.md) 0절(최신 상태)·3절(Git·PR 방식)·11절(다음 작업)을 읽고 현재 Git 상태와 열린 PR을 확인한다. 모델의 역할·근거·미검증 상태는 [모델 레지스트리](docs/17-ai-agent-model-registry.md)와 [JSON](data/ai-agent-models.json)을 따른다.

@@ -64,6 +64,8 @@ Node `24.22.1-bookworm-slim`과 upstream `pgvector/pgvector:pg17` 이미지를 �
 
 ## 5. 다음 연결 순서
 
+사용자가 AWS의 `PASS: private bootstrap checks`를 보고한 뒤, 실제 카탈로그 재생성·별도 MCP 연결 절차를 [30 문서](30-private-real-catalog-connection.md)에 추가했다. 기존 fixture·DB를 교체하지 않는다.
+
 1. AWS에서 위 비공개 기동·도구·DB 검사 결과를 확인한다.
 2. v2 카탈로그를 권리·출처 검토 범위 안에서 서버에 생성하고 읽기 전용 마운트와 v2 SDK 검사를 추가한다. 파일 경로만 바꿔 v1 fixture 검사를 v2 통과로 해석하지 않는다.
 3. Langflow 이미지·버전·전용 상태 DB·별도 계정·암호화 키 영속성을 검증하고 현재 로컬 설정과 별도 운영 설정을 만든다.

@@ -10,7 +10,8 @@ def prepare(root):
         raise ValueError('Refusing a symlink for the private settings directory.')
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     root.chmod(0o700)
-    for name, key in [('mcp.env', 'MCP_SERVICE_TOKEN'), ('db.env', 'POSTGRES_PASSWORD')]:
+    for name, key in [('mcp.env', 'MCP_SERVICE_TOKEN'), ('db.env', 'POSTGRES_PASSWORD'),
+                      ('v2.env', 'MCP_SERVICE_TOKEN')]:
         target = root / name
         try:
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

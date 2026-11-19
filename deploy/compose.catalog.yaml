@@ -1,0 +1,38 @@
+# Add to compose.yaml explicitly; original fixture and PostgreSQL are preserved.
+services:
+  jeju-mcp-v2:
+    build:
+      context: ../services/jeju-mcp
+    env_file: .local/v2.env
+    environment:
+      MCP_CATALOG_PATH: /catalog/agent-catalog.json
+    ports: ["127.0.0.1:8789:8788"]
+    volumes:
+      - type: bind
+        source: ./.local/catalog/agent-catalog.json
+        target: /catalog/agent-catalog.json
+        read_only: true
+        bind:
+          create_host_path: false
+    networks: [mcp_v2_private]
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8788/readyz',{headers:{Authorization:'Bearer '+process.env.MCP_SERVICE_TOKEN},signal:AbortSignal.timeout(3000)}).then(async r=>{const b=await r.json();if(!r.ok||b.catalogSchemaVersion!=='2.0'||b.dataMode!=='app-export'||b.placeCount!==981||b.productionReady!==false)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+networks:
+  mcp_v2_private:
+    internal: true

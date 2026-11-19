@@ -29,7 +29,7 @@ class PrivateSettingsTest(unittest.TestCase):
                 self.assertRegex(token, r'^[a-f0-9]{64}$')
                 self.assertNotIn(token, output.getvalue())
                 tokens.append(token)
-            self.assertEqual(len(set(tokens)), 2)
+            self.assertEqual(len(set(tokens)), 3)
 
     def test_symlink_directory_refused(self):
         with tempfile.TemporaryDirectory() as directory:

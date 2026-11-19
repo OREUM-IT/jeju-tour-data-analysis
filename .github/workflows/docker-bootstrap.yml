@@ -17,11 +17,16 @@ jobs:
         with:
           persist-credentials: false
       - name: Check private credential generation
-        run: python3 -m unittest discover -s deploy/tests
+        run: |
+          python3 -m unittest discover -s deploy/tests
+          bash -n deploy/prepare-catalog.sh deploy/start-catalog.sh deploy/check-catalog.sh deploy/catalog/build-app.sh
+          node --check deploy/catalog/verify.mjs
+          node --check services/jeju-mcp/scripts/check-v2.mjs
       - name: Generate disposable CI credentials and validate Compose
         run: |
           python3 deploy/prepare.py
           docker compose -f deploy/compose.yaml config --quiet
+          docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml config --quiet
       - name: Build and start private fixture services
         run: docker compose -f deploy/compose.yaml up -d --build --wait --wait-timeout 120
       - name: Exercise MCP protocol, authentication and pgvector
