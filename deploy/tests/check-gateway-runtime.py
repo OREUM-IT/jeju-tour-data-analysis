@@ -60,6 +60,7 @@ async def check(control_token):
         headers = {'Authorization': 'Bearer ' + control_token}
         ready = await client.get('/gateway/readyz', headers=headers)
         assert ready.status_code == 200 and ready.json()['activeScopes'] == 0, 'CI_REQUIRES_IDLE_SCOPE_STATE'
+        assert ready.json()['maxConcurrentScopes'] == 2, 'CI_REQUIRES_DEFAULT_TWO_SCOPES'
         active = []
         try:
             request_id = 'gw-' + uuid.uuid4().hex
@@ -94,10 +95,79 @@ async def check(control_token):
             final.set(prepared_request=prepared_message, agent_response=Message(text=json.dumps(response), session_id=request_id))
             accepted = await final.validate_response()
             assert json.loads(accepted.text) == response
+            # Same real final component + scoped MCP: keep selected catalog IDs when
+            # the model forgets claims/notices; the server supplies actual evidence.
+            incomplete = {'schemaVersion': '1.0', 'requestId': request_id,
+                          'action': 'recommend', 'placeIds': ids,
+                          'requirementClaims': [], 'confirmationNotice': False, 'noticeTopics': []}
+            final.set(agent_response=Message(text=json.dumps(incomplete), session_id=request_id))
+            recovered = await final.validate_response()
+            assert json.loads(recovered.text) == response
+            # Gateway rechecks the published response; projection must be stable.
+            rechecked = await client.post('/gateway/validate-response',
+                headers={'Authorization': 'Bearer ' + service_token}, json={
+                    'request': original, 'response': json.loads(recovered.text),
+                    'expectedCatalogVersion': prepared['catalogVersion']})
+            assert rechecked.status_code == 200 and rechecked.json()['status'] == 'accepted'
+            assert rechecked.json()['response'] == response
+
+            # A distinct scope excludes the first scope's selected place. Both
+            # closures capture their own request ID; changing this component's
+            # prepared input cannot rebind previously built tools.
+            second_id = 'gw-' + uuid.uuid4().hex
+            second_request = {**request(second_id), 'excludedIds': ids}
+            second = await client.post('/gateway/scopes', headers=headers, json={
+                'request': second_request, 'principal': 'd' * 64,
+                'deadlineMs': int(time.time() * 1000) + 60_000})
+            assert second.status_code == 200
+            active.append(second_id)
+            scoped.set(prepared_request=Message(text=json.dumps(second.json()), session_id=second_id))
+            second_tools = {tool.name: tool for tool in scoped.build_tools()}
+            capacity = await client.get('/gateway/readyz', headers=headers)
+            assert capacity.status_code == 200 and capacity.json()['activeScopes'] == 2
+            third_id = 'gw-' + uuid.uuid4().hex
+            third_registration = {'request': request(third_id), 'principal': 'e' * 64,
+                                  'deadlineMs': int(time.time() * 1000) + 60_000}
+            overflow = await client.post('/gateway/scopes', headers=headers, json=third_registration)
+            assert overflow.status_code == 429 and overflow.json()['error']['code'] == 'GATEWAY_SCOPE_BUSY'
+            changed = {**original, 'requestId': second_id}
+            mismatch = await client.post('/gateway/prepare-request',
+                headers={'Authorization': 'Bearer ' + service_token}, json=changed)
+            assert mismatch.status_code == 409 and mismatch.json()['error']['code'] == 'GATEWAY_REQUEST_MISMATCH'
+            assert await second_tools['places.get'].ainvoke({'ids': ids}) == 'GATEWAY_TOOL_FAILED'
+            second_found = json.loads(await second_tools['places.search'].ainvoke({'maxResults': 1}))
+            second_ids = [item['id'] for item in second_found['data']['items']]
+            assert len(second_ids) == 1 and not set(second_ids).intersection(ids)
+            second_fetched = json.loads(await second_tools['places.get'].ainvoke({'ids': second_ids}))
+            assert [item['id'] for item in second_fetched['data']['items']] == second_ids
+            first_again = json.loads(await tools['places.get'].ainvoke({'ids': ids}))
+            assert [item['id'] for item in first_again['data']['items']] == ids
+            # First scope: original three calls + one above + four = eight.
+            for _ in range(4):
+                assert json.loads(await tools['places.get'].ainvoke({'ids': ids}))['data']['items'][0]['id'] == ids[0]
+            assert await tools['places.get'].ainvoke({'ids': ids}) == 'GATEWAY_TOOL_FAILED'
+            # First exhaustion cannot spend the second scope's remaining budget.
+            for _ in range(5):
+                assert json.loads(await second_tools['places.get'].ainvoke({'ids': second_ids}))['data']['items'][0]['id'] == second_ids[0]
+            assert await second_tools['places.get'].ainvoke({'ids': second_ids}) == 'GATEWAY_TOOL_FAILED'
             released = await client.delete('/gateway/scopes/' + request_id, headers=headers)
             assert released.status_code == 200
             active.remove(request_id)
             assert await tools['places.get'].ainvoke({'ids': ids}) == 'GATEWAY_TOOL_FAILED'
+            # The rejected third ID was not consumed. One release frees exactly
+            # one slot, while the other admitted scope retains its spent budget.
+            third = await client.post('/gateway/scopes', headers=headers, json=third_registration)
+            assert third.status_code == 200
+            active.append(third_id)
+            assert await second_tools['places.get'].ainvoke({'ids': second_ids}) == 'GATEWAY_TOOL_FAILED'
+            scoped.set(prepared_request=Message(text=json.dumps(third.json()), session_id=third_id))
+            third_tools = {tool.name: tool for tool in scoped.build_tools()}
+            third_fetched = json.loads(await third_tools['places.get'].ainvoke({'ids': ids}))
+            assert [item['id'] for item in third_fetched['data']['items']] == ids
+            for completed_id in (second_id, third_id):
+                released = await client.delete('/gateway/scopes/' + completed_id, headers=headers)
+                assert released.status_code == 200
+                active.remove(completed_id)
 
             expired_id = 'gw-' + uuid.uuid4().hex
             expiring = await client.post('/gateway/scopes', headers=headers, json={
@@ -115,7 +185,9 @@ async def check(control_token):
         ready = await client.get('/gateway/readyz', headers=headers)
         assert ready.status_code == 200 and ready.json()['activeScopes'] == 0
     return {'status': 'passed', 'compiledComponents': 3, 'structuredTools': 3,
-            'successfulScopedToolCalls': 3, 'finalValidationAccepted': True,
+            'successfulScopedToolCalls': 16, 'finalValidationAccepted': True,
+            'maxConcurrentScopes': 2, 'concurrentScopeIsolation': True,
+            'independentToolBudgets': True, 'thirdScopeRejectedUntilRelease': True,
             'releasedScopeRejected': True, 'expiredScopeRejected': True,
             'activeScopesAfter': 0, 'externalModelCalls': 0, 'modelExecuted': False, 'productionReady': False}
 

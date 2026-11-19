@@ -34,7 +34,7 @@ export async function boundedJson(response, limit = MAX_RESPONSE) {
   }
 }
 
-export function selectFinal(raw, requestId) {
+function terminalOutput(raw, requestId) {
   require(raw?.session_id === requestId, 'SESSION_MISMATCH');
   require(Array.isArray(raw.outputs) && raw.outputs.length === 1, 'OUTPUT_MISMATCH');
   const outputs = raw.outputs[0]?.outputs;
@@ -42,6 +42,12 @@ export function selectFinal(raw, requestId) {
   const selected = outputs.filter(x => x.component_id === FINAL_OUTPUT);
   require(selected.length === 1, 'OUTPUT_MISMATCH');
   const message = selected[0]?.results?.message;
+  require(typeof message?.text === 'string' && Buffer.byteLength(message.text) <= 256 * 1024, 'FINAL_INVALID');
+  return message;
+}
+
+export function selectFinal(raw, requestId) {
+  const message = terminalOutput(raw, requestId);
   require(message?.sender === 'Machine' && message.properties?.source?.id === 'JejuFinalValidation-v2'
     && message.properties?.source?.source === 'Jeju Final Validation', 'VALIDATOR_SOURCE_MISMATCH');
   require(typeof message.text === 'string' && Buffer.byteLength(message.text) <= 256 * 1024, 'FINAL_INVALID');
@@ -53,11 +59,12 @@ export function selectFinal(raw, requestId) {
 }
 
 export function createUpstream({ flowId, flowSha256, langflowApiKey, mcpToken, controlToken,
-  langflowUrl = 'http://langflow:7860', mcpUrl = 'http://jeju-mcp:8788', fetchImpl = fetch }) {
+  langflowUrl = 'http://langflow:7860', mcpUrl = 'http://jeju-mcp:8788', fetchImpl = fetch, expectedMaxConcurrent = 2 }) {
   require(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(flowId)
     && /^[a-f0-9]{64}$/.test(flowSha256) && /^sk-[A-Za-z0-9_-]{10,256}$/.test(langflowApiKey)
     && /^[a-f0-9]{64}$/.test(controlToken) && /^[\x21-\x7e]{32,256}$/.test(mcpToken)
-    && controlToken !== mcpToken, 'CONFIG_INVALID', 503);
+    && controlToken !== mcpToken && Number.isInteger(expectedMaxConcurrent) && expectedMaxConcurrent >= 1
+    && expectedMaxConcurrent <= 4, 'CONFIG_INVALID', 503);
   // URLs are trusted deployment dependencies, never request fields. The CLI uses fixed Docker names.
   for (const value of [langflowUrl, mcpUrl]) {
     const url = new URL(value);
@@ -66,12 +73,12 @@ export function createUpstream({ flowId, flowSha256, langflowApiKey, mcpToken, c
   }
   const mcpAuth = { Authorization: `Bearer ${mcpToken}` };
   const controlAuth = { Authorization: `Bearer ${controlToken}` };
-  async function call(base, route, { method = 'GET', headers, body, signal, timeout = 5000 } = {}) {
+  async function call(base, route, { method = 'GET', headers, body, signal, timeout = 5000, terminal = false } = {}) {
     const response = await fetchImpl(base + route, { method, redirect: 'error',
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
       headers: { ...headers, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    if (!response.ok) {
+    if (!response.ok || (terminal && response.status !== 200)) {
       await response.body?.cancel();
       if (base === mcpUrl && response.status === 400) throw new UpstreamError('INVALID_RECOMMENDATION_REQUEST', 400);
       if (base === mcpUrl && response.status === 429) throw new UpstreamError('BUSY', 429);
@@ -86,11 +93,12 @@ export function createUpstream({ flowId, flowSha256, langflowApiKey, mcpToken, c
     ]);
     require(flow.id === flowId && digest(flow.data) === flowSha256, 'FLOW_CHANGED', 503);
     require(mcp.ready === true && mcp.catalogSchemaVersion === '2.0' && mcp.dataMode === 'app-export'
-      && mcp.placeCount === 981 && mcp.toolCallLimit === 8 && mcp.productionReady === false
+      && mcp.placeCount === 981 && mcp.toolCallLimit === 8 && mcp.maxConcurrentScopes === expectedMaxConcurrent
+      && mcp.productionReady === false
       && /^sha256:[a-f0-9]{64}$/.test(mcp.dataVersion), 'MCP_NOT_READY', 503);
     return { ready: true, flowVerified: true, catalogPlaces: 981, productionReady: false };
   }
-  async function execute(request, { subjectHash, deadlineMs, signal, onSubmitted = () => {} }) {
+  async function execute(request, { subjectHash, deadlineMs, signal, onSubmitted = () => {}, onSettled = () => {} }) {
     let registered = false, primaryError;
     try {
       await ready(signal);
@@ -103,10 +111,15 @@ export function createUpstream({ flowId, flowSha256, langflowApiKey, mcpToken, c
         && /^sha256:[a-f0-9]{64}$/.test(prepared.catalogVersion), 'PREPARATION_MISMATCH');
       onSubmitted();
       const raw = await call(langflowUrl, `/api/v1/run/${flowId}?stream=false`, {
-        method: 'POST', headers: { 'x-api-key': langflowApiKey }, signal, timeout: 100_000,
+        method: 'POST', headers: { 'x-api-key': langflowApiKey }, signal, timeout: 100_000, terminal: true,
         body: { input_value: JSON.stringify(request), input_type: 'chat', output_type: 'chat',
           output_component: FINAL_OUTPUT, session_id: request.requestId },
       });
+      // A full HTTP 200 JSON body must also name this request and the expected
+      // terminal output. Only then can a later Final JSON/validation error free
+      // the execution lease. Truncated, malformed or mixed-up responses cannot.
+      terminalOutput(raw, request.requestId);
+      onSettled();
       const response = selectFinal(raw, request.requestId);
       const checked = await call(mcpUrl, '/gateway/validate-response', { method: 'POST', headers: mcpAuth, signal,
         body: { request, response, expectedCatalogVersion: prepared.catalogVersion } });

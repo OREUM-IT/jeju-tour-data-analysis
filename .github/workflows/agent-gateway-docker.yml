@@ -36,6 +36,8 @@ jobs:
           python3 deploy/prepare-gateway.py --init
       - name: Start official Langflow and scoped MCP with dedicated database
         run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml up -d --build --wait --wait-timeout 300 jeju-mcp langflow-db langflow
+      - name: Check installed candidate recovery without live scopes or model inference
+        run: docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml exec -T jeju-mcp node --input-type=module - < deploy/tests/check-candidate-recovery.mjs
       - name: Provision separate fixed Gateway flow and capture its key privately
         run: |
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml exec -T -e CI=true langflow python - < deploy/tests/seed-gateway-ci.py

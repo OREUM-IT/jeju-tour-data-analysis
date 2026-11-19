@@ -4,6 +4,8 @@ services:
     env_file:
       - .local/mcp.env
       - .local/gateway-control.env
+    environment:
+      GATEWAY_MAX_CONCURRENT: "${GATEWAY_MAX_CONCURRENT:-2}"
   langflow:
     networks: [mcp_private, langflow_db_private, langflow_egress, gateway_private]
     volumes:
@@ -21,6 +23,11 @@ services:
     build:
       context: ../services/agent-gateway
     env_file: .local/gateway.env
+    environment:
+      GATEWAY_MAX_CONCURRENT: "${GATEWAY_MAX_CONCURRENT:-2}"
+      GATEWAY_MAX_QUEUE: "${GATEWAY_MAX_QUEUE:-8}"
+      GATEWAY_GLOBAL_HOURLY_LIMIT: "${GATEWAY_GLOBAL_HOURLY_LIMIT:-60}"
+      GATEWAY_SUBJECT_HOURLY_LIMIT: "${GATEWAY_SUBJECT_HOURLY_LIMIT:-12}"
     ports: ["127.0.0.1:8790:8790"]
     networks: [gateway_private, mcp_private, gateway_egress]
     volumes: [gateway_state:/app/state]
@@ -33,6 +40,7 @@ services:
     cpus: 0.5
     pids_limit: 64
     restart: unless-stopped
+    stop_grace_period: 120s
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:8790/healthz',{signal:AbortSignal.timeout(2000)}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s

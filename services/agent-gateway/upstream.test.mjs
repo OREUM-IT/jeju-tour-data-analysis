@@ -69,8 +69,10 @@ async function fixture(t, options = {}) {
       let final = { schemaVersion: '1.0', requestId: original.requestId, action: 'cannot_confirm', placeIds,
         requirementClaims: placeIds.map(placeId => ({ placeId, requirement: 'indoor_required', verdict: 'unknown' })),
         confirmationNotice: true, noticeTopics: ['indoor_unverified'] };
+      if (options.agent) final = options.agent(final);
       const accepted = await mcpCall('/gateway/validate-response', { request: original, response: final, expectedCatalogVersion: prepared.catalogVersion });
       assert.equal(accepted.status, 'accepted');
+      final = accepted.response; // Match the real Langflow Final component's publication boundary.
       if (options.final) final = options.final(final);
       let raw = envelope(final, original.requestId);
       if (options.raw) raw = options.raw(raw);
@@ -98,9 +100,10 @@ const hasCode = code => error => error instanceof UpstreamError && error.code ==
 test('actual scoped MCP and mock Langflow enforce fixed requests and return only independently accepted final output', async t => {
   const { upstream, network, calls, mcpCall } = await fixture(t);
   assert.deepEqual(await upstream.ready(), { ready: true, flowVerified: true, catalogPlaces: 981, productionReady: false });
-  let submitted = 0;
-  const result = await upstream.execute(request(), context({ onSubmitted: () => { submitted++; } }));
+  let submitted = 0, settled = 0;
+  const result = await upstream.execute(request(), context({ onSubmitted: () => { submitted++; }, onSettled: () => { settled++; } }));
   assert.equal(submitted, 1);
+  assert.equal(settled, 1);
   assert.equal(result.status, 'accepted');
   assert.equal(result.response.action, 'cannot_confirm');
   assert.deepEqual(result.response.noticeTopics, ['indoor_unverified']);
@@ -146,16 +149,32 @@ test('real signed HTTP Gateway → mock Langflow → real scoped MCP completes w
   assert.equal(calls.filter(call => call.method === 'POST').length, 1);
 });
 
+test('missing model claims and false passes become evidence-backed candidates before final Gateway publication', async t => {
+  for (const claims of [[], 'malformed', [{ placeId: fixtureCatalog.places[0].id, requirement: 'indoor_required', verdict: 'pass' }]]) {
+    const { upstream, calls, mcpCall } = await fixture(t, { agent: value => ({ ...value, action: 'recommend',
+      requirementClaims: claims, confirmationNotice: false, noticeTopics: [], reply: 'unchecked text must not escape' }) });
+    const result = await upstream.execute(request(), context());
+    assert.equal(result.response.action, 'cannot_confirm');
+    assert.equal(result.response.placeIds.length, 3);
+    assert.ok(result.response.requirementClaims.every(claim => claim.verdict === 'unknown'));
+    assert.deepEqual(result.response.noticeTopics, ['indoor_unverified']);
+    assert.equal(result.response.confirmationNotice, true);
+    assert.equal(JSON.stringify(result).includes('unchecked text'), false);
+    assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+    assert.equal((await mcpCall('/gateway/readyz', undefined, true)).activeScopes, 0);
+  }
+});
+
 test('changed approved graph or bad readiness blocks before any model submission or scope creation', async t => {
   const first = await fixture(t); first.changeFlow();
   await assert.rejects(first.upstream.execute(request(), context()), hasCode('FLOW_CHANGED'));
   assert.equal(first.calls.filter(call => call.method === 'POST').length, 0);
   assert.equal(first.network.some(call => call.url.endsWith('/gateway/scopes')), false);
   for (const invalid of [{ placeCount: 980 }, { productionReady: true }, { dataMode: 'fixture' },
-    { catalogSchemaVersion: '1.0' }, { dataVersion: 'unbound' }, { toolCallLimit: 9 }]) {
+    { catalogSchemaVersion: '1.0' }, { dataVersion: 'unbound' }, { toolCallLimit: 9 }, { maxConcurrentScopes: 1 }, { maxConcurrentScopes: 5 }]) {
     const testCase = await fixture(t, { fetchOverride: async (url, _config, { mcpUrl }) => {
       if (url === mcpUrl + '/gateway/readyz') return Response.json({ ready: true, catalogSchemaVersion: '2.0',
-        dataMode: 'app-export', placeCount: 981, toolCallLimit: 8, productionReady: false,
+        dataMode: 'app-export', placeCount: 981, toolCallLimit: 8, maxConcurrentScopes: 2, productionReady: false,
         dataVersion: 'sha256:' + '0'.repeat(64), ...invalid });
     } });
     await assert.rejects(testCase.upstream.execute(request(), context()), hasCode('MCP_NOT_READY'));
@@ -165,9 +184,10 @@ test('changed approved graph or bad readiness blocks before any model submission
 
 test('untrusted final source, session, request identity, unknown places and unknown-to-pass claims are blocked and scopes released', async t => {
   const cases = [
-    { raw: raw => ({ ...raw, session_id: 'gw-' + 'f'.repeat(32) }), code: 'SESSION_MISMATCH' },
+    { raw: raw => ({ ...raw, session_id: 'gw-' + 'f'.repeat(32) }), code: 'SESSION_MISMATCH', settled: false },
     { raw: raw => { raw.outputs[0].outputs[0].results.message.properties.source.id = 'Agent'; return raw; }, code: 'VALIDATOR_SOURCE_MISMATCH' },
-    { raw: raw => { raw.outputs[0].outputs.push(structuredClone(raw.outputs[0].outputs[0])); return raw; }, code: 'OUTPUT_MISMATCH' },
+    { raw: raw => { raw.outputs[0].outputs[0].results.message.text = '{'; return raw; }, code: 'FINAL_INVALID' },
+    { raw: raw => { raw.outputs[0].outputs.push(structuredClone(raw.outputs[0].outputs[0])); return raw; }, code: 'OUTPUT_MISMATCH', settled: false },
     { final: final => ({ ...final, requestId: 'gw-' + 'f'.repeat(32) }), code: 'REQUEST_MISMATCH' },
     { final: final => ({ ...final, placeIds: ['injected-canary-unknown-place'] }), code: 'FINAL_VALIDATION_REJECTED' },
     { final: final => ({ ...final, action: 'recommend', requirementClaims: final.requirementClaims.map(claim => ({ ...claim, verdict: 'pass' })) }), code: 'FINAL_VALIDATION_REJECTED' },
@@ -175,12 +195,14 @@ test('untrusted final source, session, request identity, unknown places and unkn
     { final: final => {
       const placeIds = fixtureCatalog.places.slice(0, 6).map(place => place.id);
       return { ...final, placeIds, requirementClaims: placeIds.map(placeId => ({ placeId, requirement: 'indoor_required', verdict: 'unknown' })) };
-    }, code: 'TOO_MANY_PLACES' },
+    }, code: 'FINAL_VALIDATION_REJECTED' },
     { final: () => ({ status: 'blocked', code: 'VALIDATION_FAILED', message: 'private-canary' }), code: 'RECOMMENDATION_BLOCKED' },
   ];
   for (const item of cases) {
     const { upstream, calls, mcpCall } = await fixture(t, item);
-    await assert.rejects(upstream.execute(request(), context()), error => hasCode(item.code)(error) && !error.message.includes('canary'));
+    let settled = 0;
+    await assert.rejects(upstream.execute(request(), context({ onSettled: () => { settled++; } })), error => hasCode(item.code)(error) && !error.message.includes('canary'));
+    assert.equal(settled, item.settled === false ? 0 : 1, 'Only this request’s recognized complete terminal envelope settles execution.');
     assert.equal(calls.filter(call => call.method === 'POST').length, 1);
     assert.equal((await mcpCall('/gateway/readyz', undefined, true)).activeScopes, 0);
   }
@@ -262,9 +284,38 @@ test('otherwise accepted recommendation is withheld if scope cleanup fails', asy
 
 test('HTTP upstream rejection never echoes response content and still releases its registered scope', async t => {
   const { upstream, calls, mcpCall } = await fixture(t, { run: async ({ res }) => json(res, { error: 'canary-secret-provider-detail' }, 500) });
-  await assert.rejects(upstream.execute(request(), context()), error => hasCode('UPSTREAM_REJECTED')(error) && !error.message.includes('canary'));
+  let settled = 0;
+  await assert.rejects(upstream.execute(request(), context({ onSettled: () => { settled++; } })), error => hasCode('UPSTREAM_REJECTED')(error) && !error.message.includes('canary'));
+  assert.equal(settled, 0);
   assert.equal(calls.filter(call => call.method === 'POST').length, 1);
   assert.equal((await mcpCall('/gateway/readyz', undefined, true)).activeScopes, 0);
+});
+
+test('malformed, truncated, aborted and non-200 model responses never signal settled execution', async t => {
+  const cases = [
+    () => new Response('{', { status: 200 }),
+    () => new Response(new ReadableStream({ start(controller) {
+      controller.enqueue(Buffer.from('{"session_id":'));
+      controller.error(new Error('canary-truncated-body'));
+    } }), { status: 200 }),
+    () => new Response(new ReadableStream({ start(controller) {
+      controller.error(new DOMException('canary-aborted-body', 'AbortError'));
+    } }), { status: 200 }),
+    () => Response.json({ outputs: [] }, { status: 202 }),
+    () => Response.json({ error: 'canary-nonterminal' }, { status: 500 }),
+  ];
+  for (const response of cases) {
+    const { upstream, network } = await fixture(t, { fetchOverride: async (url, _config, { langflowUrl }) => {
+      if (url.startsWith(langflowUrl + '/api/v1/run/')) return response();
+    } });
+    let submitted = 0, settled = 0;
+    await assert.rejects(upstream.execute(request(), context({
+      onSubmitted: () => { submitted++; }, onSettled: () => { settled++; },
+    })));
+    assert.equal(submitted, 1);
+    assert.equal(settled, 0);
+    assert.equal(network.filter(call => call.url.includes('/api/v1/run/')).length, 1);
+  }
 });
 
 test('JSON reader bounds streamed bodies, rejects invalid UTF-8, and final selector never uses intermediate outputs', async () => {

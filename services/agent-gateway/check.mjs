@@ -2,6 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import { signRequest, createAccessVerifier } from './auth.mjs';
 import { createUpstream, boundedJson } from './upstream.mjs';
+import { gatewayPolicyFromEnv } from './server.mjs';
 
 const env = process.env;
 const require = condition => { if (!condition) throw new Error('CHECK_FAILED'); };
@@ -14,7 +15,8 @@ try {
     require(/^[a-z0-9.-]+$/.test(env.GATEWAY_PUBLIC_HOST));
   }
   const upstream = createUpstream({ flowId: env.LANGFLOW_GATEWAY_FLOW_ID, flowSha256: env.LANGFLOW_GATEWAY_FLOW_SHA256,
-    langflowApiKey: env.LANGFLOW_GATEWAY_API_KEY, mcpToken: env.MCP_SERVICE_TOKEN, controlToken: env.GATEWAY_CONTROL_TOKEN });
+    langflowApiKey: env.LANGFLOW_GATEWAY_API_KEY, mcpToken: env.MCP_SERVICE_TOKEN, controlToken: env.GATEWAY_CONTROL_TOKEN,
+    expectedMaxConcurrent: gatewayPolicyFromEnv(env).maxConcurrent });
   const ready = await upstream.ready();
   const base = 'http://127.0.0.1:8790';
   for (const [path, status] of [['/readyz', 401], ['/api/v1/flows/', 404]]) {

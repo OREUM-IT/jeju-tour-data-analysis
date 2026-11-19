@@ -8,7 +8,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { signRequest, createAccessVerifier, GatewayAuthError } from './auth.mjs';
 import { createGatewayState } from './state.mjs';
-import { createGatewayServer } from './server.mjs';
+import { createGatewayServer, gatewayPolicyFromEnv } from './server.mjs';
 
 const KEY = 'a'.repeat(64);
 const NOW = Date.parse('2026-11-19T00:00:00Z');
@@ -19,7 +19,8 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 async function fixture(t, options = {}) {
   const directory = await mkdtemp(path.join(tmpdir(), 'jeju-gateway-server-'));
   const clock = { value: NOW };
-  const state = createGatewayState({ filename: path.join(directory, 'gateway.sqlite'), now: () => clock.value });
+  const state = createGatewayState({ filename: path.join(directory, 'gateway.sqlite'), now: () => clock.value,
+    ...options.stateOptions });
   const calls = [];
   const upstream = options.upstream ?? {
     async ready() { calls.push({ kind: 'ready' }); return { ready: true, flowVerified: true, catalogPlaces: 981, productionReady: false }; },
@@ -34,6 +35,7 @@ async function fixture(t, options = {}) {
   await once(server, 'listening');
   t.after(async () => {
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    try { await server.closeJobs(); } catch (error) { assert.equal(error.code, 'STATE_UNAVAILABLE'); }
     state.close(); await rm(directory, { recursive: true, force: true });
   });
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -323,28 +325,28 @@ test('fixed length and chunked oversized bodies, invalid UTF-8 and malformed JSO
   assert.equal(calls.length, 0);
 });
 
-test('persistent state rejects replay and seventh user request without making another upstream call', async t => {
+test('persistent state rejects replay and thirteenth user request without making another upstream call', async t => {
   const { send, calls } = await fixture(t);
   const nonce = 'e'.repeat(32);
   assert.equal((await send(input(), { nonce })).status, 200);
   const replay = await send(input(), { nonce });
   assert.equal(replay.status, 409);
   assert.equal((await replay.json()).error.code, 'REPLAY_DETECTED');
-  for (let index = 0; index < 5; index++) assert.equal((await send()).status, 200);
-  const seventh = await send();
-  assert.equal(seventh.status, 429);
-  assert.equal((await seventh.json()).error.code, 'RATE_LIMITED');
-  assert.equal(calls.filter(call => call.kind === 'execute').length, 6);
+  for (let index = 0; index < 11; index++) assert.equal((await send()).status, 200);
+  const thirteenth = await send();
+  assert.equal(thirteenth.status, 429);
+  assert.equal((await thirteenth.json()).error.code, 'RATE_LIMITED');
+  assert.equal(calls.filter(call => call.kind === 'execute').length, 12);
   assert.equal((await send(input(), { subject: 'different-member' })).status, 200);
 });
 
-test('overlapping requests reserve a single execution and return busy with bounded retry guidance', async t => {
+test('operator-configured single execution returns busy with bounded retry guidance', async t => {
   const started = deferred(); const release = deferred(); let submissions = 0;
   const upstream = { ready: async () => ({}), execute: async (request, context) => {
     submissions++; context.onSubmitted(); started.resolve(); await release.promise;
     return { status: 'accepted', requestId: request.requestId };
   } };
-  const { send } = await fixture(t, { upstream });
+  const { send } = await fixture(t, { upstream, stateOptions: { maxConcurrent: 1 } });
   const first = send(); await started.promise;
   const second = await send(input(), { subject: 'another-member' });
   assert.equal(second.status, 429);
@@ -402,4 +404,148 @@ test('scope cleanup failure after submission blocks a successful result and pres
   assert.equal(JSON.stringify(output).includes('canary'), false);
   assert.equal((await send()).status, 429);
   assert.equal(submissions, 1);
+});
+
+test('bounded deployment settings reject unbounded concurrency, quota and queue sizes', () => {
+  assert.deepEqual(gatewayPolicyFromEnv({}), { maxConcurrent: 2, globalLimit: 60, subjectLimit: 12, maxQueue: 8 });
+  assert.deepEqual(gatewayPolicyFromEnv({ GATEWAY_MAX_CONCURRENT: '4', GATEWAY_GLOBAL_HOURLY_LIMIT: '240',
+    GATEWAY_SUBJECT_HOURLY_LIMIT: '48', GATEWAY_MAX_QUEUE: '0' }),
+  { maxConcurrent: 4, globalLimit: 240, subjectLimit: 48, maxQueue: 0 });
+  for (const env of [{ GATEWAY_MAX_CONCURRENT: '5' }, { GATEWAY_MAX_CONCURRENT: '0' }, { GATEWAY_MAX_QUEUE: '9' },
+    { GATEWAY_MAX_QUEUE: '-1' }, { GATEWAY_GLOBAL_HOURLY_LIMIT: '241' }, { GATEWAY_SUBJECT_HOURLY_LIMIT: '49' },
+    { GATEWAY_GLOBAL_HOURLY_LIMIT: '1' }, { GATEWAY_MAX_CONCURRENT: '2.5' }]) {
+    assert.throws(() => gatewayPolicyFromEnv(env), /GATEWAY_CONFIG_INVALID/u);
+  }
+});
+
+test('recognized terminal validation errors free legacy slots while uncertain execution stays held', async t => {
+  let runs = 0;
+  const app = await fixture(t, { upstream: { ready: async () => ({}), async execute(_request, context) {
+    runs++; context.onSubmitted(); context.onSettled();
+    throw Object.assign(new Error('canary-validation-detail'), { code: 'RECOMMENDATION_BLOCKED', status: 422 });
+  } } });
+  for (let index = 0; index < 3; index++) {
+    const response = await app.send();
+    assert.equal(response.status, 422);
+    assert.equal((await response.json()).error.code, 'RECOMMENDATION_BLOCKED');
+  }
+  assert.equal(runs, 3);
+  assert.deepEqual(app.state.activeCounts(), { queued: 0, running: 0, uncertain: 0 });
+});
+
+test('signed jobs execute twice concurrently, queue FIFO, and owner-bound polls never execute or consume quota', async t => {
+  const executions = [];
+  const upstream = { ready: async () => ({ ready: true }), async execute(request, context) {
+    const release = deferred(); executions.push({ request, context, release }); context.onSubmitted();
+    await release.promise; context.onSettled();
+    return { status: 'accepted', requestId: request.requestId, response: { action: 'ask_clarification', placeIds: [] } };
+  } };
+  const app = await fixture(t, { upstream });
+  const submit = async (subject, nonce) => {
+    const response = await app.send(input(), { route: '/v1/jobs', subject, ...(nonce ? { nonce } : {}) });
+    assert.equal(response.status, 202); assert.equal(response.headers.get('cache-control'), 'no-store');
+    const body = await response.json();
+    assert.equal(body.schemaVersion, '1.0'); assert.equal(body.productionReady, false); assert.equal(body.pollAfterSeconds, 2);
+    assert.match(body.requestId, /^gw-[a-f0-9]{32}$/u); assert.ok(['queued', 'running'].includes(body.status));
+    return body;
+  };
+  const poll = (job, subject) => fetch(app.base + '/v1/jobs/' + job.requestId,
+    app.signed('/v1/jobs/' + job.requestId, undefined, { method: 'GET', bytes: '', subject }));
+  const alice = await submit('alice', 'a'.repeat(32));
+  const bob = await submit('bob');
+  const carol = await submit('carol');
+  assert.equal(executions.length, 2);
+  assert.equal(carol.status, 'queued'); assert.equal(carol.position, 1);
+  assert.equal((await app.send(input(), { route: '/v1/jobs', subject: 'alice', nonce: 'a'.repeat(32) })).status, 409);
+  const anonymous = await fetch(app.base + '/v1/jobs/' + alice.requestId);
+  assert.equal(anonymous.status, 401);
+  for (const id of [alice.requestId, 'gw-' + 'f'.repeat(32)]) {
+    const response = await poll({ requestId: id }, 'other-owner');
+    assert.equal(response.status, 404); assert.equal((await response.json()).error.code, 'JOB_NOT_FOUND');
+  }
+  for (let i = 0; i < 15; i++) assert.equal((await poll(carol, 'carol')).status, 202);
+  assert.equal(executions.length, 2);
+  executions[0].release.resolve();
+  for (let i = 0; i < 100 && executions.length < 3; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(executions.length, 3); assert.equal(executions[2].request.requestId, carol.requestId);
+  for (const execution of executions) execution.release.resolve();
+  for (const [job, owner] of [[alice, 'alice'], [bob, 'bob'], [carol, 'carol']]) {
+    let response;
+    for (let i = 0; i < 100; i++) { response = await poll(job, owner); if (response.status !== 202) break; await response.body?.cancel(); }
+    assert.equal(response.status, 200); assert.equal((await response.json()).requestId, job.requestId);
+  }
+  assert.equal(executions.length, 3);
+});
+
+test('job cancellation only removes queued work and exact Access cookie exception covers new signed routes', async t => {
+  const released = deferred(); let calls = 0;
+  const token = 'eyJ0eXAiOiJKV1QifQ.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJl';
+  const headers = { Host: 'agent.example.invalid', Cookie: `CF_Authorization=${token}`, 'cf-access-jwt-assertion': token };
+  const app = await fixture(t, { mode: 'access', publicHost: 'agent.example.invalid',
+    accessVerifier: async value => { if (value !== token) throw new GatewayAuthError(); },
+    stateOptions: { maxConcurrent: 1 }, upstream: { ready: async () => ({}), async execute(request, context) {
+      calls++; context.onSubmitted(); await released.promise; context.onSettled(); return { status: 'accepted', requestId: request.requestId };
+    } } });
+  const call = (route, method, subject) => {
+    const signed = app.signed(route, method === 'POST' ? input() : undefined,
+      { method, subject, headers, ...(method === 'POST' ? {} : { bytes: '' }) });
+    return rawRequest(app.base, { route, method, headers: signed.headers, chunks: method === 'POST' ? [signed.body] : [] });
+  };
+  const first = await call('/v1/jobs', 'POST', 'first'); assert.equal(first.status, 202);
+  const waiting = await call('/v1/jobs', 'POST', 'waiting'); assert.equal(waiting.status, 202);
+  const route = '/v1/jobs/' + waiting.value.requestId;
+  assert.equal((await call(route, 'GET', 'waiting')).status, 202);
+  assert.equal((await call(route, 'DELETE', 'other')).status, 404);
+  assert.equal((await call('/v1/jobs/' + first.value.requestId, 'DELETE', 'first')).status, 409);
+  const cancelled = await call(route, 'DELETE', 'waiting');
+  assert.equal(cancelled.status, 200); assert.deepEqual(cancelled.value, { status: 'cancelled' });
+  assert.equal((await call(route, 'GET', 'waiting')).value.error.code, 'JOB_CANCELLED');
+  assert.equal(calls, 1);
+  const ready = await call('/readyz', 'GET', 'operator');
+  assert.equal(ready.value.asyncJobs, true); assert.equal(ready.value.maxConcurrent, 1);
+  assert.equal(ready.value.jobs.queued, 0); assert.equal(ready.value.jobs.running, 1);
+  released.resolve();
+});
+
+test('terminal job validation failures are pollable and immediately allow a new owner request without model retry', async t => {
+  let runs = 0;
+  const app = await fixture(t, { upstream: { ready: async () => ({}), async execute(_request, context) {
+    runs++; context.onSubmitted(); context.onSettled();
+    throw Object.assign(new Error('canary-private-final'), { code: 'FINAL_VALIDATION_REJECTED', status: 422 });
+  } } });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const submitted = await app.send(input(), { route: '/v1/jobs' });
+    assert.equal(submitted.status, 202);
+    const job = await submitted.json();
+    const route = '/v1/jobs/' + job.requestId;
+    const response = await fetch(app.base + route, app.signed(route, undefined, { method: 'GET', bytes: '' }));
+    assert.equal(response.status, 422);
+    assert.deepEqual(await response.json(), { error: { code: 'FINAL_VALIDATION_REJECTED' } });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  }
+  assert.equal(runs, 3);
+  assert.deepEqual(app.state.activeCounts(), { queued: 0, running: 0, uncertain: 0 });
+});
+
+test('queued route methods, exact paths, empty read bodies and duplicate auth headers remain fail closed', async t => {
+  const app = await fixture(t);
+  const id = 'gw-' + 'a'.repeat(32);
+  for (const route of ['/v1/jobs/', '/v1/jobs?x=1', '/v1/jobs/' + id + '?x=1', '/v1/jobs/' + id + '/', '/v1/jobs/not-an-id']) {
+    assert.equal((await app.send(input(), { route })).status, 404);
+  }
+  for (const [route, method] of [['/v1/jobs', 'GET'], ['/v1/jobs/' + id, 'POST'], ['/v1/jobs/' + id, 'PATCH']]) {
+    assert.equal((await app.send(input(), { route, method, ...(method === 'GET' ? { bytes: '' } : {}) })).status, 405);
+  }
+  const route = '/v1/jobs/' + id;
+  const withBody = app.signed(route, input(), { method: 'DELETE' });
+  const invalid = await rawRequest(app.base, { route, method: 'DELETE', headers: {
+    ...withBody.headers, 'Content-Length': String(Buffer.byteLength(withBody.body)),
+  }, chunks: [withBody.body] });
+  assert.equal(invalid.status, 400); assert.equal(invalid.value.error.code, 'INVALID_JSON');
+  const signed = app.signed('/v1/jobs');
+  const duplicate = await rawRequest(app.base, { route: '/v1/jobs', headers: [
+    ...Object.entries(signed.headers).flat(), 'X-Jeju-Nonce', signed.headers['x-jeju-nonce'],
+  ], chunks: [signed.body] });
+  assert.equal(duplicate.status, 400); assert.equal(duplicate.value.error.code, 'INVALID_HEADERS');
+  assert.equal(app.calls.length, 0);
 });
