@@ -108,7 +108,7 @@ def build_audit(*, capture, telemetry, record_hashes, db, flow_artifact_bytes, f
     row = db.execute('SELECT data FROM flow WHERE id=?', (normalized_flow_id,)).fetchone()
     require(row is not None and json.loads(row['data']) == artifact['data'], 'Registered flow differs from artifact')
     cases, all_model, all_tools, all_traces = [], [], [], []
-    stored = {'user': 0, 'finalGate': 0, 'rawAgent': 0, 'otherMachine': 0, 'other': 0}
+    stored = {'user': 0, 'finalGate': 0, 'sanitizedAgentError': 0, 'rawAgent': 0, 'otherMachine': 0, 'other': 0}
     for entry in entries:
         traces = list(db.execute('SELECT id,flow_id,status,start_time,end_time,total_latency_ms,total_tokens FROM trace WHERE session_id=? ORDER BY start_time', (entry['sessionId'],)))
         require(all(trace['flow_id'] == normalized_flow_id for trace in traces), 'Session reused by another flow')
@@ -120,9 +120,17 @@ def build_audit(*, capture, telemetry, record_hashes, db, flow_artifact_bytes, f
                       'traceIds': [trace['id'] for trace in traces], 'model': count_status(model), 'tools': count_status(tools),
                       'traceLatency': latency_stats([trace['total_latency_ms'] for trace in traces]),
                       'unfinishedTraces': sum(trace['end_time'] is None for trace in traces)})
-        for message in db.execute('SELECT sender,sender_name,properties FROM message WHERE session_id=?', (entry['sessionId'],)):
+        # Langflow can store a framework error after the Agent's emission guard
+        # exits. Recognize only the exact fixed code, including its newline, and
+        # category; do not return or inspect arbitrary message text in Python.
+        messages = db.execute("""SELECT sender,sender_name,properties,
+            CASE WHEN category='error' AND text IN (?,?) THEN 1 ELSE 0 END AS sanitized_error
+            FROM message WHERE session_id=?""",
+            ('AGENT_EXECUTION_FAILED\n', 'AGENT_EXECUTION_TIMEOUT\n', entry['sessionId']))
+        for message in messages:
             source = (json.loads(message['properties'] or '{}').get('source') or {}).get('id')
             if message['sender'] == 'User': stored['user'] += 1
+            elif source == 'Agent-jejuV2' and message['sanitized_error'] == 1: stored['sanitizedAgentError'] += 1
             elif source == 'Agent-jejuV2' or message['sender_name'] == 'Agent': stored['rawAgent'] += 1
             elif message['sender'] == 'Machine' and source == 'JejuFinalValidation-v2': stored['finalGate'] += 1
             elif message['sender'] == 'Machine': stored['otherMachine'] += 1

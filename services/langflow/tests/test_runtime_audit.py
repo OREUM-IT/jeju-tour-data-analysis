@@ -34,7 +34,7 @@ def fixture():
     db.executescript('''CREATE TABLE flow(id TEXT, data TEXT);
       CREATE TABLE trace(id TEXT, flow_id TEXT, session_id TEXT, status TEXT, start_time TEXT, end_time TEXT, total_latency_ms INTEGER, total_tokens INTEGER);
       CREATE TABLE span(trace_id TEXT, name TEXT, span_type TEXT, status TEXT, latency_ms INTEGER, attributes TEXT, start_time TEXT, inputs TEXT, outputs TEXT, error TEXT);
-      CREATE TABLE message(session_id TEXT, sender TEXT, sender_name TEXT, properties TEXT, text TEXT);
+      CREATE TABLE message(session_id TEXT, sender TEXT, sender_name TEXT, properties TEXT, text TEXT, category TEXT DEFAULT 'message');
       CREATE TABLE job(status TEXT);''')
     db.execute('INSERT INTO flow VALUES(?,?)', (FLOW_ID.replace('-', ''), json.dumps(artifact['data'])))
     db.execute('INSERT INTO trace VALUES(?,?,?,?,?,?,?,?)', ('trace-one', FLOW_ID.replace('-', ''), SESSION, 'ok', 'start', 'end', 1500, 24))
@@ -44,7 +44,7 @@ def fixture():
         db.execute('INSERT INTO span VALUES(?,?,?,?,?,?,?,?,?,?)', ('trace-one', name, span_type, 'ok', 100, json.dumps(attrs),
                                                                  'start', 'PRIVATE_INPUT_CANARY', 'PRIVATE_OUTPUT_CANARY', 'PRIVATE_ERROR_CANARY'))
     for sender, name, source in [('User', 'User', None), ('Machine', 'AI', 'JejuFinalValidation-v2')]:
-        db.execute('INSERT INTO message VALUES(?,?,?,?,?)', (SESSION, sender, name, json.dumps({'source': {'id': source}}), 'PRIVATE_MESSAGE_CANARY'))
+        db.execute('INSERT INTO message(session_id,sender,sender_name,properties,text) VALUES(?,?,?,?,?)', (SESSION, sender, name, json.dumps({'source': {'id': source}}), 'PRIVATE_MESSAGE_CANARY'))
     db.execute("INSERT INTO job VALUES('completed')")
     args = {'capture': capture, 'telemetry': telemetry, 'record_hashes': hashes, 'db': db,
             'flow_artifact_bytes': json.dumps(artifact).encode(), 'flow_id': FLOW_ID,
@@ -67,7 +67,7 @@ class RuntimeAuditTests(unittest.TestCase):
         self.assertEqual(aggregate['model']['calls'], 1)
         self.assertEqual(aggregate['model']['inputTokens'], 20)
         self.assertEqual(aggregate['tools']['byName']['places.search'], 1)
-        self.assertEqual(aggregate['storedMessages'], {'user': 1, 'finalGate': 1, 'rawAgent': 0, 'otherMachine': 0, 'other': 0})
+        self.assertEqual(aggregate['storedMessages'], {'user': 1, 'finalGate': 1, 'sanitizedAgentError': 0, 'rawAgent': 0, 'otherMachine': 0, 'other': 0})
         self.assertIsNone(aggregate['costUsd'])
         self.assertEqual(result['perCase'][0]['sessionId'], SESSION)
         self.assertNotIn(SESSION, json.dumps(aggregate))
@@ -121,13 +121,43 @@ class RuntimeAuditTests(unittest.TestCase):
         db = self.args['db']
         db.execute('UPDATE trace SET end_time=NULL')
         db.execute("INSERT INTO job VALUES('in_progress')")
-        db.execute('INSERT INTO message VALUES(?,?,?,?,?)', (SESSION, 'Machine', 'Agent', '{}', 'PRIVATE_AGENT_TEXT'))
-        db.execute('INSERT INTO message VALUES(?,?,?,?,?)', (SESSION, 'Machine', 'AI', '{}', 'PRIVATE_UNKNOWN_TEXT'))
+        db.execute('INSERT INTO message(session_id,sender,sender_name,properties,text) VALUES(?,?,?,?,?)', (SESSION, 'Machine', 'Agent', '{}', 'PRIVATE_AGENT_TEXT'))
+        db.execute('INSERT INTO message(session_id,sender,sender_name,properties,text) VALUES(?,?,?,?,?)', (SESSION, 'Machine', 'AI', '{}', 'PRIVATE_UNKNOWN_TEXT'))
         aggregate = AUDIT.build_audit(**self.args)['aggregate']
         self.assertEqual(aggregate['sessions']['unfinishedTraces'], 1)
         self.assertEqual(aggregate['storedMessages']['rawAgent'], 1)
         self.assertEqual(aggregate['storedMessages']['otherMachine'], 1)
         self.assertEqual(aggregate['activeJobs'], 1)
+
+    def test_exact_fixed_agent_errors_are_separate_from_raw_output(self):
+        db = self.args['db']
+        properties = json.dumps({'source': {'id': 'Agent-jejuV2'}})
+        for code in ('AGENT_EXECUTION_FAILED\n', 'AGENT_EXECUTION_TIMEOUT\n'):
+            db.execute('INSERT INTO message VALUES(?,?,?,?,?,?)', (SESSION, 'Agent', 'Agent', properties, code, 'error'))
+        aggregate = AUDIT.build_audit(**self.args)['aggregate']
+        self.assertEqual(aggregate['storedMessages']['sanitizedAgentError'], 2)
+        self.assertEqual(aggregate['storedMessages']['rawAgent'], 0)
+        self.assertNotIn('AGENT_EXECUTION_', json.dumps(aggregate))
+
+    def test_error_code_with_extra_text_or_wrong_category_remains_raw(self):
+        db = self.args['db']
+        properties = json.dumps({'source': {'id': 'Agent-jejuV2'}})
+        for text, category in [('AGENT_EXECUTION_FAILED\nPRIVATE_CANARY', 'error'),
+                               ('AGENT_EXECUTION_FAILED\n', 'message'),
+                               ('AGENT_EXECUTION_FAILED', 'error')]:
+            db.execute('INSERT INTO message VALUES(?,?,?,?,?,?)', (SESSION, 'Agent', 'Agent', properties, text, category))
+        result = AUDIT.build_audit(**self.args)
+        self.assertEqual(result['aggregate']['storedMessages']['sanitizedAgentError'], 0)
+        self.assertEqual(result['aggregate']['storedMessages']['rawAgent'], 3)
+        self.assertNotIn('PRIVATE_CANARY', json.dumps(result))
+
+    def test_fixed_error_code_from_wrong_source_is_not_a_sanitized_agent_error(self):
+        properties = json.dumps({'source': {'id': 'UnknownComponent'}})
+        self.args['db'].execute('INSERT INTO message VALUES(?,?,?,?,?,?)',
+                                (SESSION, 'Machine', 'AI', properties, 'AGENT_EXECUTION_FAILED\n', 'error'))
+        aggregate = AUDIT.build_audit(**self.args)['aggregate']
+        self.assertEqual(aggregate['storedMessages']['sanitizedAgentError'], 0)
+        self.assertEqual(aggregate['storedMessages']['otherMachine'], 1)
 
     def test_cli_reuses_node_canonicalizer_without_shell_or_raw_stderr(self):
         raw = json.dumps({'records': [{'caseId': 'x', 'latencyMs': 1e-7}]}).encode()

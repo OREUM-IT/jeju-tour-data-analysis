@@ -948,7 +948,7 @@ def check_v2_evaluation_results():
                   "inputTokens": "nullable_measurement", "outputTokens": "nullable_measurement"},
         "tools": {**{key: "count" for key in ("calls", "ok", "error", "otherStatus", "otherToolCalls")},
                   "byName": {key: "count" for key in ("places.search", "places.get", "constraints.check")}},
-        "storedMessages": {key: "count" for key in ("user", "finalGate", "rawAgent", "otherMachine", "other")},
+        "storedMessages": {key: "count" for key in ("user", "finalGate", "sanitizedAgentError", "rawAgent", "otherMachine", "other")},
         "activeJobs": "count", "costUsd": "nullable_measurement",
     }
     check_public_baseline_shape(audit, shape)
@@ -978,6 +978,15 @@ def check_v2_evaluation_results():
     require(audit["costUsd"] is None and (group["metrics"] is None
             or group["metrics"]["costUsd"] == {"measuredItems": 0, "total": None}),
             "Token usage and span counts must not be presented as measured billing")
+    registry = read_json(ROOT / "data/ai-agent-models.json").get("validatedV2Evaluation")
+    if registry is not None:
+        require(all(registry[key] == group[key] for key in
+                    ("plannedCases", "successfulResponses", "failedCases", "errors", "actionAccuracyAllCases"))
+                and registry["attemptedCases"] == sessions["attempted"]
+                and all(registry[key] == audit[key] for key in ("catalog", "storedMessages", "activeJobs", "costUsd"))
+                and registry["toolCalls"] == tools and registry["modelIdentity"]["recordedCalls"] == model["calls"]
+                and registry["comparisonWithHistoricalV1"]["candidateContractAligned"] is False,
+                "V2 registry must preserve the measured counts and remaining candidate-contract mismatch")
 
 
 def main():
