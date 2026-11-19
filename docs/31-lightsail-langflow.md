@@ -82,7 +82,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/check-langflow.sh
 
 `codex/lightsail-vertex-client` 수정은 AWS 사본의 `_get_llm()` 반환 부분만 서비스 계정을 받는 `ChatGoogleGenerativeAI(vertexai=True, google_api_key=None)`로 바꾼다. 기존 공급자 정책 검사와 지정 모델 `gemini-3.8-flash`, global 위치, SDK 60초·재시도 0회, Agent 90초·모델 최대 4회 제한을 유지한다. 기존 평가용 공개 흐름 파일은 변경하지 않는다. 수정 적용 후 AWS 재실행 성공 여부는 아직 미확인이다.
 
-기존 흐름에는 아래 명령으로 수정을 적용한다. `--upgrade-vertex-client`는 전체 그래프가 알려진 구버전과 정확히 일치할 때만 `data`를 갱신하며, `If-Match`로 동시 편집을 거부한다. 수정된 흐름은 그대로 보존하고, 알 수 없는 사용자 변경은 덮어쓰지 않는다. Flow ID·설명·폴더·자격증명은 보존한다.
+기존 흐름에는 아래 명령으로 수정을 적용한다. `bootstrap.py`는 파일 단위 bind mount이므로 Git 갱신 뒤 Langflow 컨테이너만 재생성해 새 파일을 연결한다. 기존 환경변수·DB·볼륨을 그대로 사용한다. `--upgrade-vertex-client`는 전체 그래프가 알려진 구버전과 정확히 일치할 때만 `data`를 갱신하며, `If-Match`로 동시 편집을 거부한다. 수정된 흐름은 그대로 보존하고, 알 수 없는 사용자 변경은 덮어쓰지 않는다. Flow ID·설명·폴더·자격증명은 보존한다.
 
 ```bash
 cd ~/oreumit-agent &&
@@ -90,6 +90,7 @@ git status --short &&
 test -z "$(git status --porcelain)" &&
 git fetch origin refs/heads/codex/lightsail-vertex-client:refs/remotes/origin/codex/lightsail-vertex-client &&
 git merge --ff-only origin/codex/lightsail-vertex-client &&
+sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml up -d --no-deps --force-recreate --wait --wait-timeout 180 langflow &&
 sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python /opt/oreumit/bootstrap.py --upgrade-vertex-client &&
 sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow python - --run-once < deploy/langflow/run-once.py
 ```
