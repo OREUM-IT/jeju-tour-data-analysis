@@ -10,14 +10,14 @@
 cd ~/oreumit-agent
 git status --short
 git fetch origin refs/heads/codex/lightsail-real-catalog:refs/remotes/origin/codex/lightsail-real-catalog
-git switch codex/lightsail-real-catalog
+git switch --no-track -c codex/lightsail-real-catalog origin/codex/lightsail-real-catalog
 sudo python3 deploy/export-catalog.py
 sudo docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml config --quiet
 sudo docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml up -d --no-deps --wait --wait-timeout 120 jeju-mcp
 sudo bash deploy/check-catalog.sh
 ```
 
-`git status --short`에 수정 파일이 보이면 기존 작업을 먼저 확인한다. 강제 초기화나 파일 삭제로 진행하지 않는다. 브랜치는 검토용이며 main에 자동 병합하지 않는다. 기존 서버에서 별도의 Compose 프로젝트 이름(`-p` 또는 `COMPOSE_PROJECT_NAME`)을 사용했다면 같은 이름을 유지해야 한다. 기본 이름은 `oreumit-bootstrap`이다.
+`git status --short`에 수정 파일이 보이면 기존 작업을 먼저 확인한다. 강제 초기화나 파일 삭제로 진행하지 않는다. 위 `git switch -c`는 최초 전환용이다. 이미 이 브랜치를 만들었다면 `git switch codex/lightsail-real-catalog`를 쓴다. 이전 `--single-branch` clone의 제한된 fetch 설정도 지원하도록 원격 ref와 시작점을 명시했다. 브랜치는 검토용이며 main에 자동 병합하지 않는다. 기존 서버에서 별도의 Compose 프로젝트 이름(`-p` 또는 `COMPOSE_PROJECT_NAME`)을 사용했다면 같은 이름을 유지해야 한다. 기본 이름은 `oreumit-bootstrap`이다.
 
 처음 내보낼 때 Docker 이미지·고정 앱 소스·npm 의존성을 내려받으므로 몇 분 걸릴 수 있다. 소스는 `OREUM-IT/jeju-tour@b0602a175c1d08959b7187da2b29ac450b52e0ba`로 고정한다. 현재 웹앱을 호출하거나 사용자 설문·모델 API를 보내는 작업이 아니다. 내보내기 중 오류가 나도 기존 fixture MCP는 계속 실행된다.
 

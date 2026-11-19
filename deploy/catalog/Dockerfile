@@ -6,5 +6,6 @@ COPY --chmod=644 data/theme-category-map.json data/persona-prototypes.json ./dat
 COPY --chmod=644 services/jeju-mcp/src/agent-catalog.mjs ./services/jeju-mcp/src/
 COPY --chmod=644 services/jeju-mcp/scripts/dump-app-places.mjs services/jeju-mcp/scripts/export-agent-catalog.mjs services/jeju-mcp/scripts/import-catalog.mjs ./services/jeju-mcp/scripts/
 COPY --chmod=644 deploy/catalog/generate.sh ./generate.sh
+RUN chmod 755 /builder /builder/data /builder/services /builder/services/jeju-mcp /builder/services/jeju-mcp/src /builder/services/jeju-mcp/scripts
 USER node
 ENTRYPOINT ["bash", "/builder/generate.sh"]
