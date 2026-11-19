@@ -33,7 +33,9 @@ export class GatewayScopeError extends Error {
 }
 const require = (condition, status, code) => { if (!condition) throw new GatewayScopeError(status, code); };
 
-export function createGatewayScopes({ catalog, now } = {}) {
+export function createGatewayScopes({ catalog, now, maxConcurrent = 2 } = {}) {
+  require(Number.isInteger(maxConcurrent) && maxConcurrent >= 1 && maxConcurrent <= 4,
+    503, 'INVALID_GATEWAY_CONCURRENCY');
   const clock = () => {
     const value = typeof now === 'function' ? now() : now ?? Date.now();
     const ms = value instanceof Date ? value.getTime() : typeof value === 'number' ? value : Date.parse(value);
@@ -73,7 +75,7 @@ export function createGatewayScopes({ catalog, now } = {}) {
     require(body.deadlineMs > at && body.deadlineMs <= at + 110_000, 400, 'INVALID_GATEWAY_DEADLINE');
     prune(at);
     require(!seen.has(body.request.requestId), 409, 'GATEWAY_SCOPE_DUPLICATE');
-    require(active.size === 0, 429, 'GATEWAY_SCOPE_BUSY');
+    require(active.size < maxConcurrent, 429, 'GATEWAY_SCOPE_BUSY');
     let prepared;
     try { prepared = validator.prepare(body.request); }
     catch (error) {
@@ -143,7 +145,7 @@ export function createGatewayScopes({ catalog, now } = {}) {
   }
   function ready() {
     prune(clock());
-    return { ready: true, activeScopes: active.size, toolCallLimit: GATEWAY_TOOL_CALL_LIMIT,
+    return { ready: true, activeScopes: active.size, maxConcurrentScopes: maxConcurrent, toolCallLimit: GATEWAY_TOOL_CALL_LIMIT,
       catalogSchemaVersion: catalog.schemaVersion, dataMode: catalog.dataMode,
       placeCount: catalog.places.length, dataVersion: catalog.dataVersion, readOnly: true, productionReady: false };
   }

@@ -66,7 +66,7 @@ function readBody(req) {
   });
 }
 
-export function createMcpHttpServer({ catalog, token, gatewayControlToken, allowedOrigins = [], now }) {
+export function createMcpHttpServer({ catalog, token, gatewayControlToken, gatewayMaxConcurrent = 2, allowedOrigins = [], now }) {
   if (typeof token !== 'string' || !/^[\x21-\x7e]{32,256}$/.test(token)) {
     throw new Error('MCP_SERVICE_TOKEN requires 32–256 non-space ASCII characters.');
   }
@@ -85,7 +85,8 @@ export function createMcpHttpServer({ catalog, token, gatewayControlToken, allow
     || !/^[\x21-\x7e]{32,256}$/.test(gatewayControlToken) || gatewayControlToken === token || validator === null)) {
     throw new Error('Gateway control requires a distinct valid token and catalog v2.');
   }
-  const scopes = gatewayControlToken === undefined ? null : createGatewayScopes({ catalog, now });
+  const scopes = gatewayControlToken === undefined ? null
+    : createGatewayScopes({ catalog, now, maxConcurrent: gatewayMaxConcurrent });
   const active = new Set();
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -229,8 +230,11 @@ async function main() {
   const catalog = await loadCatalog(catalogPath);
   const portText = process.env.PORT || '8788';
   if (!/^\d+$/.test(portText) || Number(portText) < 1 || Number(portText) > 65535) throw new Error('Invalid port.');
+  const concurrencyText = process.env.GATEWAY_MAX_CONCURRENT ?? '2';
+  if (!/^[1-4]$/u.test(concurrencyText)) throw new Error('Invalid Gateway concurrency.');
   const server = createMcpHttpServer({ catalog, token: process.env.MCP_SERVICE_TOKEN,
     gatewayControlToken: process.env.GATEWAY_CONTROL_TOKEN,
+    gatewayMaxConcurrent: Number(concurrencyText),
     allowedOrigins: (process.env.MCP_ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean) });
   server.on('error', () => {
     console.error('MCP server could not start; check the configured host and port.');

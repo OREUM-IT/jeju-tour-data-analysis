@@ -14,6 +14,7 @@ const TOKEN = 'm'.repeat(64);
 const CONTROL = 'c'.repeat(64);
 const ID = 'gw-' + 'a'.repeat(32);
 const OTHER_ID = 'gw-' + 'b'.repeat(32);
+const THIRD_ID = 'gw-' + 'c'.repeat(32);
 const verified = value => ({ value, basis: 'verified', source: 'synthetic',
   verifiedAt: '2026-11-18T00:00:00Z', validUntil: '2026-11-21T15:00:00Z' });
 const place = (id, name, extra = {}) => ({ id, name, category: 'art', kind: null,
@@ -48,8 +49,8 @@ function validationFixture({ original = request(), extraPlaces = [] } = {}) {
     validate: response => scopes.validate(body(response)) };
 }
 
-test('registration preserves immutable input, exact request binding, one active scope and tombstones', () => {
-  const scopes = createGatewayScopes({ catalog: catalog(), now: NOW });
+test('configured single-slot registration preserves immutable input, exact binding and tombstones', () => {
+  const scopes = createGatewayScopes({ catalog: catalog(), now: NOW, maxConcurrent: 1 });
   const original = request();
   const prepared = scopes.register(registration(original));
   assert.equal(prepared.candidateCount, 2);
@@ -67,6 +68,77 @@ test('registration preserves immutable input, exact request binding, one active 
   throwsCode(() => scopes.prepare(request()), 'GATEWAY_SCOPE_UNAVAILABLE', 404);
   scopes.register(registration(request({ requestId: OTHER_ID })));
   assert.equal(scopes.ready().activeScopes, 1);
+});
+
+test('default two scopes isolate candidates, original requests, validation and each eight-call budget', () => {
+  const scopes = createGatewayScopes({ catalog: catalog(), now: NOW });
+  const first = request({ requirements: [{ type: 'indoor_required', value: true }] });
+  const second = request({ requestId: OTHER_ID, filters: { category: 'food' } });
+  const a = scopes.register(registration(first));
+  const b = scopes.register(registration(second, { principal: '2'.repeat(64) }));
+  assert.equal(scopes.ready().activeScopes, 2);
+  assert.equal(scopes.ready().maxConcurrentScopes, 2);
+  throwsCode(() => scopes.register(registration(request({ requestId: THIRD_ID }))), 'GATEWAY_SCOPE_BUSY', 429);
+  assert.deepEqual(scopes.call(tool('places.search', {})).data.items.map(item => item.id), ['p1', 'p2']);
+  assert.deepEqual(scopes.call(tool('places.search', {}, OTHER_ID)).data.items.map(item => item.id), ['food']);
+  throwsCode(() => scopes.call(tool('places.get', { ids: ['food'] })), 'GATEWAY_PLACE_OUTSIDE_SCOPE', 403);
+  throwsCode(() => scopes.call(tool('places.get', { ids: ['p1'] }, OTHER_ID)), 'GATEWAY_PLACE_OUTSIDE_SCOPE', 403);
+  throwsCode(() => scopes.prepare({ ...first, requestId: OTHER_ID }), 'GATEWAY_REQUEST_MISMATCH', 409);
+  const cross = scopes.validate({ request: second, expectedCatalogVersion: b.catalogVersion,
+    response: recommendation(['p1'], { requestId: OTHER_ID }) });
+  assert.equal(cross.status, 'blocked');
+  const accepted = scopes.validate({ request: second, expectedCatalogVersion: b.catalogVersion,
+    response: recommendation(['food'], { requestId: OTHER_ID }) });
+  assert.equal(accepted.status, 'accepted');
+  assert.deepEqual(accepted.response.placeIds, ['food']);
+  const recovered = scopes.validate({ request: first, expectedCatalogVersion: a.catalogVersion,
+    response: recommendation(['p2']) });
+  assert.equal(recovered.status, 'accepted');
+  assert.equal(recovered.response.action, 'cannot_confirm');
+  for (let i = 0; i < 6; i += 1) scopes.call(tool('places.get', { ids: ['p1'] }));
+  throwsCode(() => scopes.call(tool('places.search', {})), 'GATEWAY_TOOL_BUDGET_EXHAUSTED', 429);
+  for (let i = 0; i < 6; i += 1) scopes.call(tool('places.get', { ids: ['food'] }, OTHER_ID));
+  throwsCode(() => scopes.call(tool('places.search', {}, OTHER_ID)), 'GATEWAY_TOOL_BUDGET_EXHAUSTED', 429);
+  scopes.release(ID);
+  assert.deepEqual(scopes.prepare(second), b);
+  assert.equal(scopes.ready().activeScopes, 1);
+  scopes.register(registration(request({ requestId: THIRD_ID })));
+  assert.equal(scopes.ready().activeScopes, 2);
+  throwsCode(() => scopes.register(registration(first)), 'GATEWAY_SCOPE_DUPLICATE', 409);
+});
+
+test('expiring one of two scopes frees only its slot and preserves the other request and budget', () => {
+  let now = NOW;
+  const scopes = createGatewayScopes({ catalog: catalog(), now: () => now });
+  scopes.register(registration(undefined, { deadlineMs: NOW + 1000 }));
+  const second = request({ requestId: OTHER_ID });
+  scopes.register(registration(second, { principal: '2'.repeat(64) }));
+  scopes.call(tool('places.search', {}, OTHER_ID));
+  now += 1000;
+  throwsCode(() => scopes.call(tool('places.search', {})), 'GATEWAY_SCOPE_EXPIRED', 410);
+  scopes.register(registration(request({ requestId: THIRD_ID })));
+  assert.equal(scopes.ready().activeScopes, 2);
+  assert.deepEqual(scopes.prepare(second).request, second);
+  for (let i = 0; i < 7; i += 1) scopes.call(tool('places.search', {}, OTHER_ID));
+  throwsCode(() => scopes.call(tool('places.search', {}, OTHER_ID)), 'GATEWAY_TOOL_BUDGET_EXHAUSTED', 429);
+  assert.deepEqual(scopes.call(tool('places.search', {}, THIRD_ID)).data.items.map(item => item.id), ['p1', 'p2']);
+});
+
+test('concurrency configuration is an integer from one through four', () => {
+  for (const maxConcurrent of [0, 5, -1, 2.5, NaN, Infinity, '2', null, false]) {
+    throwsCode(() => createGatewayScopes({ catalog: catalog(), now: NOW, maxConcurrent }), 'INVALID_GATEWAY_CONCURRENCY', 503);
+    assert.throws(() => createMcpHttpServer({ catalog: catalog(), token: TOKEN,
+      gatewayControlToken: CONTROL, gatewayMaxConcurrent: maxConcurrent }));
+  }
+  for (const maxConcurrent of [1, 2, 3, 4]) {
+    const scopes = createGatewayScopes({ catalog: catalog(), now: NOW, maxConcurrent });
+    for (let i = 0; i < maxConcurrent; i += 1) {
+      scopes.register(registration(request({ requestId: 'gw-' + String(i).repeat(32) })));
+    }
+    assert.equal(scopes.ready().maxConcurrentScopes, maxConcurrent);
+    assert.equal(scopes.ready().activeScopes, maxConcurrent);
+    throwsCode(() => scopes.register(registration()), 'GATEWAY_SCOPE_BUSY', 429);
+  }
 });
 
 test('strict registration rejects untrusted identity, timestamps, extra policy and invalid requests', () => {
@@ -300,10 +372,10 @@ test('deadline and process restart fail closed without carrying scopes into a fr
   throwsCode(() => fresh.call(tool('places.search', {})), 'GATEWAY_SCOPE_UNAVAILABLE', 404);
 });
 
-async function serverFixture(t, { enabled = true, now = NOW } = {}) {
+async function serverFixture(t, { enabled = true, now = NOW, maxConcurrent = 2 } = {}) {
   const input = catalog();
   const server = createMcpHttpServer({ catalog: input, token: TOKEN,
-    ...(enabled ? { gatewayControlToken: CONTROL } : {}), now });
+    ...(enabled ? { gatewayControlToken: CONTROL } : {}), gatewayMaxConcurrent: maxConcurrent, now });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
@@ -326,12 +398,30 @@ test('HTTP scopes are opt-in and control/execution tokens cannot cross authentic
   assert.equal((await call('/gateway/scopes/' + ID, undefined, { method: 'DELETE' })).status, 401);
   assert.equal((await call('/gateway/readyz', undefined, { method: 'GET' })).status, 401);
   const ready = await (await call('/gateway/readyz', undefined, { method: 'GET', token: CONTROL })).json();
-  assert.deepEqual(ready, { ready: true, activeScopes: 1, toolCallLimit: 8, catalogSchemaVersion: '2.0',
+  assert.deepEqual(ready, { ready: true, activeScopes: 1, maxConcurrentScopes: 2, toolCallLimit: 8, catalogSchemaVersion: '2.0',
     dataMode: 'app-export', placeCount: 6, dataVersion: input.dataVersion, readOnly: true, productionReady: false });
   assert.equal((await call('/gateway/prepare-request', request())).status, 200);
   assert.equal((await call('/gateway/scopes/' + ID, undefined, { method: 'DELETE', token: CONTROL })).status, 200);
   assert.equal((await call('/gateway/tools/call', tool('places.search', {}))).status, 404);
   assert.throws(() => createMcpHttpServer({ catalog: input, token: TOKEN, gatewayControlToken: TOKEN }));
+});
+
+test('HTTP admits exactly two simultaneous registrations and keeps independent scope budgets', async t => {
+  const { call } = await serverFixture(t);
+  const registrations = [ID, OTHER_ID, THIRD_ID].map(requestId => registration(request({ requestId })));
+  const responses = await Promise.all(registrations.map(body => call('/gateway/scopes', body, { token: CONTROL })));
+  assert.equal(responses.filter(response => response.status === 200).length, 2);
+  assert.equal(responses.filter(response => response.status === 429).length, 1);
+  const admitted = registrations.filter((_body, index) => responses[index].status === 200).map(body => body.request.requestId);
+  const rejected = registrations.find((_body, index) => responses[index].status === 429).request.requestId;
+  const toolResponses = await Promise.all(admitted.flatMap(requestId => Array.from({ length: 10 },
+    () => call('/gateway/tools/call', tool('places.get', { ids: ['p1'] }, requestId)))));
+  assert.equal(toolResponses.filter(response => response.status === 200).length, 16);
+  assert.equal(toolResponses.filter(response => response.status === 429).length, 4);
+  assert.equal((await call('/gateway/scopes/' + admitted[0], undefined, { method: 'DELETE', token: CONTROL })).status, 200);
+  assert.equal((await call('/gateway/scopes', registration(request({ requestId: rejected })), { token: CONTROL })).status, 200);
+  assert.equal((await call('/gateway/tools/call', tool('places.search', {}, admitted[1]))).status, 429);
+  assert.equal((await call('/gateway/tools/call', tool('places.search', {}, rejected))).status, 200);
 });
 
 test('concurrent HTTP calls reserve at most eight tool executions and malformed requests do not reset the scope', async t => {
