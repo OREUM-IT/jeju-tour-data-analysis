@@ -211,7 +211,11 @@ def configure(client, mcp, environment, template, source, setup, *, provision=Fa
                 'toolCount': 3, 'modelExecuted': False, 'productionReady': False}
     current = dt.datetime.now(dt.timezone.utc) if now is None else now
     require(isinstance(current, dt.datetime) and current.tzinfo is not None, 'GATEWAY_KEY_EXPIRY_INVALID')
-    expiry = (current.astimezone(dt.timezone.utc) + dt.timedelta(days=30)).isoformat()
+    # Langflow 1.13.3 ApiKeyBase serializes expires_at via _as_utc_iso(),
+    # which deliberately drops microseconds (and supplies UTC for old naive
+    # DB rows). Request that same precision so exact metadata checking works
+    # without tolerating an unexpected lifetime extension or omitted expiry.
+    expiry = (current.astimezone(dt.timezone.utc) + dt.timedelta(days=30)).replace(microsecond=0).isoformat()
     name = KEY_PREFIX + str(uuid.uuid4())
     created = payload(client.post('/api/v1/api_key/', json={'name': name, 'expires_at': expiry, 'is_active': True}))
     key_id = None

@@ -58,7 +58,10 @@ class Langflow(base_tests.Langflow):
             self.calls.append(('POST', route, kwargs))
             value = {**kwargs['json'], 'id': KEY_ID, 'api_key': SECRET}
             self.state['keys'][KEY_ID] = value
-            return base_tests.Response(value)
+            # ApiKeyBase._serialize_expires_last_used -> _as_utc_iso in
+            # Langflow 1.13.3 drops microseconds in the POST/GET response.
+            expiry = dt.datetime.fromisoformat(value['expires_at']).replace(microsecond=0).isoformat()
+            return base_tests.Response({**value, 'expires_at': expiry})
         return super().post(route, **kwargs)
 
     def delete(self, route, **kwargs):
@@ -67,8 +70,8 @@ class Langflow(base_tests.Langflow):
         return base_tests.Response({}, 204)
 
 
-def run(client, *, provision=True):
-    return gateway.configure(client, base_tests.MCP(), ENV, TEMPLATE, SOURCE, SETUP, provision=provision, now=NOW)
+def run(client, *, provision=True, now=NOW):
+    return gateway.configure(client, base_tests.MCP(), ENV, TEMPLATE, SOURCE, SETUP, provision=provision, now=now)
 
 
 class GatewayBootstrapTests(unittest.TestCase):
@@ -178,6 +181,33 @@ class GatewayBootstrapTests(unittest.TestCase):
                 run(client)
         self.assertFalse(client.state['keys'])
         self.assertEqual(sum(method == 'DELETE' for method, _, _ in client.calls), 1)
+
+    def test_microsecond_clock_matches_langflow_seconds_only_expiry_serializer(self):
+        client = Langflow()
+        current = NOW.replace(hour=15, minute=16, second=17, microsecond=987654)
+        result = run(client, now=current)
+        self.assertEqual(result['apiKey'], SECRET)
+        issued = next(kwargs['json'] for method, route, kwargs in client.calls
+                      if method == 'POST' and route == '/api/v1/api_key/')
+        self.assertEqual(issued['expires_at'], '2026-12-19T15:16:17+00:00')
+        self.assertLessEqual(dt.datetime.fromisoformat(issued['expires_at']) - current, dt.timedelta(days=30))
+        self.assertFalse(any(method == 'DELETE' for method, _, _ in client.calls))
+
+    def test_expiry_check_still_rejects_different_missing_or_offsetless_lifetimes(self):
+        for changed in ('2026-12-19T00:00:01+00:00', '2026-12-18T23:59:59+00:00',
+                        '2026-12-19T00:00:00', None):
+            with self.subTest(expiry_kind='missing' if changed is None else 'different_or_offsetless'):
+                client = Langflow()
+                original = client.post
+                def altered(route, **kwargs):
+                    result = original(route, **kwargs)
+                    if route == '/api/v1/api_key/':
+                        result.value['expires_at'] = changed
+                    return result
+                with patch.object(client, 'post', side_effect=altered):
+                    with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_API_KEY_INVALID$'):
+                        run(client)
+                self.assertFalse(client.state['keys'])
 
     def test_graph_digest_matches_javascript_canonical_sorted_keys(self):
         client = Langflow()
