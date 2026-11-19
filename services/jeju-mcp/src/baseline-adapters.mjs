@@ -123,13 +123,14 @@ const v2Id = z.string().min(1).max(160).refine((value) => value === value.trim()
 const validatedResponseSchema = z.object({
   schemaVersion: z.literal('1.0'), requestId: v2Id,
   action: z.enum(['recommend', 'cannot_confirm', 'ask_clarification', 'impossible']),
-  placeIds: z.array(v2Id).max(50),
+  placeIds: z.array(v2Id).max(50).refine((values) => new Set(values).size === values.length),
   requirementClaims: z.array(z.object({ placeId: v2Id,
     requirement: z.enum(['indoor_required', 'open_at', 'wheelchair', 'budget_cap']),
     verdict: z.enum(['pass', 'fail', 'unknown']),
   }).strict()).max(200),
   confirmationNotice: z.boolean(),
-  noticeTopics: z.array(z.enum(['indoor_unverified', 'hours_unverified', 'wheelchair_unverified', 'cost_unknown'])).max(4),
+  noticeTopics: z.array(z.enum(['indoor_unverified', 'hours_unverified', 'wheelchair_unverified', 'cost_unknown'])).max(4)
+    .refine((values) => new Set(values).size === values.length),
 }).strict();
 
 /** Only the selected final JSON is eligible; blocked prose is a failed response, never a reviewable replacement. */

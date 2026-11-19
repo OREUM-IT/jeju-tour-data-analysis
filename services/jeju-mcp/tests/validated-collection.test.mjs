@@ -76,6 +76,8 @@ test('v2 rejects blocked final gates, prose, mismatched identity and extra field
     [() => accepted('different-request'), 'invalid_validated_output'],
     [(id) => accepted(id, { gold: [] }), 'invalid_validated_output'],
     [(id) => accepted(id, { requirementClaims: [{ requirement: 'wheelchair', verdict: 'unknown' }] }), 'invalid_validated_output'],
+    [(id) => accepted(id, { placeIds: ['DUPLICATE', 'DUPLICATE'] }), 'invalid_validated_output'],
+    [(id) => accepted(id, { noticeTopics: ['hours_unverified', 'hours_unverified'] }), 'invalid_validated_output'],
   ];
   for (const [make, outcome] of variants) {
     let calls = 0;
