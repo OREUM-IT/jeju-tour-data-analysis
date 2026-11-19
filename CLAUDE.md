@@ -1,5 +1,9 @@
 # Claude Code 시작 안내
 
+2026-11-19 최신 AWS 진행: 사용자가 MCP·인증·PostgreSQL·pgvector 검사를 통과했다고 보고했다. `codex/lightsail-real-catalog`에서 [981곳 생성·연결 절차](docs/30-lightsail-real-catalog.md)를 준비했다. 기존 bootstrap 브랜치 변경도 포함하며 main 병합은 아직 하지 않았다. AWS 직접 적용 결과와 로컬/CI 검증을 구분한다. 이 단계는 JSON 카탈로그만 연결하고 DB 적재·Langflow·Gateway·Tunnel·Vercel은 다음 단계다. 사용자가 AWS를 준비한 사실을 원격 배포·DNS 변경의 포괄 승인으로 해석하지 않는다.
+
+2026-11-19 추가: 사용자가 Lightsail 서버 생성·Docker 설치 성공을 보고하고 다음 단계를 요청했다. [29 문서](docs/29-lightsail-docker-bootstrap.md)의 비공개 fixture 기동 파일을 `main@b1be980` 기준으로 준비했다. 이는 기존 모델 평가 코드와 별개이며 사용자 AWS에 직접 접속·배포하지 않았다. 실제 관광 데이터·Langflow·Tunnel·Gateway·Vercel 공개 연결로 범위를 확대하지 않는다. 세부 실행·검증·비밀값 보존 절차는 29 문서를 따른다.
+
 이 저장소는 제주 관광 Agent의 설계·자료 검토·읽기 전용 MCP 초기 구현이다. 먼저 [인수인계](docs/18-claude-code-handoff.md) 0절(최신 상태)·3절(Git·PR 방식)·11절(다음 작업)을 읽고 현재 Git 상태와 열린 PR을 확인한다. 모델의 역할·근거·미검증 상태는 [모델 레지스트리](docs/17-ai-agent-model-registry.md)와 [JSON](data/ai-agent-models.json)을 따른다.
 
 현재 작업: [PR #9](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/9)는 `main@4b41a03`에 병합됐고 [PR #10](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/10)의 `codex/agent-v2-evaluation`에서 [새 흐름의 템플릿 96문항 평가](docs/28-agent-v2-evaluation.md)를 완료했다. [집계](reports/baseline-langflow-v2-live-20261119.json)는 73응답·23실패·미실행 0, [실행 감사](reports/agent-v2-runtime-audit-20261119.json)는 96추적·모델 span 255·MCP 180회·활성 작업 0이다. 전체 동작 정답은 기존과 같은 67/96이며 ID 위반은 7/295로 줄고 확인 고지는 17/31로 낮아졌다. 전체 품질 개선을 주장하지 않는다.

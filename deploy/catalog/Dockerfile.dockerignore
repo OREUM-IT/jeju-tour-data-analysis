@@ -1,0 +1,8 @@
+**
+!data/theme-category-map.json
+!data/persona-prototypes.json
+!services/jeju-mcp/src/agent-catalog.mjs
+!services/jeju-mcp/scripts/dump-app-places.mjs
+!services/jeju-mcp/scripts/export-agent-catalog.mjs
+!services/jeju-mcp/scripts/import-catalog.mjs
+!deploy/catalog/generate.sh

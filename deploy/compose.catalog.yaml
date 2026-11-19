@@ -1,0 +1,25 @@
+# Private 981-place catalog overlay; combine with compose.yaml.
+# Keep the catalog outside the image and preserve the existing service credential.
+services:
+  jeju-mcp:
+    environment:
+      MCP_CATALOG_PATH: /app/catalog/agent-catalog-b0602a1.json
+    volumes:
+      - type: bind
+        source: ./.local/catalog/agent-catalog-b0602a1.json
+        target: /app/catalog/agent-catalog-b0602a1.json
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          const {readFileSync}=require('node:fs');
+          const {createHash}=require('node:crypto');
+          const expected='sha256:'+createHash('sha256').update(readFileSync(process.env.MCP_CATALOG_PATH)).digest('hex');
+          fetch('http://127.0.0.1:8788/readyz',{headers:{Authorization:'Bearer '+process.env.MCP_SERVICE_TOKEN},signal:AbortSignal.timeout(3000)})
+          .then(async r=>{const b=await r.json();if(!r.ok||b.ready!==true||b.dataMode!=='app-export'||b.catalogSchemaVersion!=='2.0'||b.placeCount!==981||b.dataVersion!==expected||b.readOnly!==true||b.productionReady!==false)process.exit(1)})
+          .catch(()=>process.exit(1))
