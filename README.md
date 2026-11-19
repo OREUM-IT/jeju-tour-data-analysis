@@ -4,7 +4,7 @@
 
 ## 현재 상태
 
-- **실제 Gemini·Langflow 평가 연결(2026-11-19):** [25 문서](docs/25-live-baseline-execution.md)의 실행기로 기존 앱과 Langflow의 실제 응답을 수집합니다. 모델·프롬프트·도구 버전과 평가 해시를 고정하고, 실패·미실행 문항도 분모에 남깁니다. Google Developer API의 503을 확인한 뒤 [Vertex AI 인증](docs/26-langflow-vertex-auth.md)으로 같은 `gemini-3.8-flash`의 Langflow 실제 응답·MCP 도구 호출을 확인했습니다. 자유 문장 판정은 잠정 모델 검수이며 사람의 24문항 검수는 남아 있습니다. [채점기 자체 검사](reports/baseline-harness-self-check.json)는 별도의 oracle 검사로 모델 성능이 아닙니다.
+- **실제 Gemini·Langflow 평가 연결(2026-11-19):** [25 문서](docs/25-live-baseline-execution.md)의 실행기로 실제 응답을 수집합니다. Gemini는 96문항을 모두 시도해 지정 모델 응답 92건·혼합 대체 모델 3건·시간 초과 1건을 기록하고 [잠정 채점](reports/baseline-gemini-live-20261119.json)을 마쳤습니다. 실패·미실행 문항도 분모에 남깁니다. Google Developer API의 503을 확인한 뒤 [Vertex AI 인증](docs/26-langflow-vertex-auth.md)으로 같은 `gemini-3.8-flash`의 Langflow 실제 응답·MCP 도구 호출을 확인했으며 전체 수집은 진행 중입니다. 자유 문장 판정은 잠정 모델 검수이며 사람의 24문항 검수는 남아 있습니다. [채점기 자체 검사](reports/baseline-harness-self-check.json)는 별도의 oracle 검사로 모델 성능이 아닙니다.
 - **운영·보안 설계 추가:** [Linux Docker 전환안](docs/21-linux-docker-production.md)과 [탈옥·프롬프트 주입 방어](docs/22-jailbreak-and-prompt-injection-defense.md)를 정리했습니다. 도구 실행 전 권한·예산 검사와 최종 장소 ID·필수 조건 검증을 제안합니다. [합성 평가 명세 14개](data/agent-security-cases.json)는 미실행이며 운영 방어가 구현·검증된 상태는 아닙니다. 현재 자료는 JSON 카탈로그, PostgreSQL + pgvector는 향후 검색 저장소 후보입니다.
 - **AI Agent 단계 진행:** [1·2단계 진단과 데이터 기반](docs/19-agent-step2-data-foundation.md)을 마쳤습니다. 원본 앱과 같은 장소 981곳을 속성별 근거 등급과 함께 내보내는 변환기, 페르소나 테마↔앱 분류 [매핑](data/theme-category-map.json), 이름·ID 없는 [커버리지 집계](reports/agent-catalog-coverage.json)를 추가했습니다. `verified` 0건·비용 0건이라 필수 조건은 아직 판정할 수 없습니다. [3단계 평가셋](docs/23-agent-step3-evaluation-set.md)도 만들었습니다. 8개 페르소나 × 12개 슬롯 96문항의 정답을 규칙으로 계산하는 생성기·채점 함수·테스트와 이름·ID 없는 [집계 보고서](reports/evaluation-set-summary.json)가 있고, 질의와 정답 후보는 `.local`에만 둡니다. 기준선 하네스 구현 후 다음은 실제 응답 수집·사람 판정·두 시스템 비교이며, 작업 명세와 재개 프롬프트는 [인수인계 11·12절](docs/18-claude-code-handoff.md)에 있습니다.
 - **시각적 Agent 빌더:** 사용자 결정으로 [Langflow](docs/20-langflow-agent-builder.md)를 씁니다(Flowise는 2026-08-31 지원 종료). Langflow 1.13.3에서 jeju-mcp 도구 3개와 실제 모델 응답을 확인했습니다. [기본 시작 흐름](services/langflow/jeju-tour-agent.flow.json)과 키를 포함하지 않는 [Vertex AI 흐름](services/langflow/jeju-tour-agent-vertex.flow.json)을 제공합니다. 현재 MCP v1의 장소 7,561곳과 앱·평가셋의 981곳은 다르므로, 카탈로그 v2 연결 후 같은 자료에서 다시 비교해야 합니다.
@@ -64,6 +64,7 @@ Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·�
 - [Agent 카탈로그 커버리지](reports/agent-catalog-coverage.json): 앱 장소 981곳의 속성·근거 등급·테마별 개수만 담은 집계. 카탈로그 본체는 `.local` 전용입니다.
 - [평가셋 집계](reports/evaluation-set-summary.json): 96문항의 난이도·기대 동작·필수 조건 판정 개수와 정답 해시만 담은 집계. 질의와 정답 후보는 `.local` 전용입니다.
 - [기준선 하네스 자체 검사](reports/baseline-harness-self-check.json): 복원한 템플릿 96문항을 정답 기반 응답으로 채점한 집계. 실제 모델 비교·지연·비용·보안 검증 결과가 아닙니다.
+- [Gemini 실제 기준선 집계](reports/baseline-gemini-live-20261119.json): 96문항 시도, 지정 모델 응답 92건과 실패 4건. 자유 문장은 잠정 모델 판정이며 사람 검수·비용 측정은 미완료입니다.
 - [확정 목록 CSV](data/confirmed-data-catalog.csv) · [실측 인벤토리 CSV](data/raw-data-inventory.csv) · [컬럼 사전 CSV](data/raw-data-columns.csv): 원본 CSV 파일은 공개 PR에 포함하지 않습니다.
 - [Codex Hugging Face 설정](.codex/config.toml) · [Claude Code 설정](.mcp.json): 공개 모델·데이터셋·논문 조회용. 현재 클라우드 도메인 허용 초안의 적용 및 실제 연결 검증은 남아 있습니다.
 - 시각화 재생성: `python3 scripts/build_persona_assets.py` (`numpy`, `matplotlib`, `Noto Sans CJK` 폰트 필요)
