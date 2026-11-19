@@ -33,6 +33,7 @@ class Response:
 class Langflow:
     def __init__(self, state=None):
         self.state = state if state is not None else {'variables': [], 'server': None, 'flows': {}}
+        self.state.setdefault('credential_values', {})
         self.headers = {}
         self.calls = []
 
@@ -68,6 +69,7 @@ class Langflow:
         if route == '/api/v1/variables/':
             body = kwargs['json']
             self.state['variables'].append({'name': body['name'], 'type': body['type'], 'has_value': True, 'value': None})
+            self.state['credential_values'][body['name']] = body['value']
             return Response(self.state['variables'][-1], 201)
         if route == '/api/v2/mcp/servers/jeju-mcp-v2':
             self.state['server'] = copy.deepcopy(kwargs['json'])
@@ -77,6 +79,13 @@ class Langflow:
             node = copy.deepcopy(body['frontend_node'])
             if body['field'] == 'mcp_server':
                 node['template']['mcp_server']['value'] = body['field_value']
+            # Langflow merges component headers over stored registration, then
+            # resolves global variables before authenticating MCP discovery.
+            headers = {**self.state['server']['headers'], **node['template']['headers']['value']}
+            authorization = headers.get('Authorization', '').replace(
+                '{{JEJU_MCP_TOKEN}}', self.state['credential_values'].get(bootstrap.MCP_TOKEN_NAME, 'missing'))
+            if authorization != 'Bearer ' + ENVIRONMENT['MCP_SERVICE_TOKEN']:
+                node['template']['tools_metadata']['value'] = []
             return Response(node)
         if route == '/api/v1/flows/':
             flow = copy.deepcopy(kwargs['json'])
@@ -118,7 +127,7 @@ class LangflowBootstrapTest(unittest.TestCase):
         repeated = bootstrap.bootstrap(second, MCP(), ENVIRONMENT, TEMPLATE)
         self.assertEqual(repeated['flowStatus'], 'preserved-existing')
         writes = [route for method, route, _ in second.calls if method == 'POST']
-        self.assertEqual(writes, ['/api/v1/login', '/api/v1/custom_component/update', '/api/v1/custom_component/update'])
+        self.assertEqual(writes, ['/api/v1/login'] + ['/api/v1/custom_component/update'] * 4)
         self.assertEqual(first.state['flows']['existing'], unrelated)
 
     def test_modified_existing_flow_is_never_overwritten(self):
@@ -160,6 +169,40 @@ class LangflowBootstrapTest(unittest.TestCase):
         with self.assertRaisesRegex(bootstrap.BootstrapError, '^MCP_REGISTRATION_CONFLICT$'):
             bootstrap.ensure_server(client)
         self.assertFalse(any(method == 'POST' for method, _, _ in client.calls))
+
+    def test_literal_registration_cannot_hide_stale_global_token(self):
+        client = Langflow()
+        client.state['variables'] = [{'name': bootstrap.MCP_TOKEN_NAME, 'type': 'Credential', 'has_value': True}]
+        client.state['credential_values'][bootstrap.MCP_TOKEN_NAME] = 'stale-' + 'x' * 64
+        client.state['server'] = {'url': bootstrap.MCP_URL + '/mcp', 'mode': 'Streamable_HTTP',
+                                  'headers': {'Authorization': 'Bearer ' + ENVIRONMENT['MCP_SERVICE_TOKEN']}}
+        previous = copy.deepcopy(client.state)
+        with self.assertRaisesRegex(bootstrap.BootstrapError, '^MCP_TOOL_SET_MISMATCH$'):
+            bootstrap.bootstrap(client, MCP(), ENVIRONMENT, TEMPLATE)
+        self.assertEqual(client.state, previous)
+        probes = [kwargs['json']['frontend_node']['template'] for method, route, kwargs in client.calls
+                  if method == 'POST' and route == '/api/v1/custom_component/update']
+        self.assertEqual(len(probes), 2)
+        for probe in probes:
+            self.assertFalse(probe['use_cache']['value'])
+            self.assertEqual(probe['headers']['value'], {'Authorization': 'Bearer {{JEJU_MCP_TOKEN}}'})
+
+    def test_valid_global_cannot_hide_stale_registered_header(self):
+        client = Langflow()
+        client.state['variables'] = [{'name': bootstrap.MCP_TOKEN_NAME, 'type': 'Credential', 'has_value': True}]
+        client.state['credential_values'][bootstrap.MCP_TOKEN_NAME] = ENVIRONMENT['MCP_SERVICE_TOKEN']
+        client.state['server'] = {'url': bootstrap.MCP_URL + '/mcp', 'mode': 'Streamable_HTTP',
+                                  'headers': {'Authorization': 'Bearer stale-registration'}}
+        previous = copy.deepcopy(client.state)
+        with self.assertRaisesRegex(bootstrap.BootstrapError, '^MCP_TOOL_SET_MISMATCH$'):
+            bootstrap.bootstrap(client, MCP(), ENVIRONMENT, TEMPLATE)
+        self.assertEqual(client.state, previous)
+        probes = [kwargs['json']['frontend_node']['template'] for method, route, kwargs in client.calls
+                  if method == 'POST' and route == '/api/v1/custom_component/update']
+        self.assertEqual(len(probes), 4)
+        self.assertEqual([probe['headers']['value'] for probe in probes],
+                         [{'Authorization': 'Bearer {{JEJU_MCP_TOKEN}}'}] * 2 + [{}, {}])
+        self.assertTrue(all(probe['use_cache']['value'] is False for probe in probes))
 
     def test_existing_vertex_credential_is_reported_without_modification(self):
         client = Langflow()

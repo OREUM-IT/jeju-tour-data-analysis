@@ -18,6 +18,7 @@
 ```bash
 cd ~/oreumit-agent &&
 git status --short &&
+test -z "$(git status --porcelain)" &&
 git fetch origin refs/heads/codex/lightsail-langflow:refs/remotes/origin/codex/lightsail-langflow &&
 git switch --no-track -c codex/lightsail-langflow origin/codex/lightsail-langflow &&
 sudo python3 deploy/prepare-langflow.py &&
@@ -80,7 +81,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/check-langflow.sh
 
 ## 5. 검증 범위와 다음 단계
 
-배포 코드의 단위 검사는 비밀 파일 보존·부분 실패·링크 거부, 인증 거부·MCP 등록 충돌·흐름 변조 거부, Vertex JSON·RSA·고정 OAuth 주소를 다룬다. Docker CI는 공식 이미지와 전용 DB에서 로그인·SSRF 허용/거부·MCP 도구 발견·흐름 가져오기·재시작 보존을 확인하도록 구성했다. **CI 카탈로그의 981곳은 모두 명시적인 허구 테스트 자료**이며 실제 제주 자료 검증이나 모델 성능 측정이 아니다. 실제 AWS 카탈로그 연결 성공은 사용자가 제공한 30 문서의 PASS 출력으로 별도 기록한다.
+배포 코드의 단위 검사는 비밀 파일 보존·부분 실패·링크 거부, 인증 거부·MCP 등록 충돌·흐름 변조 거부, Vertex JSON·RSA·고정 OAuth 주소를 다룬다. 공식 이미지와 전용 DB의 [Docker CI 기동 검사](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44469777410)에서 로그인·SSRF 허용/거부·MCP 도구 발견·흐름 가져오기·재시작 보존을 통과했다. 초기 기동에서 로그 상위 디렉터리가 아직 없던 오류는 기존 볼륨 루트의 `/app/data/langflow.log`로 경로를 지정해 해결했다. **CI 카탈로그의 981곳은 모두 명시적인 허구 테스트 자료**이며 실제 제주 자료 검증이나 모델 성능 측정이 아니다. 실제 AWS 카탈로그 연결 성공은 사용자가 제공한 30 문서의 PASS 출력으로 별도 기록한다.
 
 작성자의 로컬 Docker는 32GB 저장 공간과 VFS 드라이버 한도 때문에 공식 이미지의 실행 복사 단계에서 실패했다. 공식 이미지 실행 결과는 CI에서 확인하며, 이를 AWS 실행 성공으로 바꾸어 기록하지 않는다. AWS의 150GB 여유 공간 부족을 관측한 것은 아니다.
 

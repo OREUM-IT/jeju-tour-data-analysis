@@ -48,17 +48,29 @@ def update_node(client, node, field, value, tool_mode):
 
 def discover_tools(client):
     catalog = payload(client.get('/api/v1/all'))
-    node = copy.deepcopy(catalog['models_and_agents']['MCPTools'])
     reference = {'name': SERVER_NAME, 'config': {}}
-    node = update_node(client, node, 'mcp_server', reference, False)
-    node['template']['mcp_server']['value'] = reference
-    node = update_node(client, node, 'tool_mode', True, True)
-    node['template']['mcp_server']['value'] = reference
-    node['template']['headers']['value'] = {}
-    node['template']['tool_execution_timeout']['value'] = 10.0
-    node['tool_mode'] = True
-    names = sorted(row['name'] for row in node['template']['tools_metadata']['value'])
-    require(names == TOOLS, 'MCP_TOOL_SET_MISMATCH')
+    # Registration GET masks header values. Force this Credential reference during
+    # discovery so a valid literal registration cannot hide a stale global token.
+    # Langflow merges component headers first, then resolves DB variables.
+    probe_headers = {'Authorization': 'Bearer {{JEJU_MCP_TOKEN}}'}
+    # Also verify the registered header without an override. Save only that second
+    # node: Langflow treats a composed Bearer placeholder as an inline flow secret.
+    for headers in (probe_headers, {}):
+        node = copy.deepcopy(catalog['models_and_agents']['MCPTools'])
+        node['template']['headers']['value'] = headers
+        node['template']['use_cache']['value'] = False
+        node['template']['tool_execution_timeout']['value'] = 10.0
+        node = update_node(client, node, 'mcp_server', reference, False)
+        node['template']['mcp_server']['value'] = reference
+        node['template']['headers']['value'] = headers
+        node['template']['use_cache']['value'] = False
+        node = update_node(client, node, 'tool_mode', True, True)
+        node['template']['mcp_server']['value'] = reference
+        node['template']['headers']['value'] = headers
+        node['template']['tool_execution_timeout']['value'] = 10.0
+        node['tool_mode'] = True
+        names = sorted(row['name'] for row in node['template']['tools_metadata']['value'])
+        require(names == TOOLS, 'MCP_TOOL_SET_MISMATCH')
     return node
 
 
