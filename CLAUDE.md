@@ -1,6 +1,8 @@
 # Claude Code 시작 안내
 
-2026-11-19 최신 AWS 진행: 사용자가 MCP·인증·PostgreSQL·pgvector 검사를 통과했다고 보고했다. `codex/lightsail-real-catalog`에서 [981곳 생성·연결 절차](docs/30-lightsail-real-catalog.md)를 준비했다. 기존 bootstrap 브랜치 변경도 포함하며 main 병합은 아직 하지 않았다. AWS 직접 적용 결과와 로컬/CI 검증을 구분한다. 이 단계는 JSON 카탈로그만 연결하고 DB 적재·Langflow·Gateway·Tunnel·Vercel은 다음 단계다. 사용자가 AWS를 준비한 사실을 원격 배포·DNS 변경의 포괄 승인으로 해석하지 않는다.
+2026-11-19 AWS 최신 진행: 사용자가 실제 981곳 카탈로그에 이어 **Langflow 1.13.3·전용 DB 기동, 인증·SSRF·DB 권한 검사, MCP 도구 3개 발견과 v2 흐름 가져오기 성공 출력**을 제공했다. `langflow-db`·`langflow`는 Healthy이며 `authenticated:true`다. 이후 [기존 Vertex 자격증명 등록](docs/31-lightsail-langflow.md#3-기존-vertex-ai-서비스-계정-json-등록)도 `configured_without_inference`로 완료했고, 후속 검사에서 `flowStatus:preserved-existing`, `vertexConfigured:true`를 제공했다. `providerAccessVerified:false`, `modelExecuted:false`, `productionReady:false`이므로 다음은 Vertex OAuth·모델 요청 1건 확인이다. 이는 사용자 제공 AWS 실행 결과이며 작성자의 원격 접속 검증은 아니다. 별도의 [최종 Docker CI](https://github.com/OREUM-IT/jeju-tour-data-analysis/actions/runs/44477702783)는 허구 카탈로그로 기동·인증·MCP 연결·흐름 가져오기·재시작 보존을 통과했다. PR #11은 main에, PR #12는 작업 브랜치에 병합됐다. Langflow 구성과 단건 실행기는 [PR #13](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/13)에서 main에 반영하며, AWS의 Vertex OAuth·모델 호출과 Gateway·Tunnel·Vercel 연결은 남아 있다.
+
+2026-11-19 이전 AWS 단계: 사용자가 MCP·인증·PostgreSQL·pgvector 검사를 통과했다고 보고했다. `codex/lightsail-real-catalog`에서 [981곳 생성·연결 절차](docs/30-lightsail-real-catalog.md)를 준비했다. 기존 bootstrap 브랜치 변경도 포함하며 main 병합은 아직 하지 않았다. AWS 직접 적용 결과와 로컬/CI 검증을 구분한다. 당시 단계는 JSON 카탈로그만 연결했으며, 이후 Langflow 내부 연결 결과는 위 최신 진행과 31 문서를 따른다. 관광 데이터의 DB 적재·Gateway·Tunnel·Vercel은 남아 있다. 사용자가 AWS를 준비한 사실을 원격 배포·DNS 변경의 포괄 승인으로 해석하지 않는다.
 
 2026-11-19 추가: 사용자가 Lightsail 서버 생성·Docker 설치 성공을 보고하고 다음 단계를 요청했다. [29 문서](docs/29-lightsail-docker-bootstrap.md)의 비공개 fixture 기동 파일을 `main@b1be980` 기준으로 준비했다. 이는 기존 모델 평가 코드와 별개이며 사용자 AWS에 직접 접속·배포하지 않았다. 실제 관광 데이터·Langflow·Tunnel·Gateway·Vercel 공개 연결로 범위를 확대하지 않는다. 세부 실행·검증·비밀값 보존 절차는 29 문서를 따른다.
 
@@ -12,7 +14,7 @@
 
 직전 구현: [카탈로그 v2 MCP·원본 요청 기반 최종 검증·별도 Langflow 흐름](docs/27-agent-catalog-v2-validation.md)은 앱과 같은 981곳의 실제 SDK 연결, 모의 모델 통합과 실제 Gemini 실행 요청 1건을 확인했다. 실제 요청은 12.165초에 `accepted`·`cannot_confirm`·후보 5개와 실내 확인 안내를 반환했다. 이후 미사용 remediation 재시도 경로를 제거하고 최종 파일을 모의 검사로 재검증했다. 이 연결 확인은 새 96문항 배치와 별도이며 기존 v1 기준선도 보존한다.
 
-사용자 요청: 현재는 로컬 개발 환경에서 진행한다. 운영 Linux 서버·cloudflared·Gateway 구축이 필요해지면 진행을 멈추고 필요한 범위를 사용자에게 알린다. 운영 인프라를 임의로 구축·배포하지 않는다.
+진행 범위: 이전 로컬 단계 이후 사용자가 AWS 서버를 준비하고 31 문서의 내부 Langflow 기동 성공 출력을 제공했다. 기존 Vertex 자격증명 등록도 완료돼 `vertexConfigured:true`이며, 공급자 접근 검증과 모델 실행은 아직 하지 않았다(`providerAccessVerified:false`, `modelExecuted:false`). 다음은 Vertex OAuth·모델 요청 1건 확인이다. 공개 Gateway·cloudflared·Vercel 연결이나 모델 실행 완료를 내부 기동 성공에서 추정하지 않는다.
 
 2026-11-19: [기준선 채점 하네스](docs/24-agent-baseline-scoring.md)와 [실제 수집기](docs/25-live-baseline-execution.md)로 같은 템플릿 96문항씩의 수집·채점을 마쳤다. [Gemini 집계](reports/baseline-gemini-live-20261119.json)는 지정 모델 응답 92·실패 4, [Langflow 집계](reports/baseline-langflow-live-20261119.json)는 구조화 응답 80·실패 16이며 둘 다 미실행 0이다. 기준선 작업은 [PR #8](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/8)로 병합됐다. 사용자가 실제 Gemini·Langflow 실행과 필요한 Google 인증 사용을 승인했고, [Vertex AI 연결](docs/26-langflow-vertex-auth.md)과 MCP 도구 호출을 확인했다. `collect-baseline-responses.mjs`와 `evaluate-baselines.mjs`의 prepare/import/score/self-check를 재사용한다. 공개 자체 검사는 oracle 응답이며, Gemini 자유 문장 판정은 잠정 모델 검수다. 사람 검수는 0/24건, 합성 보안 14개는 미실행, 비용은 미측정이다. 카탈로그 v2·최종 검증·Agent 실행 제한은 27 문서에서 구현했다. 새 흐름의 96문항 평가는 28 문서에 별도로 완료했으며 사람 검수·원격 취소와 비용 계측·합성 보안 평가는 남아 있다. 카탈로그와 날짜 문맥 차이 때문에 모델 우열을 주장하지 않는다. 이전 작성 질의는 복원되지 않았으며 원본 앱·운영 배포의 소스나 설정은 수정하지 않는다.
 
