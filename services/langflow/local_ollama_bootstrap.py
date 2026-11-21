@@ -101,6 +101,9 @@ class Service:
     def post(self, route, **kwargs):
         return self.request('POST', route, **kwargs)
 
+    def patch(self, route, **kwargs):
+        return self.request('PATCH', route, **kwargs)
+
     def delete(self, route, **kwargs):
         return self.request('DELETE', route, **kwargs)
 
@@ -226,7 +229,7 @@ def check_ollama(ollama, model):
             'modelParameterSize': label(details.get('parameter_size'))}
 
 
-def ensure_variables(langflow, token):
+def ensure_variables(langflow, token, *, replace=False):
     variables = payload(langflow.get('/api/v1/variables/'), code='VARIABLE_LIST_INVALID', kind=list)
     names = [item for item in variables if isinstance(item, dict) and item.get('name') == MCP_TOKEN_NAME]
     require(len(names) <= 1, 'MCP_CREDENTIAL_CONFLICT')
@@ -236,6 +239,15 @@ def ensure_variables(langflow, token):
             'name': MCP_TOKEN_NAME, 'value': token, 'type': 'Credential', 'default_fields': [],
         }), (201,))]
         status = 'created'
+    elif replace:
+        # Explicit operator choice: overwrite the masked stored value with the exact token that MCP has just
+        # accepted directly. This is the supported repair; a value typed or pasted in the Langflow UI can carry
+        # trailing whitespace that MCPTools strips (so the probe passes) but the validators reject.
+        require(names[0].get('type') == 'Credential', 'MCP_CREDENTIAL_UNAVAILABLE')
+        variable_id = canonical_id(names[0].get('id'), 'MCP_CREDENTIAL_UNAVAILABLE')
+        names = [payload(langflow.patch(f'/api/v1/variables/{variable_id}', json={'id': variable_id, 'value': token}),
+                         code='MCP_CREDENTIAL_REPLACE_FAILED')]
+        status = 'replaced'
     require(names[0].get('type') == 'Credential' and names[0].get('has_value') is True,
             'MCP_CREDENTIAL_UNAVAILABLE')
     return status
@@ -353,7 +365,8 @@ def write_api_key(langflow, path):
                         else 'API_KEY_FILE_WRITE_FAILED')
 
 
-def bootstrap(client, mcp_client, ollama_client, environment, flow, *, model=DEFAULT_MODEL, api_key_path=None):
+def bootstrap(client, mcp_client, ollama_client, environment, flow, *, model=DEFAULT_MODEL, api_key_path=None,
+              replace_credential=False):
     username = environment.get('LANGFLOW_SUPERUSER') or ''
     password = environment.get('LANGFLOW_SUPERUSER_PASSWORD') or ''
     token = environment.get('MCP_SERVICE_TOKEN') or ''
@@ -367,7 +380,7 @@ def bootstrap(client, mcp_client, ollama_client, environment, flow, *, model=DEF
     ready = check_mcp(Service(mcp_client, 'MCP_UNAVAILABLE'), token)
     model_info = check_ollama(Service(ollama_client, 'OLLAMA_UNAVAILABLE'), model)
     # Every check above is read-only; Langflow is changed only after all of them pass.
-    credential = ensure_variables(langflow, token)
+    credential = ensure_variables(langflow, token, replace=replace_credential)
     server = ensure_server(langflow)
     # The probe needs both; no flow is imported and no key is created unless it passes.
     mcp_probe = probe_mcp_tools(langflow)
@@ -391,6 +404,9 @@ def main(argv=None):
     parser.add_argument('--write-api-key', type=Path, metavar='PATH',
                         help=f'also create the Langflow API key "{API_KEY_NAME}" and write LANGFLOW_API_KEY=<key> '
                              'to this new file; the key is never printed and no file is overwritten')
+    parser.add_argument('--replace-mcp-credential', action='store_true',
+                        help=f'replace the stored {MCP_TOKEN_NAME} Credential with MCP_SERVICE_TOKEN after MCP accepts it '
+                             'directly; use this instead of editing the value in the Langflow UI')
     arguments = parser.parse_args(argv)
     try:
         try:
@@ -406,7 +422,8 @@ def main(argv=None):
              httpx.Client(base_url=MCP_URL, timeout=10, **options) as mcp_client, \
              httpx.Client(base_url=OLLAMA_URL, timeout=30, **options) as ollama_client:
             result = bootstrap(client, mcp_client, ollama_client, os.environ, flow,
-                               model=arguments.model, api_key_path=arguments.write_api_key)
+                               model=arguments.model, api_key_path=arguments.write_api_key,
+                               replace_credential=arguments.replace_mcp_credential)
     except Exception as error:
         code = str(error) if isinstance(error, BootstrapError) else 'LOCAL_BOOTSTRAP_FAILED'
         print(json.dumps({'status': 'failed', 'code': code, 'modelExecuted': False}))

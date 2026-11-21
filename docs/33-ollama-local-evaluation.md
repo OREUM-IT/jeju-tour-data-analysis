@@ -44,11 +44,14 @@
   - 익명 접근과 자동 로그인을 거부하고, Langflow 1.13.3을 요구한다.
   - MCP v2 준비 상태(981곳)를 확인하고, Ollama 태그와 도구 지원(`tools` capability)을 확인한다.
   - `JEJU_MCP_TOKEN` Credential을 만들고 `jeju-mcp-v2` 서버를 등록한다. 이미 있으면 그대로 둔다.
+  - `--replace-mcp-credential`을 주면, MCP가 직접 받아 준 `MCP_SERVICE_TOKEN`으로 저장된 `JEJU_MCP_TOKEN` 값을 바꾼다(출력 `mcpCredential: replaced`). 저장된 토큰을 고치는 **유일한 방법**이다.
+    - Langflow 화면에서 값을 입력하거나 붙여 넣지 않는다. 끝에 공백이 붙으면 아래 MCP 확인은 통과한다(MCPTools가 헤더 공백을 지운다). 그러나 요청 준비 단계는 정확한 값만 받으므로 모든 문항이 실패한다.
+    - 실제 Langflow 1.13.3에서 재현했다. 저장 토큰 끝에 공백을 붙이면 설정 스크립트는 `passed`였지만 1문항이 `http_error`로 실패했다. 이 옵션으로 다시 실행한 뒤에는 같은 문항이 정상 응답했다.
   - **Langflow 쪽 MCP 확인:** Langflow는 Credential 값과 등록 헤더 값을 가려서 돌려주므로 앞 단계는 항목이 있는지만 안다. 이 확인이 없으면 오래된 토큰이 남아 있어도 `passed`가 나오고, 모든 문항이 요청 준비 단계(`REQUEST_PREPARATION_FAILED`)에서 실패한다.
     - 흐름을 가져오기 전에 Langflow의 MCPTools 구성 요소로 도구 목록을 두 번 받는다. 한 번은 저장된 Credential을 헤더(`Bearer {{JEJU_MCP_TOKEN}}`)로 강제하고, 한 번은 흐름 실행 때처럼 등록된 헤더만 쓴다.
     - 두 번 모두 `constraints.check`·`places.get`·`places.search` 3개가 정확히 나와야 하며, 통과하면 출력에 `mcpProbe: passed`가 붙는다. 모델과 흐름은 실행하지 않고 아무것도 저장하지 않는다.
     - 실패하면 흐름을 가져오지 않고 API 키도 만들지 않는다. 기존 Credential·등록·흐름도 바꾸지 않으므로 원인을 고친 뒤 다시 실행한다. 실패 코드는 다음과 같다.
-      - `LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED`: 저장된 `JEJU_MCP_TOKEN`으로 목록을 받지 못했다. 저장된 토큰이 지금 MCP 토큰과 다르거나(예: `.env.local`을 다시 만든 경우), `langflow.env`에 `LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1`이 없거나, 프록시가 있는 PC에서 `NO_PROXY`가 빠져 Langflow가 MCP에 닿지 못한 경우다.
+      - `LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED`: 저장된 `JEJU_MCP_TOKEN`으로 목록을 받지 못했다. 저장된 토큰이 지금 MCP 토큰과 다르거나(예: `.env.local`을 다시 만든 경우), `langflow.env`에 `LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1`이 없거나, 프록시가 있는 PC에서 `NO_PROXY`가 빠져 Langflow가 MCP에 닿지 못한 경우다. 토큰이 바뀐 경우라면 같은 명령에 `--replace-mcp-credential`을 붙여 다시 실행한다.
       - `LANGFLOW_MCP_REGISTRATION_PROBE_FAILED`: 저장된 토큰은 맞지만 등록된 헤더가 다른 토큰이나 변수를 쓴다.
       - `MCP_TOOL_SET_MISMATCH`: 받은 도구가 3개와 다르다.
       - `LANGFLOW_MCP_PROBE_FAILED`: 확인 요청 자체가 거부되거나 응답 형식이 다르다.
@@ -98,6 +101,8 @@
    Remove-Item Env:LANGFLOW_SUPERUSER_PASSWORD, Env:MCP_SERVICE_TOKEN
    ```
    출력의 `status`와 `mcpProbe`가 `passed`이면 `flowId`를 적어 둔다. 실패 코드의 뜻은 3절에 있다.
+   - `LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED`가 나오고 `.env.local`을 다시 만든 적이 있다면 같은 명령 끝에 `--replace-mcp-credential`을 붙여 다시 실행한다. 이미 API 키 파일이 있으면 `--write-api-key` 부분은 뺀다.
+   - 토큰은 Langflow 화면에서 고치지 않는다(3절).
 4. **10문항 시범.** `services\jeju-mcp`에서 실행한다.
    ```
    Get-Content .local\langflow-api-key.env | ForEach-Object { if ($_ -match '^LANGFLOW_API_KEY=(.*)$') { $env:LANGFLOW_API_KEY = $Matches[1] } }
@@ -145,6 +150,9 @@
 종단 검사 구성은 다음과 같다. 가짜 Ollama는 같은 HTTP API로 검색 → 조건 확인 → 최종 JSON 순서를 따르는 결정적 서버이고, 저장소에 넣지 않았다.
 - 경로: 설정 스크립트 → 수집기(`--local-model-timeout --timeout-ms 960000`) → 요청 준비 → Agent 도구 호출 → 최종 검증 → 가져오기·채점
 - 결과: 13문항 모두 정상 응답이었다(점검용 흐름 10문항, 정식 흐름 3문항). 모델 요청에는 `think:false`, `num_ctx` 16384, `num_predict` 2048, `keep_alive` 30m이 실렸다.
+- 독립 검토 반영 후 실제 Langflow 1.13.3에서 다시 확인했다.
+  - 설정 스크립트의 Langflow 쪽 MCP 확인이 정상 상태에서 `mcpProbe: passed`를 냈다. 저장 토큰이 MCP 토큰과 다른 경우는 `LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED`로 멈췄다(검토자의 별도 인스턴스 실행).
+  - 저장 토큰 끝에 공백을 붙이면 설정 스크립트는 `passed`였지만 1문항이 `http_error`로 실패했다. `--replace-mcp-credential` 실행 후(`replaced`) 같은 1문항이 정상 응답했다.
 - 이 결과는 연결 확인일 뿐이며 실제 모델의 품질·형식 준수·시간을 뜻하지 않는다.
 
 남은 것은 다음과 같다.

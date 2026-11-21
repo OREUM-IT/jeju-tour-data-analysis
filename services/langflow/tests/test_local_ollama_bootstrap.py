@@ -283,6 +283,14 @@ class FakeLangflow:
                    'value': None, 'has_value': True, 'default_fields': body['default_fields']}
             self.variables.append(row)
             return reply(row, 201)
+        variable = re.fullmatch(r'/api/v1/variables/([0-9a-f-]{36})', path)
+        if variable and method == 'PATCH':
+            body = json.loads(request.content)
+            row = next((item for item in self.variables if item['id'] == variable.group(1)), None)
+            if row is None or body.get('id') != variable.group(1) or set(body) != {'id', 'value'}:
+                return reply({'detail': 'Variable not found'}, 404)
+            self.credential_values[row['name']] = body['value']
+            return reply(row)
         if path == '/api/v2/mcp/servers/jeju-mcp-v2' and method in ('GET', 'POST'):
             if method == 'POST':
                 if self.server is not None:
@@ -578,6 +586,38 @@ class LocalOllamaBootstrapTest(unittest.TestCase):
                           self.langflow.flows), state)
         self.assertEqual(self.langflow.writes(), [('POST', '/api/v1/login')])
         self.assertEqual(self.mcp.calls, [('GET', '/readyz')])
+
+    def test_replace_option_rewrites_a_stale_credential_with_the_exact_token(self):
+        self.run_main()
+        # .env.local was recreated: MCP and the environment use a new token, Langflow kept the first one.
+        self.mcp = FakeMCP(token=OTHER)
+        environment = {**ENVIRONMENT, 'MCP_SERVICE_TOKEN': OTHER}
+        self.assert_failed('LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED', environment=environment)
+        result = self.run_main('--replace-mcp-credential', environment=environment)
+        self.assertEqual((result['status'], result['mcpCredential'], result['mcpProbe']), ('passed', 'replaced', 'passed'))
+        self.assertEqual(self.langflow.credential_values, {'JEJU_MCP_TOKEN': OTHER})
+        self.assertEqual(len(self.langflow.variables), 1)
+
+    def test_replace_option_removes_whitespace_a_ui_edit_could_leave(self):
+        # A value pasted in the UI with a trailing space would pass the MCPTools probe (lfx strips header values)
+        # but fail the validators' exact-token check; the supported repair stores the exact token again.
+        self.langflow.seed(token=TOKEN + ' ')
+        result = self.run_main('--replace-mcp-credential')
+        self.assertEqual((result['status'], result['mcpCredential']), ('passed', 'replaced'))
+        self.assertEqual(self.langflow.credential_values, {'JEJU_MCP_TOKEN': TOKEN})
+
+    def test_replace_option_creates_a_missing_credential_normally(self):
+        result = self.run_main('--replace-mcp-credential')
+        self.assertEqual((result['status'], result['mcpCredential']), ('passed', 'created'))
+        self.assertNotIn(('PATCH', '/api/v1/variables/4f1f3bb6-4c39-4b51-8f43-6f2e4f0b9a10'), self.langflow.calls)
+
+    def test_replace_option_never_stores_a_token_that_mcp_rejected(self):
+        self.langflow.seed()
+        state = copy.deepcopy((self.langflow.variables, self.langflow.credential_values))
+        self.assert_failed('MCP_TOKEN_REJECTED', '--replace-mcp-credential',
+                           environment={**ENVIRONMENT, 'MCP_SERVICE_TOKEN': OTHER})
+        self.assertEqual((self.langflow.variables, self.langflow.credential_values), state)
+        self.assertEqual(self.langflow.writes(), [('POST', '/api/v1/login')])
 
     def test_registration_header_with_another_or_unresolved_token_fails_the_probe(self):
         # A literal old token, an unknown variable left verbatim, and a bare token without "Bearer".
