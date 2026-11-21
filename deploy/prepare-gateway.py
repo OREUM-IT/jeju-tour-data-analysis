@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Preserve private Gateway settings; capture provisioning secrets without printing them."""
 import argparse
+import contextlib
 import fcntl
 import importlib.util
 import json
@@ -18,6 +19,13 @@ settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 NAMES = ('gateway-control.env', 'gateway.env')
 HEX = re.compile(r'[a-f0-9]{64}')
+# Single-file bind mounts keep the inode from Langflow container creation, so a
+# git update is invisible there. Stream the reviewed host script over stdin.
+BOOTSTRAP = ROOT / 'langflow' / 'gateway-bootstrap.py'
+FLOW_LIMITS = {'update': 8, 'rollback': 4, 'check': 8}
+MIGRATION_KEYS = {'status', 'flowStatus', 'flowId', 'flowSha256', 'modelCallLimit', 'modelExecuted', 'productionReady'}
+CHECK_KEYS = {'status', 'flowMatches', 'nodeCount', 'edgeCount', 'toolCount', 'modelCallLimit', 'flowSha256',
+              'modelExecuted', 'productionReady'}
 
 
 def write_private(path, content):
@@ -68,7 +76,34 @@ def validate_pair(control, gateway, mcp_token):
         raise ValueError('GATEWAY_SETTINGS_INVALID')
 
 
-def prepare(root, *, provision=False, runner=subprocess.run):
+def compose_command():
+    compose = ['docker', 'compose', '-p', os.environ.get('COMPOSE_PROJECT_NAME', 'oreumit-bootstrap')]
+    for name in ('compose.yaml', 'compose.catalog.yaml', 'compose.langflow.yaml', 'compose.gateway.yaml'):
+        compose += ['-f', str(ROOT / name)]
+    return compose
+
+
+def failure_code(stdout, fallback):
+    # The inner bootstrap emits fixed codes on failure; preserve only that
+    # bounded code, never its stdout/stderr or a credential value.
+    try:
+        failure = json.loads(stdout) if len(stdout) <= 16 * 1024 else {}
+        code = failure.get('code') if failure.get('status') == 'failed' else None
+    except (ValueError, AttributeError):
+        code = None
+    return code if isinstance(code, str) and re.fullmatch(r'GATEWAY_[A-Z_]{1,80}', code) else fallback
+
+
+def replace_gateway(root, values):
+    with tempfile.TemporaryDirectory(prefix='.gateway-complete-', dir=root) as temporary:
+        staged = Path(temporary) / 'gateway.env'
+        write_private(staged, encode(values))
+        # Target was opened safely by the caller under the same advisory lock.
+        os.replace(staged, root / 'gateway.env')
+
+
+@contextlib.contextmanager
+def locked_settings(root):
     root = Path(root)
     if root.is_symlink() or not root.is_dir() or stat.S_IMODE(root.stat().st_mode) != 0o700:
         raise ValueError('PRIVATE_SETTINGS_DIRECTORY_REQUIRED')
@@ -81,6 +116,58 @@ def prepare(root, *, provision=False, runner=subprocess.run):
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError('GATEWAY_LOCK_INVALID')
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        yield root, mcp
+
+
+def flow(root, mode, *, runner=subprocess.run):
+    """Update, roll back or check the pinned Gateway flow. Never issues an API key."""
+    if mode not in FLOW_LIMITS:
+        raise ValueError('GATEWAY_MODE_INVALID')
+    with locked_settings(root) as (root, mcp):
+        present = [os.path.lexists(root / name) for name in NAMES]
+        if not all(present):
+            raise ValueError('PARTIAL_GATEWAY_SETTINGS_RESTORE_REQUIRED' if any(present) else 'GATEWAY_INIT_REQUIRED')
+        control, gateway = [settings.read_env(root / name, private_mode=True) for name in NAMES]
+        validate_pair(control, gateway, mcp)
+        if gateway['GATEWAY_BOOTSTRAP_STATUS'] != 'ready' or os.path.lexists(root / '.gateway-provisioning'):
+            raise ValueError('GATEWAY_PROVISIONING_REQUIRED')
+        result = runner(compose_command() + ['exec', '-T', 'langflow', 'python', '-', '--' + mode],
+                        input=BOOTSTRAP.read_bytes(), capture_output=True, timeout=180, check=False)
+        if result.returncode or len(result.stdout) > 16 * 1024:
+            raise ValueError(failure_code(result.stdout, 'GATEWAY_FLOW_CHANGE_FAILED_OUTPUT_WITHHELD'))
+        try:
+            value = json.loads(result.stdout)
+            common = (value['status'] == 'passed' and value['modelExecuted'] is False
+                      and value['productionReady'] is False and value['modelCallLimit'] == FLOW_LIMITS[mode]
+                      and isinstance(value['flowSha256'], str) and HEX.fullmatch(value['flowSha256']))
+            if mode == 'check':
+                valid = set(value) == CHECK_KEYS and value['flowMatches'] is True
+            else:
+                valid = (set(value) == MIGRATION_KEYS and value['flowId'] == gateway['LANGFLOW_GATEWAY_FLOW_ID']
+                         and value['flowStatus'] in ('updated', 'already-current'))
+            if not (common and valid):
+                raise ValueError()
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise ValueError('GATEWAY_FLOW_RESULT_INVALID') from None
+        summary = {'status': 'passed', 'modelCallLimit': value['modelCallLimit'],
+                   'modelExecuted': False, 'productionReady': False}
+        if mode == 'check':
+            # The running Gateway pins this SHA; a mismatch means it fails closed.
+            if value['flowSha256'] != gateway['LANGFLOW_GATEWAY_FLOW_SHA256']:
+                raise ValueError('GATEWAY_FLOW_PIN_MISMATCH')
+            return {**summary, 'scope': 'gateway-flow-checked', 'settingsChanged': False}
+        changed = value['flowSha256'] != gateway['LANGFLOW_GATEWAY_FLOW_SHA256']
+        if changed:
+            # Only the pinned SHA changes; the API key, flow ID and tokens stay byte-identical.
+            completed = {**gateway, 'LANGFLOW_GATEWAY_FLOW_SHA256': value['flowSha256']}
+            validate_pair(control, completed, mcp)
+            replace_gateway(root, completed)
+        return {**summary, 'scope': 'gateway-flow-updated' if mode == 'update' else 'gateway-flow-rolled-back',
+                'flowStatus': value['flowStatus'], 'settingsChanged': changed}
+
+
+def prepare(root, *, provision=False, runner=subprocess.run):
+    with locked_settings(root) as (root, mcp):
         present = [os.path.lexists(root / name) for name in NAMES]
         if any(present) and not all(present):
             raise ValueError('PARTIAL_GATEWAY_SETTINGS_RESTORE_REQUIRED')
@@ -99,22 +186,10 @@ def prepare(root, *, provision=False, runner=subprocess.run):
                 raise ValueError('PREVIOUS_PROVISIONING_INCOMPLETE_OPERATOR_REVIEW_REQUIRED')
             # A crash/failure never silently creates a second long-lived API key.
             write_private(marker, 'Provisioning started; inspect named Langflow gateway keys before retry.\n')
-            compose = ['docker', 'compose', '-p', os.environ.get('COMPOSE_PROJECT_NAME', 'oreumit-bootstrap')]
-            for name in ('compose.yaml', 'compose.catalog.yaml', 'compose.langflow.yaml', 'compose.gateway.yaml'):
-                compose += ['-f', str(ROOT / name)]
-            result = runner(compose + ['exec', '-T', 'langflow', 'python', '/opt/oreumit/gateway-bootstrap.py', '--provision'],
+            result = runner(compose_command() + ['exec', '-T', 'langflow', 'python', '/opt/oreumit/gateway-bootstrap.py', '--provision'],
                             capture_output=True, timeout=180, check=False)
             if result.returncode or len(result.stdout) > 16 * 1024:
-                # The inner bootstrap emits fixed codes on failure; preserve only
-                # that bounded code, never its stdout/stderr or a credential value.
-                try:
-                    failure = json.loads(result.stdout) if len(result.stdout) <= 16 * 1024 else {}
-                    code = failure.get('code') if failure.get('status') == 'failed' else None
-                except (ValueError, AttributeError):
-                    code = None
-                if isinstance(code, str) and re.fullmatch(r'GATEWAY_[A-Z_]{1,80}', code):
-                    raise ValueError(code)
-                raise ValueError('GATEWAY_PROVISIONING_FAILED_OUTPUT_WITHHELD')
+                raise ValueError(failure_code(result.stdout, 'GATEWAY_PROVISIONING_FAILED_OUTPUT_WITHHELD'))
             try:
                 value = json.loads(result.stdout)
                 if set(value) != {'flowId', 'apiKey', 'flowSha256'}:
@@ -125,11 +200,7 @@ def prepare(root, *, provision=False, runner=subprocess.run):
                 validate_pair(control, completed, mcp)
             except (ValueError, KeyError, TypeError):
                 raise ValueError('GATEWAY_PROVISIONING_RESULT_INVALID') from None
-            with tempfile.TemporaryDirectory(prefix='.gateway-complete-', dir=root) as temporary:
-                staged = Path(temporary) / 'gateway.env'
-                write_private(staged, encode(completed))
-                # Target was opened safely above under the same advisory lock.
-                os.replace(staged, root / 'gateway.env')
+            replace_gateway(root, completed)
             marker.unlink()
             gateway = completed
         return {'status': 'preserved_or_prepared', 'stage': gateway['GATEWAY_BOOTSTRAP_STATUS'],
@@ -141,9 +212,16 @@ if __name__ == '__main__':
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument('--init', action='store_true')
     modes.add_argument('--provision', action='store_true')
+    modes.add_argument('--update-flow', action='store_true', help='Pin the 8-call flow; no key or flow creation.')
+    modes.add_argument('--rollback-flow', action='store_true', help='Pin the previous 4-call flow; no key or flow creation.')
+    modes.add_argument('--check-flow', action='store_true', help='Read-only: stored flow is the 8-call build and is pinned.')
     args = parser.parse_args()
     try:
-        print(json.dumps(prepare(ROOT / '.local', provision=args.provision)))
+        if args.update_flow or args.rollback_flow or args.check_flow:
+            mode = 'update' if args.update_flow else 'rollback' if args.rollback_flow else 'check'
+            print(json.dumps(flow(ROOT / '.local', mode)))
+        else:
+            print(json.dumps(prepare(ROOT / '.local', provision=args.provision)))
     except Exception as error:
         code = str(error) if isinstance(error, ValueError) and re.fullmatch(r'[A-Z_]{1,90}', str(error)) else 'GATEWAY_PREPARATION_FAILED'
         print(json.dumps({'status': 'failed', 'code': code,

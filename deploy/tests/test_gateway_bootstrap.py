@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import contextlib
 import copy
 import datetime as dt
@@ -11,6 +12,7 @@ import sys
 import types
 import unittest
 from unittest.mock import patch
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -69,9 +71,73 @@ class Langflow(base_tests.Langflow):
         self.state['keys'].pop(route.rsplit('/', 1)[1], None)
         return base_tests.Response({}, 204)
 
+    def patch(self, route, **kwargs):
+        self.calls.append(('PATCH', route, kwargs))
+        flow = self.state['flows'].get(route.rsplit('/', 1)[1])
+        if flow is None or not route.startswith('/api/v1/flows/'):
+            raise AssertionError('Unexpected flow mutation.')
+        if kwargs['headers']['If-Match'] != flow['version_token']:
+            return base_tests.Response(status=409)
+        if set(kwargs['json']) != {'data', 'description'}:
+            raise AssertionError('Gateway migration may only patch graph data and description.')
+        flow.update(copy.deepcopy(kwargs['json']))
+        flow['version_token'] = str(uuid.uuid4())
+        return base_tests.Response(flow)
+
 
 def run(client, *, provision=True, now=NOW):
     return gateway.configure(client, base_tests.MCP(), ENV, TEMPLATE, SOURCE, SETUP, provision=provision, now=now)
+
+
+def migrate(client, mode):
+    return gateway.configure(client, base_tests.MCP(), ENV, TEMPLATE, SOURCE, SETUP, migrate=mode)
+
+
+def agent_fields(flow):
+    return next(node for node in flow['data']['nodes'] if node['data']['type'] == 'Agent')['data']['node']['template']
+
+
+def mutations(client):
+    return [(method, route) for method, route, _ in client.calls
+            if method in ('PATCH', 'DELETE') or route in ('/api/v1/flows/', '/api/v1/api_key/') and method == 'POST'
+            or route.startswith('/api/v1/run')]
+
+
+class GuardRequest:
+    """The ModelRequest fields the guard reads, with LangChain's immutable override."""
+
+    def __init__(self, *, state, messages, system_message, tool_choice=None):
+        self.state, self.messages = state, messages
+        self.system_message, self.tool_choice = system_message, tool_choice
+
+    def override(self, **changes):
+        values = {name: getattr(self, name) for name in ('state', 'messages', 'system_message', 'tool_choice')}
+        return GuardRequest(**{**values, **changes})
+
+
+def load_guard():
+    class AgentMiddleware:
+        pass
+
+    class AIMessage:
+        def __init__(self, content=''):
+            self.content = content
+
+    class SystemMessage:
+        def __init__(self, content):
+            self.content = content
+
+    middleware = types.ModuleType('langchain.agents.middleware')
+    middleware.AgentMiddleware = AgentMiddleware
+    messages = types.ModuleType('langchain_core.messages')
+    messages.AIMessage, messages.SystemMessage = AIMessage, SystemMessage
+    stubs = {'langchain': types.ModuleType('langchain'), 'langchain.agents': types.ModuleType('langchain.agents'),
+             'langchain.agents.middleware': middleware, 'langchain_core': types.ModuleType('langchain_core'),
+             'langchain_core.messages': messages}
+    namespace = {}
+    with patch.dict(sys.modules, stubs):
+        exec(compile(gateway.FINAL_ANSWER_GUARD, '<gateway-final-answer-guard>', 'exec'), namespace)
+    return namespace, AIMessage, SystemMessage
 
 
 class GatewayBootstrapTests(unittest.TestCase):
@@ -101,7 +167,13 @@ class GatewayBootstrapTests(unittest.TestCase):
         nodes = {node['data']['type']: node for node in flow['data']['nodes']}
         self.assertEqual(set(nodes), {'ChatInput', 'ChatOutput', 'Agent', 'JejuPrepareRequest', 'JejuFinalValidation', 'JejuScopedTools'})
         agent = nodes['Agent']['data']['node']['template']
-        self.assertEqual((agent['max_tokens']['value'], agent['max_iterations']['value'], agent['n_messages']['value']), (2048, 4, 0))
+        self.assertEqual((agent['max_tokens']['value'], agent['max_iterations']['value'], agent['n_messages']['value']), (2048, 8, 0))
+        code = agent['code']['value']
+        self.assertEqual(code.count(gateway.GUARDED_LIMIT_LINES), 1)
+        self.assertIn('GUARDED_AGENT_MODEL_CALL_LIMIT = 8\n', code)
+        self.assertTrue(code.endswith('\n\n' + gateway.FINAL_ANSWER_GUARD))
+        self.assertEqual(flow['description'], gateway.DESCRIPTION)
+        ast.parse(code)
         self.assertEqual(nodes['ChatOutput']['id'], 'ChatOutput-jejuV2')
         self.assertEqual(nodes['JejuFinalValidation']['id'], 'JejuFinalValidation-v2')
         edges = {(edge['source'], edge['target'], edge['data']['targetHandle']['fieldName']) for edge in flow['data']['edges']}
@@ -121,7 +193,9 @@ class GatewayBootstrapTests(unittest.TestCase):
         checker = Langflow(first.state)
         result = run(checker, provision=False)
         self.assertEqual(result, {'status': 'passed', 'flowMatches': True, 'nodeCount': 6, 'edgeCount': 7,
-                                 'toolCount': 3, 'modelExecuted': False, 'productionReady': False})
+                                 'toolCount': 3, 'modelCallLimit': 8,
+                                 'flowSha256': gateway.flow_sha256(next(iter(first.state['flows'].values()))['data']),
+                                 'modelExecuted': False, 'productionReady': False})
         self.assertEqual(before, checker.state)
         self.assertFalse(any(route == '/api/v1/api_key/' or (method == 'POST' and route == '/api/v1/flows/') for method, route, _ in checker.calls))
         self.assertNotIn(SECRET, json.dumps(result))
@@ -208,6 +282,175 @@ class GatewayBootstrapTests(unittest.TestCase):
                     with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_API_KEY_INVALID$'):
                         run(client)
                 self.assertFalse(client.state['keys'])
+
+    def test_budget_flow_changes_only_agent_limit_guard_and_description(self):
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        pristine = copy.deepcopy(legacy)
+        budget = gateway.budget_flow(legacy)
+        self.assertEqual(legacy, pristine)
+        old, new = agent_fields(legacy), agent_fields(budget)
+        self.assertEqual((old['max_iterations']['value'], new['max_iterations']['value']), (4, 8))
+        expected = (old['code']['value'].replace(gateway.LIMIT_LINE, gateway.GUARDED_LIMIT_LINES)
+                    .replace('GUARDED_AGENT_MODEL_CALL_LIMIT = 4\n', 'GUARDED_AGENT_MODEL_CALL_LIMIT = 8\n')
+                    + '\n\n' + gateway.FINAL_ANSWER_GUARD)
+        self.assertEqual(new['code']['value'], expected)
+        self.assertEqual((legacy['description'], budget['description']), (gateway.LEGACY_DESCRIPTION, gateway.DESCRIPTION))
+        def without_budget(flow):
+            flow = copy.deepcopy(flow)
+            fields = agent_fields(flow)
+            for name in ('code', 'max_iterations'):
+                fields.pop(name)
+            flow.pop('description')
+            return flow
+        self.assertEqual(without_budget(legacy), without_budget(budget))
+        # Langflow 1.13.3 runs only imports, assignments, classes and functions at module level.
+        kinds = {type(node).__name__ for node in ast.parse(gateway.FINAL_ANSWER_GUARD).body}
+        self.assertLessEqual(kinds, {'Import', 'ImportFrom', 'Assign', 'ClassDef'})
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_TEMPLATE_MISMATCH$'):
+            gateway.budget_flow(budget)
+        changed = copy.deepcopy(legacy)
+        agent_fields(changed)['code']['value'] = agent_fields(changed)['code']['value'].replace(gateway.LIMIT_LINE, '')
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_AGENT_GUARD_MISSING$'):
+            gateway.budget_flow(changed)
+
+    def test_final_answer_guard_reserves_only_the_last_allowed_call(self):
+        namespace, AIMessage, SystemMessage = load_guard()
+        guard_class = namespace['_GatewayFinalAnswerMiddleware']
+        notice = namespace['GATEWAY_FINAL_ANSWER_NOTICE']
+        for invalid in (True, 1, 0, 8.0, '8', None):
+            with self.subTest(run_limit=invalid), self.assertRaisesRegex(ValueError, '^AGENT_EXECUTION_POLICY_INVALID$'):
+                guard_class(run_limit=invalid)
+        guard = guard_class(run_limit=8)
+        system = SystemMessage('기존 지침')
+        early = GuardRequest(state={'run_model_call_count': 6}, messages=[AIMessage()] * 6, system_message=system)
+        self.assertIs(guard._final_answer_request(early), early)
+        last = GuardRequest(state={'run_model_call_count': 7}, messages=[], system_message=system)
+        final = guard._final_answer_request(last)
+        self.assertEqual((final.tool_choice, final.system_message.content), ('none', '기존 지침\n\n' + notice))
+        self.assertEqual((last.tool_choice, system.content), (None, '기존 지침'))
+        # A missing or invalid counter falls back to this run's AI replies (n_messages=0).
+        for state in ({}, {'run_model_call_count': True}, {'run_model_call_count': -1}, None):
+            with self.subTest(state=state):
+                request = GuardRequest(state=state, messages=['human', *[AIMessage()] * 7], system_message=None)
+                final = guard._final_answer_request(request)
+                self.assertEqual((final.tool_choice, final.system_message.content), ('none', notice))
+        blocks = GuardRequest(state={'run_model_call_count': 7}, messages=[],
+                              system_message=SystemMessage([{'type': 'text', 'text': 'a'}]))
+        self.assertEqual(guard._final_answer_request(blocks).system_message.content,
+                         [{'type': 'text', 'text': 'a'}, {'type': 'text', 'text': notice}])
+        seen = []
+        self.assertEqual(guard.wrap_model_call(last, lambda request: seen.append(request.tool_choice) or 'answer'), 'answer')
+        async def handler(request):
+            seen.append(request.tool_choice)
+            return 'answer'
+        self.assertEqual(asyncio.run(guard.awrap_model_call(early, handler)), 'answer')
+        self.assertEqual(seen, ['none', None])
+
+    def test_update_and_rollback_switch_only_exact_reviewed_graphs_without_keys(self):
+        client = Langflow()
+        provisioned = run(client)
+        flow_id = provisioned['flowId']
+        current = copy.deepcopy(client.state['flows'][flow_id])
+        keys = copy.deepcopy(client.state['keys'])
+        roller = Langflow(client.state)
+        rolled = migrate(roller, 'rollback')
+        stored = client.state['flows'][flow_id]
+        self.assertEqual(rolled, {'status': 'passed', 'flowStatus': 'updated', 'flowId': flow_id,
+                                  'flowSha256': gateway.flow_sha256(stored['data']), 'modelCallLimit': 4,
+                                  'modelExecuted': False, 'productionReady': False})
+        self.assertEqual(agent_fields(stored)['max_iterations']['value'], 4)
+        self.assertNotIn('_GatewayFinalAnswerMiddleware', agent_fields(stored)['code']['value'])
+        self.assertEqual(stored['description'], gateway.LEGACY_DESCRIPTION)
+        for key in set(current) - {'data', 'description', 'version_token'}:
+            self.assertEqual(stored[key], current[key])
+        patches = [kwargs for method, _, kwargs in roller.calls if method == 'PATCH']
+        self.assertEqual(len(patches), 1)
+        self.assertEqual(patches[0]['headers'], {'If-Match': current['version_token']})
+        updater = Langflow(client.state)
+        updated = migrate(updater, 'update')
+        self.assertEqual((updated['flowStatus'], updated['modelCallLimit'], updated['flowSha256']),
+                         ('updated', 8, provisioned['flowSha256']))
+        self.assertEqual({key: value for key, value in client.state['flows'][flow_id].items() if key != 'version_token'},
+                         {key: value for key, value in current.items() if key != 'version_token'})
+        again = Langflow(client.state)
+        self.assertEqual(migrate(again, 'update')['flowStatus'], 'already-current')
+        for checker in (roller, updater, again):
+            self.assertEqual([method for method, _ in mutations(checker)], ['PATCH'] if checker is not again else [])
+        self.assertEqual(client.state['keys'], keys)
+        self.assertEqual(len(client.state['flows']), 1)
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_MODE_INVALID$'):
+            gateway.configure(Langflow(client.state), base_tests.MCP(), ENV, TEMPLATE, SOURCE, SETUP,
+                              provision=True, migrate='update')
+
+    def test_migration_refuses_unknown_graphs_missing_flow_and_concurrent_edits(self):
+        client = Langflow()
+        flow_id = run(client)['flowId']
+        for field in ('data', 'description', 'access_type'):
+            state = copy.deepcopy(client.state)
+            stored = state['flows'][flow_id]
+            if field == 'data':
+                stored['data']['edges'].pop()
+            else:
+                stored[field] = 'unreviewed-change'
+            before = copy.deepcopy(state)
+            for mode in ('update', 'rollback'):
+                with self.subTest(field=field, mode=mode):
+                    altered = Langflow(state)
+                    with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+                        migrate(altered, mode)
+                    self.assertEqual(before, state)
+                    self.assertEqual(mutations(altered), [])
+        empty = Langflow()
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_FLOW_NOT_PROVISIONED$'):
+            migrate(empty, 'update')
+        self.assertEqual(mutations(empty), [])
+        state = copy.deepcopy(client.state)
+        before = copy.deepcopy(state)
+        racer = Langflow(state)
+        with patch.object(racer, 'patch', return_value=base_tests.Response(status=409)):
+            with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_BOOTSTRAP_HTTP_REJECTED$'):
+                migrate(racer, 'rollback')
+        self.assertEqual(before, state)
+
+    def test_unverified_update_restores_previous_graph_and_fails_closed(self):
+        client = Langflow()
+        flow_id = run(client)['flowId']
+        migrate(Langflow(client.state), 'rollback')
+        legacy = copy.deepcopy(client.state['flows'][flow_id])
+        lossy = Langflow(client.state)
+        original = lossy.patch
+        def normalize_first(route, **kwargs):
+            result = original(route, **kwargs)
+            if sum(method == 'PATCH' for method, _, _ in lossy.calls) == 1:
+                client.state['flows'][flow_id]['data']['nodes'][0]['position'] = {'x': 1, 'y': 1}
+            return result
+        with patch.object(lossy, 'patch', side_effect=normalize_first):
+            with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_FLOW_UPDATE_UNVERIFIED$'):
+                migrate(lossy, 'update')
+        restored = client.state['flows'][flow_id]
+        self.assertEqual((restored['data'], restored['description']), (legacy['data'], legacy['description']))
+        self.assertEqual(sum(method == 'PATCH' for method, _, _ in lossy.calls), 2)
+
+    def test_main_maps_modes_without_printing_credentials(self):
+        class Client:
+            def __init__(self, **_kwargs): pass
+            def __enter__(self): return self
+            def __exit__(self, *_args): pass
+        for argv, expected in ((['--check'], (False, None)), (['--provision'], (True, None)),
+                               (['--update'], (False, 'update')), (['--rollback'], (False, 'rollback'))):
+            seen = {}
+            def configure(*_args, provision, migrate):
+                seen.update(provision=provision, migrate=migrate)
+                return {'status': 'passed', 'modelExecuted': False}
+            output = io.StringIO()
+            with self.subTest(argv=argv), patch.dict(sys.modules, {'httpx': types.SimpleNamespace(Client=Client)}), \
+                 patch.object(gateway, 'load_setup', return_value=SETUP), \
+                 patch.object(Path, 'read_text', side_effect=[json.dumps(TEMPLATE), SOURCE]), \
+                 patch.object(gateway, 'configure', side_effect=configure), contextlib.redirect_stdout(output):
+                self.assertEqual(gateway.main(argv), 0)
+                self.assertEqual((seen['provision'], seen['migrate']), expected)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            gateway.main(['--update', '--rollback'])
 
     def test_graph_digest_matches_javascript_canonical_sorted_keys(self):
         client = Langflow()
