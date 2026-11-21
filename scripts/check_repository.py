@@ -776,6 +776,50 @@ def check_validated_vertex_flow():
             "Validated flow must use the separately registered v2 MCP with bounded tool calls")
 
 
+def check_validated_ollama_flow():
+    """Pin the local Ollama evaluation flow and require it to be the builder's rebuild of the reviewed v2 flow."""
+    root = ROOT / "services/langflow"
+    path = root / "jeju-tour-agent-ollama-v2.flow.json"
+    flow = read_json(path)
+    text = json.dumps(flow, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    require(hashlib.sha256(text.encode()).hexdigest() == "7857ef6024ab27f17b6af8d9ff7513e330bd15724fe949a4fc1ccb95d624b6e3",
+            "Ollama evaluation flow changed; review the Agent model, code and graph diff before updating the pin")
+    require(not re.search(r"-----BEGIN (?:RSA |EC )?PRIVATE KEY-----|AIza[A-Za-z0-9_-]{30,}|ya29\.[A-Za-z0-9_-]+", text)
+            and not re.search(r"[a-z0-9._-]+@[a-z0-9.-]+\.iam\.gserviceaccount\.com", text, re.I)
+            and not re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text, re.I)
+            and "JEJU_VERTEX_SERVICE_ACCOUNT_JSON" not in text,
+            "Ollama evaluation flow contains a credential, account identifier, Vertex reference or runtime UUID")
+    nodes = {node["data"]["type"]: node for node in flow["data"]["nodes"]}
+    for kind, node in nodes.items():
+        for name, field in node["data"]["node"].get("template", {}).items():
+            if not isinstance(field, dict) or not (field.get("password") or field.get("name") == "api_key"):
+                continue
+            # Only the unchanged validators keep their MCP token reference; the Agent needs no key.
+            if kind in {"JejuPrepareRequest", "JejuFinalValidation"} and name == "service_token":
+                require(field.get("value") == "JEJU_MCP_TOKEN" and field.get("load_from_db") is True,
+                        "Ollama evaluation flow lost the validators' MCP token reference")
+            else:
+                require(field.get("value") in ("", None) and field.get("load_from_db") is not True,
+                        "Ollama evaluation flow contains an inline or unexpected credential reference")
+    agent = nodes["Agent"]["data"]["node"]["template"]
+    entry = [{"name": "qwen3:4b", "provider": "Ollama", "metadata": {"tool_calling": True, "model_type": "llm"}, "icon": "Ollama"}]
+    require(agent["model"]["value"] == agent["model"]["options"] == entry and agent["max_iterations"]["value"] == 4,
+            "Ollama evaluation flow must select only the reviewed local model and keep the four-call budget")
+    # Compile the current builder source directly: no bytecode cache is read or written.
+    source = root / "build_ollama_flow.py"
+    builder = {"__name__": "check_build_ollama_flow", "__file__": str(source)}
+    exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), builder)
+    try:
+        rebuilt = builder["build_ollama_flow"](read_json(root / "jeju-tour-agent-vertex-v2.flow.json"),
+                                               model_tag="qwen3:4b", profile="cpu-evaluation")
+    except ValueError:
+        raise CheckError("Ollama flow builder refused the reviewed v2 flow") from None
+    # A Windows checkout may convert line endings; JSON strings cannot hold a raw CR or LF.
+    require(json.dumps(rebuilt, ensure_ascii=False, sort_keys=True, separators=(",", ":")) == text
+            and builder["serialize"](rebuilt) == path.read_bytes().replace(b"\r\n", b"\n"),
+            "Committed Ollama evaluation flow is not a fresh rebuild of the reviewed v2 flow")
+
+
 BASELINE_METRICS_SHAPE = {
     "items": "count", "actionAccuracy": "ratio",
     "disallowedIds": {"returnedIds": "count", "rate": "nullable_ratio", "itemsWithViolation": "count",
@@ -1001,6 +1045,7 @@ def main():
         ("Langflow starter flow and settings example", check_langflow),
         ("reviewed Vertex flow and credential references", check_vertex_flow),
         ("validated Vertex graph, credentials and tested source parity", check_validated_vertex_flow),
+        ("local Ollama evaluation flow rebuild and credential boundary", check_validated_ollama_flow),
         ("external baseline aggregates when present", check_external_baseline_summaries),
         ("v2 evaluation aggregates and runtime audit when present", check_v2_evaluation_results),
         ("publication boundaries and archives", check_deliverables),
