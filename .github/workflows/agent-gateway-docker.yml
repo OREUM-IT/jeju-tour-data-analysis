@@ -74,6 +74,12 @@ jobs:
           $compose exec -T agent-gateway node /app/check.mjs --internal
           python3 deploy/prepare-gateway.py --check-flow
           $compose exec -T -e CI=true langflow python - --expect 8 < deploy/tests/check-gateway-call-budget.py
+          # The switch marker stays until the re-pinned Gateway passes; clearing it is explicit.
+          python3 deploy/prepare-gateway.py --flow-change-pending
+          python3 deploy/prepare-gateway.py --complete-flow-change
+          pending=0
+          python3 deploy/prepare-gateway.py --flow-change-pending || pending=$?
+          test "$pending" = 3
       - name: Record verification boundary
         if: always()
         run: echo 'Fictional catalog, no Google inference, no Cloudflare account or tunnel changes. AWS and external Access/Tunnel acceptance require separate execution.' >> "$GITHUB_STEP_SUMMARY"

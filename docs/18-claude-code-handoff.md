@@ -16,7 +16,7 @@
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
 
-**2026-11-21 최신 작업:** 운영 웹의 잦은 AI 결과 차단을 진단했다. 사용자 제공 Langflow DB 집계(수락 2·`VALIDATION_FAILED` 13, 모두 모델 4회)에서 실패 실행은 4회를 모두 도구 호출에 써서 최종 JSON 대신 한도 문장으로 끝났다. `claude/agent-step3-evaluation`에서 Gateway 흐름만 모델 8회·마지막 호출 답변 전용으로 바꾸고 교체·되돌리기 helper를 추가했다. 로컬 단위 테스트와 실제 lfx·LangChain 가짜 모델 검사는 통과했으며 AWS 적용과 실제 웹 결과는 미확인이다. [32 문서](32-agent-gateway-tunnel.md#모델-호출-예산-조정)를 따른다.
+**2026-11-21 최신 작업:** 운영 웹의 잦은 AI 결과 차단을 진단했다. 2026-11-21 사용자가 제공한 Langflow DB 집계(대상 2026-11-19 실행, 수락 2·`VALIDATION_FAILED` 13, 모두 모델 4회)와 코드 경로로, 실패 실행은 4회를 모두 도구 호출에 써서 최종 JSON 대신 한도 문장으로 끝났다고 추정한다(한도 문장 자체는 미집계). [PR #21](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/21)에서 Gateway 흐름만 모델 8회·마지막 호출 답변 전용으로 바꾸고 교체·되돌리기·중단 재개 helper를 추가했다. 로컬 단위 테스트, 실제 lfx·LangChain 가짜 모델 검사, 공식 Langflow CI의 교체 검사는 통과했으며 AWS 적용과 실제 웹 결과는 미확인이다. [32 문서](32-agent-gateway-tunnel.md#모델-호출-예산-조정)를 따른다.
 
 **현재 우선 작업:** 분석 저장소는 기존 PR #19·`codex/gateway-candidate-recovery` 범위에 큐·호출 한도·후보 복구를 함께 반영한다. 실제 앱의 `codex/agent-queue` 작업은 한 번 제출→큐/실행 상태 표시→최종 결과 수신을 연결한다. AWS 적용은 `deploy/apply-agent-queue.sh`로 두 이미지 빌드 뒤 MCP scope 0·Gateway queued/running/uncertain 0을 확인하고 MCP·Gateway만 갱신한다. 구버전 Gateway는 schema v1 SQLite를 읽기 전용으로 검사하며 누락·읽기 실패면 중단한다. 실제 AWS 적용과 모델 병렬 성능은 별도 확인 대상으로 남긴다. 기존 Langflow bootstrap·Vertex 단건 검사를 반복하거나 완료된 평가 96문항을 재수집하지 않는다.
 

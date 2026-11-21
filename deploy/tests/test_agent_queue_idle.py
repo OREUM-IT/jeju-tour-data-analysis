@@ -79,6 +79,45 @@ class QueueIdleTests(unittest.TestCase):
         self.assertIn('AGENT_QUEUE_IDLE_CHECK_FAILED', errors.getvalue())
         self.assertNotIn('secret-do-not-display', errors.getvalue())
 
+    def test_mcp_only_resume_gate_reads_live_scopes_without_the_flow_verifying_gateway(self):
+        def probe(outputs):
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(idle.os, 'geteuid', return_value=0))
+                stack.enter_context(patch.object(idle.configure, 'directory', return_value=Path('/unused/.local')))
+                public = stack.enter_context(patch.object(idle.tunnel_check, 'public_request',
+                                                          side_effect=AssertionError('Gateway readiness is not used')))
+                containers = stack.enter_context(patch.object(idle, 'container_json', side_effect=outputs))
+                result = idle.check_mcp_idle(Path('/unused'))
+                public.assert_not_called()
+                self.assertEqual([call.args[1:] for call in containers.call_args_list], [('jeju-mcp', idle.MCP_IDLE_CHECK)])
+                return result
+        self.assertEqual(probe([SCOPES]), {'status': 'passed', 'scope': 'mcp-idle-before-gateway-repin',
+                                           'activeScopes': 0, 'gatewayJobsChecked': False,
+                                           'modelExecuted': False, 'productionReady': False})
+        with self.assertRaises(idle.ActiveRequests):
+            probe([{**SCOPES, 'activeScopes': 1}])
+        for invalid in ([], {'activeScopes': -1}, {'activeScopes': True}, {}):
+            with self.subTest(invalid=invalid), self.assertRaises(idle.configure.ConfigurationError):
+                probe([invalid])
+        with patch.object(idle.os, 'geteuid', return_value=1000), self.assertRaises(idle.configure.ConfigurationError):
+            idle.check_mcp_idle(Path('/unused'))
+
+    def test_mcp_only_cli_exit_codes_and_mutually_exclusive_modes(self):
+        for side_effect, code in ((None, 0), (idle.ActiveRequests(), 75), (RuntimeError('secret-do-not-display'), 1)):
+            output, errors = io.StringIO(), io.StringIO()
+            result = {'status': 'passed', 'scope': 'mcp-idle-before-gateway-repin'}
+            with self.subTest(code=code), patch.object(idle.sys, 'argv', ['check-agent-queue-idle.py', '--mcp-only']), \
+                 patch.object(idle, 'check_mcp_idle', side_effect=side_effect, return_value=result) as mcp_only, \
+                 patch.object(idle, 'check_idle', side_effect=AssertionError('full gate must not run')), \
+                 patch('sys.stdout', output), redirect_stderr(errors):
+                self.assertEqual(idle.main(), code)
+                mcp_only.assert_called_once()
+                self.assertNotIn('secret-do-not-display', output.getvalue() + errors.getvalue())
+        with patch.object(idle.sys, 'argv', ['check-agent-queue-idle.py', '--mcp-only', '--queue-ready']), \
+             redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            idle.main()
+        self.assertEqual(raised.exception.code, 2)
+
     def test_post_update_requires_new_queue_and_matching_capacity_but_does_not_cancel_new_work(self):
         result, _, _ = self.probe({**READY, 'jobs': {'queued': 1, 'running': 1, 'uncertain': 0}},
                                   [{**SCOPES, 'activeScopes': 1}], queue_ready=True)

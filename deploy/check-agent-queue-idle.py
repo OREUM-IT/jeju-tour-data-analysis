@@ -121,12 +121,33 @@ def check_idle(deploy, *, queue_ready=False):
             'modelExecuted': False, 'productionReady': False}
 
 
+def check_mcp_idle(deploy):
+    """Resume-only gate for an unfinished Gateway flow switch.
+
+    While the stored flow and the running Gateway's pin differ, the Gateway answers
+    FLOW_CHANGED and starts no new execution, so only runs admitted before the
+    switch can still be live. Each live run holds an MCP scope until it settles.
+    """
+    configure.require(os.geteuid() == configure.ROOT_UID)
+    configure.directory(deploy / '.local')
+    scopes = container_json(deploy, 'jeju-mcp', MCP_IDLE_CHECK)
+    configure.require(isinstance(scopes, dict))
+    if count(scopes.get('activeScopes')):
+        raise ActiveRequests()
+    return {'status': 'passed', 'scope': 'mcp-idle-before-gateway-repin', 'activeScopes': 0,
+            'gatewayJobsChecked': False, 'modelExecuted': False, 'productionReady': False}
+
+
 def main():
     parser = configure.SafeParser(description=__doc__)
-    parser.add_argument('--queue-ready', action='store_true', help='Require the new queue API and matching live MCP capacity, allowing active jobs.')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--queue-ready', action='store_true', help='Require the new queue API and matching live MCP capacity, allowing active jobs.')
+    modes.add_argument('--mcp-only', action='store_true', help='Resume an unfinished flow switch: require zero live MCP scopes only.')
     args = parser.parse_args()
     try:
-        print(json.dumps(check_idle(Path(__file__).resolve().parent, queue_ready=args.queue_ready), separators=(',', ':')))
+        deploy = Path(__file__).resolve().parent
+        result = check_mcp_idle(deploy) if args.mcp_only else check_idle(deploy, queue_ready=args.queue_ready)
+        print(json.dumps(result, separators=(',', ':')))
         return 0
     except ActiveRequests:
         print('{"status":"deferred","code":"ACTIVE_REQUEST_PRESENT","restarted":false,"modelExecuted":false,"productionReady":false}', file=sys.stderr)

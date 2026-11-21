@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -141,8 +142,10 @@ class GatewaySettingsTest(unittest.TestCase):
                 self.assertNotIn(value, marker.read_text())
                 self.assertNotIn(value, json.dumps(command))
             self.assertEqual(command[:3], ['docker', 'compose', '-p'])
-            self.assertEqual(command[-6:], ['exec', '-T', 'langflow', 'python', '/opt/oreumit/gateway-bootstrap.py', '--provision'])
-            self.assertEqual(kwargs, {'capture_output': True, 'timeout': 180, 'check': False})
+            # The reviewed host builder is streamed; a stale bind-mounted copy is never run.
+            self.assertEqual(command[-6:], ['exec', '-T', 'langflow', 'python', '-', '--provision'])
+            self.assertEqual(kwargs, {'input': setup.BOOTSTRAP.read_bytes(), 'capture_output': True,
+                                      'timeout': 180, 'check': False})
             return subprocess.CompletedProcess(command, 0, json.dumps(self.result()).encode(), b'')
         runner = Mock(side_effect=run)
         result = self.quiet(provision=True, runner=runner)
@@ -346,6 +349,89 @@ class GatewaySettingsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
                     self.quiet_flow('check', runner)
         self.assertEqual(before, self.snapshot(self.root))
+
+    def test_switch_marker_spans_flow_change_until_explicit_completion(self):
+        self.ready_root()
+        marker = self.root / setup.PENDING
+        self.assertEqual(setup.flow_change(self.root, 'pending')['flowChangePending'], False)
+        check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked()).encode(), b''))
+        self.quiet_flow('check', check)
+        self.assertFalse(os.path.lexists(marker))
+        def run(command, **kwargs):
+            # The marker exists before Langflow can change, so any interruption is resumable.
+            self.assertTrue(marker.is_file())
+            return subprocess.CompletedProcess(command, 0, json.dumps(self.migration()).encode(), b'')
+        self.quiet_flow('update', Mock(side_effect=run))
+        self.assertEqual((marker.stat().st_mode & 0o777, marker.stat().st_nlink), (0o600, 1))
+        for value in setup.settings.read_env(self.root / 'gateway.env', private_mode=True).values():
+            if len(value) >= 32:
+                self.assertNotIn(value, marker.read_text())
+        self.assertIs(setup.flow_change(self.root, 'pending')['flowChangePending'], True)
+        failing = Mock(return_value=subprocess.CompletedProcess([], 1, b'', b''))
+        with self.assertRaises(ValueError):
+            self.quiet_flow('rollback', failing)
+        self.assertTrue(marker.is_file())
+        self.assertEqual(setup.flow_change(self.root, 'complete'),
+                         {'status': 'passed', 'flowChangePending': False, 'markerCleared': True,
+                          'modelExecuted': False, 'productionReady': False})
+        self.assertFalse(os.path.lexists(marker))
+        self.assertFalse(setup.flow_change(self.root, 'complete')['markerCleared'])
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_MODE_INVALID$'):
+            setup.flow_change(self.root, 'remove')
+
+    def test_linked_or_altered_switch_marker_fails_closed_before_langflow(self):
+        for index, kind in enumerate(['symlink', 'hardlink', 'permissions', 'directory']):
+            with self.subTest(kind=kind):
+                root = self.ready_root(f'marker-{kind}')
+                marker = root / setup.PENDING
+                target = self.directory / f'marker-target-{index}'
+                target.write_text('keep\n')
+                target.chmod(0o600)
+                if kind == 'symlink':
+                    marker.symlink_to(target)
+                elif kind == 'hardlink':
+                    os.link(target, marker)
+                elif kind == 'permissions':
+                    setup.write_private(marker, 'x\n')
+                    marker.chmod(0o644)
+                else:
+                    marker.mkdir(mode=0o700)
+                runner = Mock(side_effect=AssertionError('no flow change with an untrusted marker'))
+                for action in ('pending', 'complete'):
+                    with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_CHANGE_MARKER_INVALID$'):
+                        setup.flow_change(root, action)
+                with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_CHANGE_MARKER_INVALID$'):
+                    self.quiet_flow('update', runner, root)
+                runner.assert_not_called()
+                self.assertTrue(os.path.lexists(marker))
+                self.assertEqual(target.read_text(), 'keep\n')
+
+    def test_cli_reports_pending_with_exit_codes_and_never_prints_secrets(self):
+        source = Path(setup.__file__).parent
+        deploy = self.directory / 'deploy-copy'
+        deploy.mkdir()
+        for name in ('prepare-gateway.py', 'prepare-langflow.py'):
+            (deploy / name).write_bytes((source / name).read_bytes())
+        root = deploy / '.local'
+        root.mkdir(mode=0o700)
+        (root / 'mcp.env').write_text('MCP_SERVICE_TOKEN=' + MCP_TOKEN + '\n')
+        (root / 'mcp.env').chmod(0o600)
+        def cli(*arguments):
+            return subprocess.run([sys.executable, '-I', str(deploy / 'prepare-gateway.py'), *arguments],
+                                  capture_output=True, text=True, timeout=30, check=False)
+        absent = cli('--flow-change-pending')
+        self.assertEqual((absent.returncode, json.loads(absent.stdout)['flowChangePending']), (setup.NOT_PENDING_EXIT, False))
+        setup.write_private(root / setup.PENDING, 'started\n')
+        present = cli('--flow-change-pending')
+        self.assertEqual((present.returncode, json.loads(present.stdout)['flowChangePending']), (0, True))
+        cleared = cli('--complete-flow-change')
+        self.assertEqual((cleared.returncode, json.loads(cleared.stdout)['markerCleared']), (0, True))
+        self.assertFalse(os.path.lexists(root / setup.PENDING))
+        root.chmod(0o755)
+        broken = cli('--flow-change-pending')
+        self.assertEqual((broken.returncode, json.loads(broken.stdout)['code']), (1, 'PRIVATE_SETTINGS_DIRECTORY_REQUIRED'))
+        for result in (absent, present, cleared, broken):
+            self.assertNotIn(MCP_TOKEN, result.stdout + result.stderr)
 
     def test_failed_pair_publication_rolls_back_only_its_own_files(self):
         original_link = os.link
