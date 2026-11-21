@@ -1,12 +1,16 @@
 // Explicit live collection only. No model-selected URLs, retries, provider switching, or automatic answer repair.
 // Return values contain third-party output and belong in .local; never print raw captures or headers.
 import { randomUUID } from 'node:crypto';
+import http from 'node:http';
+import { Readable } from 'node:stream';
 import { canonicalSha256 } from './evaluation-rng.mjs';
 import { buildGeminiRequest, buildLangflowRequest } from './baseline-request-adapters.mjs';
 import { validateValidatedLangflowResponse } from './baseline-adapters.mjs';
 import { prepareValidatedCollection, buildBoundValidatedRequest, validateValidatedCapture, VALIDATED_BASELINE_ADAPTER_VERSION } from './validated-capture-binding.mjs';
 
 export const BASELINE_RUNNER_VERSION = '1.0.0';
+/** Opt-in per-request ceiling for slow local inference. The default 120000 ms ceiling is unchanged. */
+export const LOCAL_MODEL_TIMEOUT_MAX_MS = 1_200_000;
 const MAX_CASES = 192;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -37,6 +41,42 @@ function endpointUrl(endpoint, systemId) {
   return url;
 }
 
+/** The extended local-model timeout needs the IPv4 loopback origin http://127.0.0.1:<port>; localhost names are refused. */
+export function isLocalModelEndpoint(endpoint) {
+  let url;
+  try { url = new URL(endpoint); } catch { return false; }
+  return url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.port !== '';
+}
+
+const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+
+/**
+ * Default transport for the extended local-model timeout only. Node's built-in fetch stops waiting for response headers
+ * or the next body chunk after 300 seconds, which would end a slower local run as a transport failure before its own
+ * timeout. node:http has no client-side limit, so the caller's AbortSignal alone bounds the request. It serves only
+ * http://127.0.0.1:<port>, sends only method, headers and body, never follows redirects, and keeps no connection.
+ * It does not decompress, so it asks for an identity (uncompressed) response unless the caller names an encoding.
+ */
+export function loopbackHttpFetch(resource, { method = 'GET', headers = {}, body, signal } = {}) {
+  if (!isLocalModelEndpoint(resource)) return Promise.reject(new TypeError('loopback transport needs http://127.0.0.1:<port>'));
+  return new Promise((resolve, reject) => {
+    const request = http.request(new URL(resource), { method, headers: { 'accept-encoding': 'identity', ...headers }, signal, agent: false }, (response) => {
+      try {
+        const received = new Headers();
+        for (let index = 0; index < response.rawHeaders.length; index += 2) received.append(response.rawHeaders[index], response.rawHeaders[index + 1]);
+        const nullBody = NULL_BODY_STATUSES.has(response.statusCode);
+        if (nullBody) response.destroy();
+        resolve(new Response(nullBody ? null : Readable.toWeb(response), { status: response.statusCode, headers: received }));
+      } catch (error) {
+        response.destroy();
+        reject(error);
+      }
+    });
+    request.on('error', reject);
+    request.end(body);
+  });
+}
+
 function requestHeaders(headers) {
   ensure(isRecord(headers), 'headers must be a record');
   const selected = { 'content-type': 'application/json', accept: 'application/json' };
@@ -51,7 +91,7 @@ function requestHeaders(headers) {
   return selected;
 }
 
-function validateOptions({ plan, system, maxCases, timeoutMs, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, fetchImpl, onProgress, onCheckpoint, outputSelector }) {
+function validateOptions({ plan, system, maxCases, timeoutMs, localModelTimeout, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, fetchImpl, onProgress, onCheckpoint, outputSelector }) {
   ensure(isRecord(plan) && plan.kind === 'jeju-baseline-plan' && plan.schemaVersion === '1.0'
     && SHA256.test(plan.planSha256 ?? '') && ownHash(plan, 'planSha256') === plan.planSha256, 'a hash-verified baseline plan is required');
   ensure(Array.isArray(plan.cases) && plan.cases.length > 0 && plan.cases.length <= MAX_CASES
@@ -64,7 +104,9 @@ function validateOptions({ plan, system, maxCases, timeoutMs, maxResponseBytes, 
   ensure(isRecord(system) && ['gemini', 'langflow'].includes(system.id) && Object.keys(system).length === 5
     && ['modelId', 'promptVersion', 'toolVersion', 'adapterVersion'].every((key) => nonempty(system[key])) && system.modelId !== 'none', 'system needs explicit model and version provenance');
   ensure(Number.isSafeInteger(maxCases) && maxCases >= 0 && maxCases <= plan.cases.length, 'maxCases must be between zero and the plan size');
-  ensure(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= 120_000, 'timeoutMs must be 1..120000');
+  ensure(typeof localModelTimeout === 'boolean', 'localModelTimeout must be a boolean');
+  const maxTimeoutMs = localModelTimeout ? LOCAL_MODEL_TIMEOUT_MAX_MS : 120_000;
+  ensure(Number.isSafeInteger(timeoutMs) && timeoutMs >= 1 && timeoutMs <= maxTimeoutMs, `timeoutMs must be 1..${maxTimeoutMs}`);
   ensure(Number.isSafeInteger(maxResponseBytes) && maxResponseBytes >= 1 && maxResponseBytes <= 4 * 1024 * 1024, 'maxResponseBytes must be 1..4194304');
   ensure(Number.isSafeInteger(maxTotalResponseBytes) && maxTotalResponseBytes >= maxResponseBytes && maxTotalResponseBytes <= MAX_TOTAL_BYTES,
     'maxTotalResponseBytes must cover one response and be at most 32 MiB');
@@ -160,7 +202,7 @@ function unwrapResponse(raw, system, outputSelector, runtimeRequest) {
 }
 
 /** Validate a full prior capture against its telemetry; old events can bind a continuation, not prove old inference. */
-function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector, requestMode, catalog, requestBinding }) {
+function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector, requestMode, catalog, requestBinding, timeoutMs, localModelTimeout }) {
   ensure((resumeCapture === undefined) === (resumeTelemetry === undefined), 'resumeCapture and resumeTelemetry must be supplied together');
   if (resumeCapture === undefined) return null;
   const capture = resumeCapture;
@@ -179,6 +221,10 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
   if (requestMode === 'langflow-v2') {
     ensure(telemetry.requestMode === requestMode && canonicalSha256(telemetry.requestBinding) === canonicalSha256(requestBinding), 'resume telemetry request provenance changed');
   } else ensure(telemetry.requestMode === undefined && telemetry.requestBinding === undefined, 'legacy telemetry cannot claim v2 request provenance');
+  // An extended local-model run binds its exact timeout across the resume chain. Telemetry without the field predates it
+  // or used the default ceiling, so it resumes only without the flag; default runs still choose a per-run timeout.
+  ensure(telemetry.localModelTimeout === undefined ? !localModelTimeout
+    : telemetry.localModelTimeout === true && localModelTimeout && telemetry.timeoutMs === timeoutMs, 'resume local-model timeout setting changed');
   const attemptedRecords = new Map();
   for (let index = 0; index < plan.cases.length; index += 1) {
     const entry = plan.cases[index];
@@ -276,24 +322,29 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
  * attempts are never retried. Original timestamps/measurements are preserved and cumulative byte limits still apply.
  * Explicit Gemini-only continueOnModelMismatch keeps an unexpected model/engine result as a failure but permits the
  * NEXT case. It does not retry the failed case, change providers, accept the fallback, or relax any other stop policy.
+ * Explicit localModelTimeout raises only the timeoutMs ceiling to LOCAL_MODEL_TIMEOUT_MAX_MS for v2 Langflow at
+ * http://127.0.0.1:<port>, is recorded in telemetry and must match exactly, with the same timeoutMs, on resume.
+ * Without an injected fetchImpl it uses loopbackHttpFetch, because the built-in fetch gives up after 300 seconds.
  */
 export async function collectBaselineCapture({
   plan, system, endpoint, headers = {}, outputSelector,
   maxCases = plan?.cases?.length, timeoutMs = 60_000, maxResponseBytes = 1024 * 1024,
-  maxTotalResponseBytes = 16 * 1024 * 1024, stopOnError = true, continueOnModelMismatch = false,
-  signal, fetchImpl = globalThis.fetch, onProgress, onCheckpoint,
+  maxTotalResponseBytes = 16 * 1024 * 1024, stopOnError = true, continueOnModelMismatch = false, localModelTimeout = false,
+  signal, fetchImpl = localModelTimeout === true ? loopbackHttpFetch : globalThis.fetch, onProgress, onCheckpoint,
   resumeCapture, resumeTelemetry, requestMode = 'legacy', catalog,
 } = {}) {
-  validateOptions({ plan, system, maxCases, timeoutMs, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, fetchImpl, onProgress, onCheckpoint, outputSelector });
+  validateOptions({ plan, system, maxCases, timeoutMs, localModelTimeout, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, fetchImpl, onProgress, onCheckpoint, outputSelector });
   const url = endpointUrl(endpoint, system.id);
   const selectedHeaders = requestHeaders(headers);
   ensure(['legacy', 'langflow-v2'].includes(requestMode) && (requestMode !== 'langflow-v2' || system.id === 'langflow'), 'requestMode must be legacy or Langflow-only langflow-v2');
   ensure((requestMode === 'langflow-v2') === (system.adapterVersion === VALIDATED_BASELINE_ADAPTER_VERSION), 'request mode and response adapter version disagree');
   ensure(requestMode !== 'langflow-v2' || (outputSelector.outputIndex === 0 && outputSelector.componentId === 'ChatOutput-jejuV2'),
     'validated Langflow mode requires outputIndex 0 and ChatOutput-jejuV2');
+  ensure(!localModelTimeout || (requestMode === 'langflow-v2' && isLocalModelEndpoint(url)),
+    'localModelTimeout requires Langflow v2 mode and an http://127.0.0.1:<port> endpoint');
   // Parse ALL planned inputs before any endpoint call, including cases beyond this invocation's limit.
   const requestBinding = requestMode === 'langflow-v2' ? prepareValidatedCollection(plan, catalog) : undefined;
-  const prior = priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector, requestMode, catalog, requestBinding });
+  const prior = priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, outputSelector, requestMode, catalog, requestBinding, timeoutMs, localModelTimeout });
   const prepared = plan.cases.map((entry) => requestMode === 'langflow-v2'
     ? buildBoundValidatedRequest(entry, catalog, `baseline-${randomUUID()}`)
     : { body: system.id === 'gemini' ? buildGeminiRequest(entry.request) : buildLangflowRequest(entry.request, { sessionId: `baseline-${randomUUID()}` }) });
@@ -314,7 +365,8 @@ export async function collectBaselineCapture({
         planSha256: plan.planSha256, system: system.id, provenanceSha256: canonicalSha256(system), endpointSha256: canonicalSha256(url.href),
         startedAt, completedAt, plannedCases: plan.cases.length, attemptedCases: attempted, notExecutedCases: plan.cases.length - attempted,
         newAttemptedCases: newAttempted, ...(prior === null ? {} : { resume: prior.resume }),
-        totalResponseBytes: totalBytes, stoppedReason, timeoutMs, maxResponseBytes, maxTotalResponseBytes, maxCases, stopOnError, continueOnModelMismatch,
+        totalResponseBytes: totalBytes, stoppedReason, timeoutMs, ...(localModelTimeout ? { localModelTimeout } : {}),
+        maxResponseBytes, maxTotalResponseBytes, maxCases, stopOnError, continueOnModelMismatch,
         ...(requestBinding === undefined ? {} : { requestMode, requestBinding }), events },
     });
   };

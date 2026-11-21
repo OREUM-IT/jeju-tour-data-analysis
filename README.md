@@ -69,6 +69,8 @@
 29. [Lightsail Docker 설치 이후: 비공개 MCP·PostgreSQL·pgvector 기동](docs/29-lightsail-docker-bootstrap.md)
 30. [AWS MCP에 실제 981곳 카탈로그 연결](docs/30-lightsail-real-catalog.md)
 31. [AWS Langflow 내부 연결과 기존 Vertex 자격증명 등록](docs/31-lightsail-langflow.md)
+32. [Agent Gateway·Cloudflare Tunnel·모델 호출 예산 조정](docs/32-agent-gateway-tunnel.md)
+33. [로컬 Ollama 모델 96문항 비교 평가(Windows PC)](docs/33-ollama-local-evaluation.md)
 
 Ollama의 공식 소스에서 모델 대화·구조화 출력·도구 호출·임베딩 기능을 확인했습니다. 논문 LAG 재현은 원문 확인과 별도 검증이 필요합니다. 기존 Vercel 앱의 화면·API를 유지하고 외부 Worker·사설 Ollama·HTTP MCP 서버를 연결하는 계획이며, 운영 앱에 배포한 상태는 아닙니다. 기존 SDK 1.32.1과 최신 MCP v2의 전송 규칙도 분리했습니다.
 

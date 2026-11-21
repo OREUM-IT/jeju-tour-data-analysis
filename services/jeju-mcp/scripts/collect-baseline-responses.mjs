@@ -4,7 +4,7 @@ import { lstat, mkdir, open, readFile, realpath, rename, stat, unlink } from 'no
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { collectBaselineCapture } from '../src/baseline-runner.mjs';
+import { collectBaselineCapture, isLocalModelEndpoint, LOCAL_MODEL_TIMEOUT_MAX_MS } from '../src/baseline-runner.mjs';
 import { validateBaselinePlan } from '../src/baseline-evaluation.mjs';
 import { BASELINE_ADAPTER_VERSION } from '../src/baseline-adapters.mjs';
 import { VALIDATED_BASELINE_ADAPTER_VERSION } from '../src/validated-capture-binding.mjs';
@@ -19,6 +19,7 @@ const USAGE = `Usage: node scripts/collect-baseline-responses.mjs --execute
   [--max-cases <1..192>] [--timeout-ms <1..120000>] [--max-response-bytes <1..4194304>]
   [--resume-capture <.local/prior-capture.json> --resume-telemetry <.local/prior-telemetry.json>]
   [--request-mode <legacy|langflow-v2>] (v2 is Langflow only; all structured inputs are preflighted)
+  [--local-model-timeout] (v2 Langflow at http://127.0.0.1:<port> only: --timeout-ms up to 1200000; resume must match)
   [--continue-on-model-mismatch] (Gemini only: preserve fallback failures and attempt the next case)
   Langflow also requires --output-index <number> --component-id <final-output-node-id>.
 Default: one smoke case, 60-second timeout, sequential execution, stop on first failure, no retry.
@@ -30,7 +31,7 @@ Credentials: LANGFLOW_API_KEY for Langflow; optional BASELINE_APP_BEARER_TOKEN f
 GEMINI_API_KEY must be configured on the Gemini app/Langflow server, not sent to this endpoint by the collector.`;
 const VALUE_OPTIONS = new Set(['catalog', 'set', 'plan', 'system', 'model', 'prompt-version', 'tool-version', 'endpoint',
   'output', 'telemetry', 'max-cases', 'timeout-ms', 'max-response-bytes', 'output-index', 'component-id', 'resume-capture', 'resume-telemetry', 'request-mode']);
-const FLAG_OPTIONS = new Set(['execute', 'continue-on-model-mismatch']);
+const FLAG_OPTIONS = new Set(['execute', 'continue-on-model-mismatch', 'local-model-timeout']);
 const REQUIRED = ['catalog', 'set', 'plan', 'system', 'model', 'prompt-version', 'tool-version', 'endpoint', 'output', 'telemetry'];
 const boundedInteger = (value, min, max, label) => {
   if (!/^(?:0|[1-9]\d*)$/u.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) {
@@ -59,8 +60,13 @@ export function parseArguments(args) {
   if (options['continue-on-model-mismatch'] && options.system !== 'gemini') throw new Error('--continue-on-model-mismatch is only supported for Gemini.');
   options.requestMode = options['request-mode'] ?? 'legacy';
   if (!['legacy', 'langflow-v2'].includes(options.requestMode) || (options.requestMode === 'langflow-v2' && options.system !== 'langflow')) throw new Error('--request-mode must be legacy or Langflow-only langflow-v2.');
+  if (options['local-model-timeout']) {
+    if (options.requestMode !== 'langflow-v2') throw new Error('--local-model-timeout is only supported for Langflow with --request-mode langflow-v2.');
+    if (!isLocalModelEndpoint(options.endpoint)) throw new Error('--local-model-timeout requires an --endpoint origin of exactly http://127.0.0.1:<port>.');
+  }
   options.maxCases = options['max-cases'] === undefined ? 1 : boundedInteger(options['max-cases'], 1, 192, '--max-cases');
-  options.timeoutMs = options['timeout-ms'] === undefined ? 60_000 : boundedInteger(options['timeout-ms'], 1, 120_000, '--timeout-ms');
+  options.timeoutMs = options['timeout-ms'] === undefined ? 60_000
+    : boundedInteger(options['timeout-ms'], 1, options['local-model-timeout'] ? LOCAL_MODEL_TIMEOUT_MAX_MS : 120_000, '--timeout-ms');
   options.maxResponseBytes = options['max-response-bytes'] === undefined ? 1024 * 1024 : boundedInteger(options['max-response-bytes'], 1, 4 * 1024 * 1024, '--max-response-bytes');
   if (options.system === 'langflow') {
     if (options['output-index'] === undefined || !options['component-id']) throw new Error('Langflow requires --output-index and --component-id.');
@@ -174,7 +180,8 @@ async function persistSnapshot(reserved, { capture, telemetry }) {
   for (const [entry, value] of serialized) await atomicCheckpoint(entry, value);
 }
 
-export async function main(args = process.argv.slice(2), { paths = {}, env = process.env, fetchImpl = globalThis.fetch, signal, log = console.log } = {}) {
+/** Without an injected fetchImpl the runner picks the transport: built-in fetch, or loopback HTTP for --local-model-timeout. */
+export async function main(args = process.argv.slice(2), { paths = {}, env = process.env, fetchImpl, signal, log = console.log } = {}) {
   const options = parseArguments(args);
   if (options.help) { log(USAGE); return { status: 'help' }; }
   const [catalog, set, plan, personas, themeMap, spec, resumeCapture, resumeTelemetry] = await Promise.all([
@@ -196,6 +203,7 @@ export async function main(args = process.argv.slice(2), { paths = {}, env = pro
   try {
     const result = await collectBaselineCapture({ plan, system, endpoint: options.endpoint, headers,
       outputSelector: options.outputSelector, maxCases: options.maxCases, timeoutMs: options.timeoutMs,
+      localModelTimeout: options['local-model-timeout'] === true,
       maxResponseBytes: options.maxResponseBytes, maxTotalResponseBytes: 16 * 1024 * 1024,
       stopOnError: true, continueOnModelMismatch: options['continue-on-model-mismatch'] === true,
       signal, fetchImpl, resumeCapture, resumeTelemetry, requestMode: options.requestMode, catalog,
