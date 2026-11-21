@@ -5,8 +5,9 @@
 #
 # A switch is resumable: prepare-gateway.py writes .local/.gateway-flow-change before
 # Langflow can change and this helper clears it only after every check passes. While
-# it exists the Gateway may refuse work (FLOW_CHANGED) or be stopped, so a rerun uses
-# the MCP-only idle gate instead of aborting on the flow-verifying readiness check.
+# it exists, or whenever the Gateway answers FLOW_CHANGED, the Gateway may refuse work
+# or be stopped, so the rerun uses the local resume gate (the Gateway's own SQLite
+# counts plus live MCP scopes) instead of the public, flow-verifying readiness check.
 set +x
 set -euo pipefail
 mode=apply
@@ -24,11 +25,11 @@ compose=(docker compose -p "$COMPOSE_PROJECT_NAME"
   -f compose.yaml -f compose.catalog.yaml -f compose.langflow.yaml
   -f compose.gateway.yaml -f compose.tunnel.yaml)
 phase=config
-switching=0
 failed() {
   echo "AGENT_CALL_BUDGET_APPLY_FAILED: phase=$phase; modelExecuted=false; no credential values displayed." >&2
-  if [[ "$switching" == 1 ]]; then
-    echo '흐름 변경이 일부만 적용됐을 수 있습니다. 같은 명령을 다시 실행하면 이어서 마무리합니다. 되돌리려면 --rollback으로 실행합니다.' >&2
+  # Hint only when an unfinished switch is actually recorded.
+  if [[ "$phase" != config ]] && python3 prepare-gateway.py --flow-change-pending >/dev/null 2>&1; then
+    echo '흐름 변경이 끝나지 않았습니다. 같은 명령을 다시 실행하면 이어서 마무리합니다. 되돌리려면 --rollback으로 실행합니다.' >&2
   fi
 }
 trap failed ERR
@@ -52,9 +53,6 @@ if [[ "$mode" == verify ]]; then
     exit 1
   fi
 else
-  if [[ "$pending" == 1 ]]; then
-    switching=1
-  fi
   # This read-only observation is not an atomic maintenance lock: run it while
   # new web submissions are paused or quiet.
   phase=idle_check
@@ -66,27 +64,28 @@ else
       echo '대기·실행 중인 요청 또는 불확실 실행 보호 시간이 남아 있습니다. 모두 끝난 뒤 직접 다시 실행해 주세요. 이번 실행에서는 흐름과 서비스를 바꾸지 않았습니다.' >&2
       exit 75
     fi
-    if [[ "$pending" != 1 ]]; then
+    if [[ "$result" == 76 ]]; then
+      # Stored flow and running pin differ (for example an interrupted earlier switch).
+      echo 'Gateway가 흐름 불일치(FLOW_CHANGED)로 새 요청을 거부하고 있습니다. Gateway 내부 작업 수와 MCP 실행 상태를 확인하고 이어서 진행합니다.' >&2
+    elif [[ "$pending" == 1 ]]; then
+      echo '이전 흐름 변경이 끝나지 않았습니다. 공개 준비 확인 대신 Gateway 내부 작업 수와 MCP 실행 상태를 확인하고 이어서 진행합니다.' >&2
+    else
       echo 'MCP와 Gateway의 대기·실행 상태를 확인하지 못해 중단했습니다. 이번 실행에서는 흐름과 서비스를 바꾸지 않았습니다.' >&2
       exit "$result"
     fi
-    # An earlier run changed the flow but did not finish re-pinning the Gateway.
-    # The Gateway then starts no new execution, so only live MCP scopes matter.
-    echo '이전 적용이 끝나지 않아 Gateway가 새 요청을 거부하고 있을 수 있습니다. MCP 실행 상태만 확인하고 이어서 진행합니다.' >&2
-    phase=mcp_idle_check
-    if python3 check-agent-queue-idle.py --mcp-only; then
+    phase=resume_idle_check
+    if python3 check-agent-queue-idle.py --resume; then
       :
     else
       result=$?
       if [[ "$result" == 75 ]]; then
-        echo '실행 중인 추천 요청이 남아 있습니다. 끝난 뒤 같은 명령을 다시 실행해 주세요.' >&2
+        echo '대기·실행 중인 요청 또는 불확실 실행 보호 시간이 남아 있습니다. 모두 끝난 뒤 같은 명령을 다시 실행해 주세요. 이번 실행에서는 흐름과 서비스를 바꾸지 않았습니다.' >&2
       else
-        echo 'MCP 실행 상태를 확인하지 못했습니다. 원인을 확인한 뒤 같은 명령을 다시 실행하면 이어서 진행합니다.' >&2
+        echo 'Gateway 내부 작업 수 또는 MCP 실행 상태를 확인하지 못했습니다. 원인을 확인한 뒤 같은 명령을 다시 실행해 주세요. 이번 실행에서는 흐름과 서비스를 바꾸지 않았습니다.' >&2
       fi
       exit "$result"
     fi
   fi
-  switching=1
   phase=flow_change
   if [[ "$mode" == rollback ]]; then
     python3 prepare-gateway.py --rollback-flow
@@ -107,7 +106,6 @@ python3 check-agent-queue-idle.py --queue-ready
 if [[ "$mode" != verify ]]; then
   phase=complete
   python3 prepare-gateway.py --complete-flow-change
-  switching=0
 fi
 case "$mode" in
   verify) printf '%s\n' '{"status":"passed","scope":"agent-call-budget-verified","modelCallLimit":8,"servicesRestarted":false,"modelExecuted":false,"productionReady":false}' ;;

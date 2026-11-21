@@ -379,6 +379,38 @@ class GatewaySettingsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '^GATEWAY_MODE_INVALID$'):
             setup.flow_change(self.root, 'remove')
 
+    def test_refusal_before_any_patch_removes_only_a_marker_this_run_created(self):
+        self.ready_root()
+        marker = self.root / setup.PENDING
+        refused = json.dumps({'status': 'failed', 'code': 'GATEWAY_EXISTING_FLOW_DIFFERS',
+                              'modelExecuted': False, 'flowPatchAttempted': False}).encode()
+        before = self.snapshot(self.root)
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+            self.quiet_flow('update', Mock(return_value=subprocess.CompletedProcess([], 1, refused, b'')))
+        # Nothing changed in Langflow or gateway.env, so there is nothing to resume.
+        self.assertFalse(os.path.lexists(marker))
+        self.assertEqual(before, self.snapshot(self.root))
+        ambiguous = [
+            (1, json.dumps({'status': 'failed', 'code': 'GATEWAY_BOOTSTRAP_HTTP_REJECTED',
+                            'modelExecuted': False, 'flowPatchAttempted': True}).encode()),
+            (1, json.dumps({'status': 'failed', 'code': 'GATEWAY_BOOTSTRAP_FAILED', 'modelExecuted': False}).encode()),
+            (1, b'not-json'), (0, b'x' * (16 * 1024 + 1)),
+        ]
+        for code, stdout in ambiguous:
+            with self.subTest(stdout=stdout[:60]):
+                with self.assertRaises(ValueError):
+                    self.quiet_flow('rollback', Mock(return_value=subprocess.CompletedProcess([], code, stdout, b'')))
+                self.assertTrue(marker.is_file())
+                marker.unlink()
+        timeout = Mock(side_effect=subprocess.TimeoutExpired('synthetic-switch', 180))
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.quiet_flow('update', timeout)
+        self.assertTrue(marker.is_file())
+        # A marker left by an earlier interrupted run is never cleared by a refusal.
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+            self.quiet_flow('update', Mock(return_value=subprocess.CompletedProcess([], 1, refused, b'')))
+        self.assertTrue(marker.is_file())
+
     def test_linked_or_altered_switch_marker_fails_closed_before_langflow(self):
         for index, kind in enumerate(['symlink', 'hardlink', 'permissions', 'directory']):
             with self.subTest(kind=kind):
@@ -427,6 +459,14 @@ class GatewaySettingsTest(unittest.TestCase):
         cleared = cli('--complete-flow-change')
         self.assertEqual((cleared.returncode, json.loads(cleared.stdout)['markerCleared']), (0, True))
         self.assertFalse(os.path.lexists(root / setup.PENDING))
+        # Switch failures say whether an unfinished switch is actually recorded.
+        nothing = cli('--update-flow')
+        self.assertEqual((nothing.returncode, json.loads(nothing.stdout)['code']), (1, 'GATEWAY_INIT_REQUIRED'))
+        self.assertIn('did not change the Langflow flow', json.loads(nothing.stdout)['details'])
+        setup.write_private(root / setup.PENDING, 'started\n')
+        unfinished = cli('--rollback-flow')
+        self.assertIn('unfinished', json.loads(unfinished.stdout)['details'])
+        (root / setup.PENDING).unlink()
         root.chmod(0o755)
         broken = cli('--flow-change-pending')
         self.assertEqual((broken.returncode, json.loads(broken.stdout)['code']), (1, 'PRIVATE_SETTINGS_DIRECTORY_REQUIRED'))

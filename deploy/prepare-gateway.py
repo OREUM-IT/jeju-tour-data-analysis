@@ -99,6 +99,15 @@ def failure_code(stdout, fallback):
     return code if isinstance(code, str) and re.fullmatch(r'GATEWAY_[A-Z_]{1,80}', code) else fallback
 
 
+def patch_not_attempted(stdout):
+    """True only for a bounded failure report stating that no flow PATCH was sent."""
+    try:
+        failure = json.loads(stdout) if len(stdout) <= 16 * 1024 else {}
+        return failure.get('status') == 'failed' and failure.get('flowPatchAttempted') is False
+    except (ValueError, AttributeError):
+        return False
+
+
 def replace_gateway(root, values):
     with tempfile.TemporaryDirectory(prefix='.gateway-complete-', dir=root) as temporary:
         staged = Path(temporary) / 'gateway.env'
@@ -161,12 +170,17 @@ def flow(root, mode, *, runner=subprocess.run):
         validate_pair(control, gateway, mcp)
         if gateway['GATEWAY_BOOTSTRAP_STATUS'] != 'ready' or os.path.lexists(root / '.gateway-provisioning'):
             raise ValueError('GATEWAY_PROVISIONING_REQUIRED')
-        if mode != 'check' and not pending_marker(root):
+        created = mode != 'check' and not pending_marker(root)
+        if created:
             # Written before Langflow can change: an interrupted switch is resumable.
             write_private(root / PENDING, 'Gateway flow switch started; rerun deploy/apply-agent-call-budget.sh to finish.\n')
         result = runner(compose_command() + ['exec', '-T', 'langflow', 'python', '-', '--' + mode],
                         input=BOOTSTRAP.read_bytes(), capture_output=True, timeout=180, check=False)
         if result.returncode or len(result.stdout) > 16 * 1024:
+            if created and patch_not_attempted(result.stdout):
+                # The exited in-container run reported that it sent no PATCH, so
+                # Langflow and gateway.env are unchanged: nothing is left to resume.
+                (root / PENDING).unlink()
             raise ValueError(failure_code(result.stdout, 'GATEWAY_FLOW_CHANGE_FAILED_OUTPUT_WITHHELD'))
         try:
             value = json.loads(result.stdout)
@@ -270,8 +284,13 @@ if __name__ == '__main__':
         raise
     except Exception as error:
         code = str(error) if isinstance(error, ValueError) and re.fullmatch(r'[A-Z_]{1,90}', str(error)) else 'GATEWAY_PREPARATION_FAILED'
-        details = ('The Langflow flow switch may be partly applied; rerun deploy/apply-agent-call-budget.sh '
-                   '(or --rollback) to finish. No secret output.' if switching else
+        try:
+            unfinished = switching and pending_marker(ROOT / '.local')
+        except Exception:
+            unfinished = switching
+        details = ('The Langflow flow switch is unfinished; rerun deploy/apply-agent-call-budget.sh '
+                   '(or --rollback) to finish. No secret output.' if unfinished else
+                   'Settings preserved; this run did not change the Langflow flow. No secret output.' if switching else
                    'Settings preserved. Review permissions or incomplete provisioning marker; no secret output.')
         print(json.dumps({'status': 'failed', 'code': code, 'details': details}))
         raise SystemExit(1)
