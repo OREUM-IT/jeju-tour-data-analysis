@@ -266,11 +266,16 @@ def parse_flow_id(value):
         raise GatewayBootstrapError('GATEWAY_FLOW_ID_INVALID') from None
 
 
+PATCH_STATE = {'attempted': False}
+
+
 def patch_flow(client, flow_id, stored, flow):
     try:
         version = str(uuid.UUID(stored.get('version_token')))
     except (ValueError, TypeError, AttributeError):
         raise GatewayBootstrapError('GATEWAY_FLOW_VERSION_UNAVAILABLE') from None
+    # Reported on failure: until this point the stored flow is untouched by this run.
+    PATCH_STATE['attempted'] = True
     # If-Match makes Langflow reject a concurrent graph edit. Only the graph and
     # its description change; name, access, endpoint and credentials stay put.
     payload(client.patch(f'/api/v1/flows/{flow_id}', headers={'If-Match': version},
@@ -395,7 +400,8 @@ def main(argv=None):
                                provision=arguments.provision, migrate=migrate)
     except Exception as error:
         code = str(error) if isinstance(error, GatewayBootstrapError) else 'GATEWAY_BOOTSTRAP_FAILED'
-        print(json.dumps({'status': 'failed', 'code': code, 'modelExecuted': False}))
+        print(json.dumps({'status': 'failed', 'code': code, 'modelExecuted': False,
+                          'flowPatchAttempted': PATCH_STATE['attempted']}))
         return 1
     print(json.dumps(result, ensure_ascii=False))
     return 0

@@ -431,6 +431,38 @@ class GatewayBootstrapTests(unittest.TestCase):
         self.assertEqual((restored['data'], restored['description']), (legacy['data'], legacy['description']))
         self.assertEqual(sum(method == 'PATCH' for method, _, _ in lossy.calls), 2)
 
+    def test_failure_report_says_whether_a_flow_patch_was_attempted(self):
+        client = Langflow()
+        flow_id = run(client)['flowId']
+        gateway.PATCH_STATE['attempted'] = False
+        state = copy.deepcopy(client.state)
+        state['flows'][flow_id]['data']['edges'].pop()
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+            migrate(Langflow(state), 'rollback')
+        self.assertIs(gateway.PATCH_STATE['attempted'], False)
+        racer = Langflow(copy.deepcopy(client.state))
+        with patch.object(racer, 'patch', return_value=base_tests.Response(status=409)):
+            with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_BOOTSTRAP_HTTP_REJECTED$'):
+                migrate(racer, 'rollback')
+        self.assertIs(gateway.PATCH_STATE['attempted'], True)
+        class Client:
+            def __init__(self, **_kwargs): pass
+            def __enter__(self): return self
+            def __exit__(self, *_args): pass
+        for attempted in (False, True):
+            gateway.PATCH_STATE['attempted'] = attempted
+            output = io.StringIO()
+            with self.subTest(attempted=attempted), \
+                 patch.dict(sys.modules, {'httpx': types.SimpleNamespace(Client=Client)}), \
+                 patch.object(gateway, 'load_setup', return_value=SETUP), \
+                 patch.object(Path, 'read_text', side_effect=[json.dumps(TEMPLATE), SOURCE]), \
+                 patch.object(gateway, 'configure', side_effect=gateway.GatewayBootstrapError('GATEWAY_EXISTING_FLOW_DIFFERS')), \
+                 contextlib.redirect_stdout(output):
+                self.assertEqual(gateway.main(['--update']), 1)
+                self.assertEqual(json.loads(output.getvalue()), {'status': 'failed', 'code': 'GATEWAY_EXISTING_FLOW_DIFFERS',
+                                                                 'modelExecuted': False, 'flowPatchAttempted': attempted})
+        gateway.PATCH_STATE['attempted'] = False
+
     def test_main_maps_modes_without_printing_credentials(self):
         class Client:
             def __init__(self, **_kwargs): pass
@@ -470,6 +502,7 @@ process.stdout.write(crypto.createHash('sha256').update(canon(JSON.parse(fs.read
             self.assertEqual([node.name for node in classes if any(isinstance(base, ast.Name) and base.id == 'Component' for base in node.bases)], [name])
 
     def test_main_failure_never_prints_provider_body_or_credentials(self):
+        gateway.PATCH_STATE['attempted'] = False
         output = io.StringIO()
         class Client:
             def __init__(self, **_kwargs): pass
@@ -481,7 +514,8 @@ process.stdout.write(crypto.createHash('sha256').update(canon(JSON.parse(fs.read
              patch.object(gateway, 'configure', side_effect=RuntimeError('private response ' + SECRET)), \
              contextlib.redirect_stdout(output):
             self.assertEqual(gateway.main(['--provision']), 1)
-        self.assertEqual(json.loads(output.getvalue()), {'status': 'failed', 'code': 'GATEWAY_BOOTSTRAP_FAILED', 'modelExecuted': False})
+        self.assertEqual(json.loads(output.getvalue()), {'status': 'failed', 'code': 'GATEWAY_BOOTSTRAP_FAILED',
+                                                         'modelExecuted': False, 'flowPatchAttempted': False})
         self.assertNotIn(SECRET, output.getvalue())
 
 

@@ -26,6 +26,11 @@ FLOW_LIMITS = {'update': 8, 'rollback': 4, 'check': 8}
 MIGRATION_KEYS = {'status', 'flowStatus', 'flowId', 'flowSha256', 'modelCallLimit', 'modelExecuted', 'productionReady'}
 CHECK_KEYS = {'status', 'flowMatches', 'nodeCount', 'edgeCount', 'toolCount', 'modelCallLimit', 'flowSha256',
               'modelExecuted', 'productionReady'}
+# Present from the start of a flow switch until the apply helper has re-pinned
+# the Gateway and passed every readiness check. While it exists, the Gateway may
+# refuse work with FLOW_CHANGED, so a rerun must resume instead of aborting.
+PENDING = '.gateway-flow-change'
+NOT_PENDING_EXIT = 3
 
 
 def write_private(path, content):
@@ -94,6 +99,15 @@ def failure_code(stdout, fallback):
     return code if isinstance(code, str) and re.fullmatch(r'GATEWAY_[A-Z_]{1,80}', code) else fallback
 
 
+def patch_not_attempted(stdout):
+    """True only for a bounded failure report stating that no flow PATCH was sent."""
+    try:
+        failure = json.loads(stdout) if len(stdout) <= 16 * 1024 else {}
+        return failure.get('status') == 'failed' and failure.get('flowPatchAttempted') is False
+    except (ValueError, AttributeError):
+        return False
+
+
 def replace_gateway(root, values):
     with tempfile.TemporaryDirectory(prefix='.gateway-complete-', dir=root) as temporary:
         staged = Path(temporary) / 'gateway.env'
@@ -119,6 +133,31 @@ def locked_settings(root):
         yield root, mcp
 
 
+def pending_marker(root):
+    """Return whether a flow switch is unfinished; refuse a linked or replaced marker."""
+    marker = root / PENDING
+    if not os.path.lexists(marker):
+        return False
+    info = os.lstat(marker)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError('GATEWAY_FLOW_CHANGE_MARKER_INVALID')
+    return True
+
+
+def flow_change(root, action):
+    """Read or clear the unfinished-switch marker. Never contacts Langflow or Docker."""
+    if action not in ('pending', 'complete'):
+        raise ValueError('GATEWAY_MODE_INVALID')
+    with locked_settings(root) as (root, _mcp):
+        pending = pending_marker(root)
+        if action == 'complete' and pending:
+            # Called only after the Gateway was re-pinned and readiness passed.
+            (root / PENDING).unlink()
+        return {'status': 'passed', 'flowChangePending': pending if action == 'pending' else False,
+                **({'markerCleared': pending} if action == 'complete' else {}),
+                'modelExecuted': False, 'productionReady': False}
+
+
 def flow(root, mode, *, runner=subprocess.run):
     """Update, roll back or check the pinned Gateway flow. Never issues an API key."""
     if mode not in FLOW_LIMITS:
@@ -131,9 +170,17 @@ def flow(root, mode, *, runner=subprocess.run):
         validate_pair(control, gateway, mcp)
         if gateway['GATEWAY_BOOTSTRAP_STATUS'] != 'ready' or os.path.lexists(root / '.gateway-provisioning'):
             raise ValueError('GATEWAY_PROVISIONING_REQUIRED')
+        created = mode != 'check' and not pending_marker(root)
+        if created:
+            # Written before Langflow can change: an interrupted switch is resumable.
+            write_private(root / PENDING, 'Gateway flow switch started; rerun deploy/apply-agent-call-budget.sh to finish.\n')
         result = runner(compose_command() + ['exec', '-T', 'langflow', 'python', '-', '--' + mode],
                         input=BOOTSTRAP.read_bytes(), capture_output=True, timeout=180, check=False)
         if result.returncode or len(result.stdout) > 16 * 1024:
+            if created and patch_not_attempted(result.stdout):
+                # The exited in-container run reported that it sent no PATCH, so
+                # Langflow and gateway.env are unchanged: nothing is left to resume.
+                (root / PENDING).unlink()
             raise ValueError(failure_code(result.stdout, 'GATEWAY_FLOW_CHANGE_FAILED_OUTPUT_WITHHELD'))
         try:
             value = json.loads(result.stdout)
@@ -186,8 +233,9 @@ def prepare(root, *, provision=False, runner=subprocess.run):
                 raise ValueError('PREVIOUS_PROVISIONING_INCOMPLETE_OPERATOR_REVIEW_REQUIRED')
             # A crash/failure never silently creates a second long-lived API key.
             write_private(marker, 'Provisioning started; inspect named Langflow gateway keys before retry.\n')
-            result = runner(compose_command() + ['exec', '-T', 'langflow', 'python', '/opt/oreumit/gateway-bootstrap.py', '--provision'],
-                            capture_output=True, timeout=180, check=False)
+            # Same reviewed host builder as the flow modes, never a stale bind mount.
+            result = runner(compose_command() + ['exec', '-T', 'langflow', 'python', '-', '--provision'],
+                            input=BOOTSTRAP.read_bytes(), capture_output=True, timeout=180, check=False)
             if result.returncode or len(result.stdout) > 16 * 1024:
                 raise ValueError(failure_code(result.stdout, 'GATEWAY_PROVISIONING_FAILED_OUTPUT_WITHHELD'))
             try:
@@ -215,15 +263,34 @@ if __name__ == '__main__':
     modes.add_argument('--update-flow', action='store_true', help='Pin the 8-call flow; no key or flow creation.')
     modes.add_argument('--rollback-flow', action='store_true', help='Pin the previous 4-call flow; no key or flow creation.')
     modes.add_argument('--check-flow', action='store_true', help='Read-only: stored flow is the 8-call build and is pinned.')
+    modes.add_argument('--flow-change-pending', action='store_true',
+                       help=f'Read-only: exit 0 if a flow switch is unfinished, {NOT_PENDING_EXIT} if not.')
+    modes.add_argument('--complete-flow-change', action='store_true',
+                       help='Clear the unfinished-switch marker after the Gateway is re-pinned and ready.')
     args = parser.parse_args()
+    switching = args.update_flow or args.rollback_flow
     try:
-        if args.update_flow or args.rollback_flow or args.check_flow:
+        if switching or args.check_flow:
             mode = 'update' if args.update_flow else 'rollback' if args.rollback_flow else 'check'
             print(json.dumps(flow(ROOT / '.local', mode)))
+        elif args.flow_change_pending or args.complete_flow_change:
+            result = flow_change(ROOT / '.local', 'pending' if args.flow_change_pending else 'complete')
+            print(json.dumps(result))
+            if args.flow_change_pending and not result['flowChangePending']:
+                raise SystemExit(NOT_PENDING_EXIT)
         else:
             print(json.dumps(prepare(ROOT / '.local', provision=args.provision)))
+    except SystemExit:
+        raise
     except Exception as error:
         code = str(error) if isinstance(error, ValueError) and re.fullmatch(r'[A-Z_]{1,90}', str(error)) else 'GATEWAY_PREPARATION_FAILED'
-        print(json.dumps({'status': 'failed', 'code': code,
-                          'details': 'Settings preserved. Review permissions or incomplete provisioning marker; no secret output.'}))
+        try:
+            unfinished = switching and pending_marker(ROOT / '.local')
+        except Exception:
+            unfinished = switching
+        details = ('The Langflow flow switch is unfinished; rerun deploy/apply-agent-call-budget.sh '
+                   '(or --rollback) to finish. No secret output.' if unfinished else
+                   'Settings preserved; this run did not change the Langflow flow. No secret output.' if switching else
+                   'Settings preserved. Review permissions or incomplete provisioning marker; no secret output.')
+        print(json.dumps({'status': 'failed', 'code': code, 'details': details}))
         raise SystemExit(1)
