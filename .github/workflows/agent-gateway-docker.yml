@@ -59,6 +59,21 @@ jobs:
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml restart agent-gateway
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml up -d --no-deps --wait --wait-timeout 60 agent-gateway
           docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml exec -T agent-gateway node /app/check.mjs --internal
+      - name: Switch the stored flow to 4 calls and back to 8 in place, with fake-model agent checks
+        run: |
+          compose="docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml"
+          $compose exec -T -e CI=true langflow python - --expect 8 < deploy/tests/check-gateway-call-budget.py
+          python3 deploy/prepare-gateway.py --check-flow
+          python3 deploy/prepare-gateway.py --rollback-flow
+          $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
+          $compose exec -T agent-gateway node /app/check.mjs --internal
+          $compose exec -T -e CI=true langflow python - --expect 4 < deploy/tests/check-gateway-call-budget.py
+          python3 deploy/prepare-gateway.py --update-flow
+          python3 deploy/prepare-gateway.py --update-flow
+          $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
+          $compose exec -T agent-gateway node /app/check.mjs --internal
+          python3 deploy/prepare-gateway.py --check-flow
+          $compose exec -T -e CI=true langflow python - --expect 8 < deploy/tests/check-gateway-call-budget.py
       - name: Record verification boundary
         if: always()
         run: echo 'Fictional catalog, no Google inference, no Cloudflare account or tunnel changes. AWS and external Access/Tunnel acceptance require separate execution.' >> "$GITHUB_STEP_SUMMARY"

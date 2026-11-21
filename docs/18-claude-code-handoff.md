@@ -16,6 +16,8 @@
 
 ## 0. 지금 이어받을 상태 (2026-11-19)
 
+**2026-11-21 최신 작업:** 운영 웹의 잦은 AI 결과 차단을 진단했다. 사용자 제공 Langflow DB 집계(수락 2·`VALIDATION_FAILED` 13, 모두 모델 4회)에서 실패 실행은 4회를 모두 도구 호출에 써서 최종 JSON 대신 한도 문장으로 끝났다. `claude/agent-step3-evaluation`에서 Gateway 흐름만 모델 8회·마지막 호출 답변 전용으로 바꾸고 교체·되돌리기 helper를 추가했다. 로컬 단위 테스트와 실제 lfx·LangChain 가짜 모델 검사는 통과했으며 AWS 적용과 실제 웹 결과는 미확인이다. [32 문서](32-agent-gateway-tunnel.md#모델-호출-예산-조정)를 따른다.
+
 **현재 우선 작업:** 분석 저장소는 기존 PR #19·`codex/gateway-candidate-recovery` 범위에 큐·호출 한도·후보 복구를 함께 반영한다. 실제 앱의 `codex/agent-queue` 작업은 한 번 제출→큐/실행 상태 표시→최종 결과 수신을 연결한다. AWS 적용은 `deploy/apply-agent-queue.sh`로 두 이미지 빌드 뒤 MCP scope 0·Gateway queued/running/uncertain 0을 확인하고 MCP·Gateway만 갱신한다. 구버전 Gateway는 schema v1 SQLite를 읽기 전용으로 검사하며 누락·읽기 실패면 중단한다. 실제 AWS 적용과 모델 병렬 성능은 별도 확인 대상으로 남긴다. 기존 Langflow bootstrap·Vertex 단건 검사를 반복하거나 완료된 평가 96문항을 재수집하지 않는다.
 
 **추가 운영 확인:** 앱 PR #34·#35는 사용자 병합으로 `main@840baa177ef25b1d97f1f030ed2929d05280eef3`에 반영됐고 Production 배포 `dpl_CPuN5ABqAyaBkHj7p798eKtb7q5C`는 READY다. 운영 `jeju-tour-six.vercel.app` 상태 API가 `enabled:true,configured:true`를 반환했으며, 실제 브라우저에서 설문 저장→새로고침→불러오기로 답변과 Q02 단계 복원을 확인했다. 해당 점검 브라우저는 비로그인이어서 모델 POST는 실행하지 않았다. 이후 사용자가 실제 AI 결과 차단 문구를 알려 후보 표시 완화 작업으로 진행했다. 아래 과거 PR 상태보다 이 최신 기록을 우선한다.

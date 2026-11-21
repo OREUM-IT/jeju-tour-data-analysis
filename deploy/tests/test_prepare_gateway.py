@@ -227,6 +227,126 @@ class GatewaySettingsTest(unittest.TestCase):
                 self.assertEqual(before, self.snapshot(root))
                 self.assertTrue((root / '.gateway-provisioning').exists())
 
+    def ready_root(self, name=None):
+        root = self.new_root(name) if name else self.root
+        self.quiet(root)
+        runner = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.result()).encode(), b''))
+        self.assertEqual(self.quiet(root, provision=True, runner=runner)['stage'], 'ready')
+        return root
+
+    @staticmethod
+    def migration(**overrides):
+        return {'status': 'passed', 'flowStatus': 'updated', 'flowId': FLOW_ID, 'flowSha256': 'c' * 64,
+                'modelCallLimit': 8, 'modelExecuted': False, 'productionReady': False, **overrides}
+
+    @staticmethod
+    def checked(**overrides):
+        return {'status': 'passed', 'flowMatches': True, 'nodeCount': 6, 'edgeCount': 7, 'toolCount': 3,
+                'modelCallLimit': 8, 'flowSha256': FLOW_HASH, 'modelExecuted': False, 'productionReady': False,
+                **overrides}
+
+    def quiet_flow(self, mode, runner, root=None):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            result = setup.flow(root or self.root, mode, runner=runner)
+        self.assertEqual(output.getvalue(), '')
+        return result
+
+    def test_flow_update_streams_reviewed_script_and_changes_only_the_pinned_hash(self):
+        self.ready_root()
+        before = self.snapshot(self.root)
+        ready = setup.settings.read_env(self.root / 'gateway.env', private_mode=True)
+        def run(command, **kwargs):
+            self.assertEqual(command[:3], ['docker', 'compose', '-p'])
+            self.assertEqual(command[-6:], ['exec', '-T', 'langflow', 'python', '-', '--update'])
+            self.assertEqual(kwargs, {'input': setup.BOOTSTRAP.read_bytes(), 'capture_output': True,
+                                      'timeout': 180, 'check': False})
+            for value in ready.values():
+                if len(value) >= 32:
+                    self.assertNotIn(value, json.dumps(command))
+            return subprocess.CompletedProcess(command, 0, json.dumps(self.migration()).encode(), b'')
+        runner = Mock(side_effect=run)
+        result = self.quiet_flow('update', runner)
+        self.assertEqual(result, {'status': 'passed', 'scope': 'gateway-flow-updated', 'flowStatus': 'updated',
+                                  'modelCallLimit': 8, 'settingsChanged': True,
+                                  'modelExecuted': False, 'productionReady': False})
+        self.assertEqual(runner.call_count, 1)
+        updated = setup.settings.read_env(self.root / 'gateway.env', private_mode=True)
+        self.assertEqual(updated, {**ready, 'LANGFLOW_GATEWAY_FLOW_SHA256': 'c' * 64})
+        self.assertEqual((self.root / 'gateway.env').stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.root / 'gateway.env').stat().st_nlink, 1)
+        self.assertEqual(before['gateway-control.env'], self.snapshot(self.root)['gateway-control.env'])
+        self.assertNotIn(API_KEY, json.dumps(result))
+        settled = self.snapshot(self.root)
+        current = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.migration(flowStatus='already-current')).encode(), b''))
+        self.assertFalse(self.quiet_flow('update', current)['settingsChanged'])
+        self.assertEqual(settled, self.snapshot(self.root))
+
+    def test_flow_rollback_and_check_use_their_own_limits_and_check_never_writes(self):
+        self.ready_root()
+        rollback = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.migration(modelCallLimit=4, flowSha256='d' * 64)).encode(), b''))
+        result = self.quiet_flow('rollback', rollback)
+        self.assertEqual((result['scope'], result['modelCallLimit'], result['settingsChanged']),
+                         ('gateway-flow-rolled-back', 4, True))
+        self.assertEqual(rollback.call_args.args[0][-1], '--rollback')
+        self.assertEqual(setup.settings.read_env(self.root / 'gateway.env')['LANGFLOW_GATEWAY_FLOW_SHA256'], 'd' * 64)
+        before = self.snapshot(self.root)
+        check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked(flowSha256='d' * 64)).encode(), b''))
+        self.assertEqual(self.quiet_flow('check', check),
+                         {'status': 'passed', 'scope': 'gateway-flow-checked', 'modelCallLimit': 8,
+                          'settingsChanged': False, 'modelExecuted': False, 'productionReady': False})
+        self.assertEqual(check.call_args.args[0][-1], '--check')
+        stale = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked()).encode(), b''))
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_PIN_MISMATCH$'):
+            self.quiet_flow('check', stale)
+        self.assertEqual(before, self.snapshot(self.root))
+
+    def test_flow_modes_require_ready_settings_and_never_run_before_provisioning(self):
+        runner = Mock(side_effect=AssertionError('no flow change before provisioning'))
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_INIT_REQUIRED$'):
+            self.quiet_flow('update', runner)
+        self.quiet()
+        for mode in ('update', 'rollback', 'check'):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, '^GATEWAY_PROVISIONING_REQUIRED$'):
+                self.quiet_flow(mode, runner)
+        root = self.ready_root('marker')
+        setup.write_private(root / '.gateway-provisioning', 'incomplete\n')
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_PROVISIONING_REQUIRED$'):
+            self.quiet_flow('update', runner, root)
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_MODE_INVALID$'):
+            self.quiet_flow('provision', runner)
+        runner.assert_not_called()
+
+    def test_flow_failures_keep_settings_and_expose_only_fixed_codes(self):
+        self.ready_root()
+        before = self.snapshot(self.root)
+        cases = [
+            (1, json.dumps({'status': 'failed', 'code': 'GATEWAY_EXISTING_FLOW_DIFFERS'}).encode(), '^GATEWAY_EXISTING_FLOW_DIFFERS$'),
+            (1, API_KEY.encode(), '^GATEWAY_FLOW_CHANGE_FAILED_OUTPUT_WITHHELD$'),
+            (0, b'x' * (16 * 1024 + 1), '^GATEWAY_FLOW_CHANGE_FAILED_OUTPUT_WITHHELD$'),
+        ]
+        invalid = [self.migration(flowId='87654321-1234-4abc-8def-123456789abc'), self.migration(extra=API_KEY),
+                   self.migration(modelExecuted=True), self.migration(productionReady=True),
+                   self.migration(modelCallLimit=4), self.migration(flowSha256='C' * 64),
+                   self.migration(flowStatus='created'), self.migration(status='failed'), [], None]
+        cases += [(0, json.dumps(value).encode(), '^GATEWAY_FLOW_RESULT_INVALID$') for value in invalid]
+        cases += [(0, b'not-json', '^GATEWAY_FLOW_RESULT_INVALID$')]
+        for index, (code, stdout, expected) in enumerate(cases):
+            with self.subTest(index=index):
+                runner = Mock(return_value=subprocess.CompletedProcess([], code, stdout, API_KEY.encode()))
+                with self.assertRaisesRegex(ValueError, expected) as error:
+                    self.quiet_flow('update', runner)
+                self.assertNotIn(API_KEY, str(error.exception))
+                self.assertEqual(before, self.snapshot(self.root))
+        for value in (self.checked(flowMatches=False), self.checked(modelCallLimit=4), {**self.checked(), 'flowId': FLOW_ID}):
+            with self.subTest(check=value):
+                runner = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b''))
+                with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
+                    self.quiet_flow('check', runner)
+        self.assertEqual(before, self.snapshot(self.root))
+
     def test_failed_pair_publication_rolls_back_only_its_own_files(self):
         original_link = os.link
         def fail_second(source, destination, **kwargs):
