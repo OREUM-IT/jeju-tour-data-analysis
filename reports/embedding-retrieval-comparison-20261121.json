@@ -1,0 +1,214 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-embedding-retrieval-comparison",
+  "resultType": "rule_gold_retrieval_proxy_not_user_relevance",
+  "placeTextVersion": "place-text-v1",
+  "catalogSha256": "85152b5015f43e92da4860438a1e711a698d91ef071b3716d81871dd2d06314c",
+  "goldSha256": "b982194547edc386b1bfb5d9588cbe607dc99fbf960072b9b20221904f21217d",
+  "places": 981,
+  "items": 96,
+  "itemsWithRelevantPlaces": 87,
+  "query": "template",
+  "metrics": {
+    "k": 10,
+    "recallDepth": 50,
+    "relevance": "binary gold.relevantIds"
+  },
+  "settings": {
+    "open": "rank all catalog places",
+    "filtered": "rank inside the closed-template candidate set (zone/theme/category/exclusions)"
+  },
+  "runtime": {
+    "node": "v22.23.5",
+    "library": "@huggingface/transformers 4.3.2",
+    "device": "cpu"
+  },
+  "systems": [
+    {
+      "system": "bm25-bigram",
+      "kind": "lexical",
+      "open": {
+        "items": 87,
+        "precisionAtK": 0.2701,
+        "ndcgAtK": 0.3103,
+        "mrr": 0.3949,
+        "recallAtDepth": 0.5378
+      },
+      "filtered": {
+        "items": 87,
+        "precisionAtK": 0.6414,
+        "ndcgAtK": 0.7989,
+        "mrr": 0.794,
+        "recallAtDepth": 0.8374
+      }
+    },
+    {
+      "system": "multilingual-e5-small",
+      "kind": "embedding",
+      "repo": "Xenova/multilingual-e5-small",
+      "dtype": "q8",
+      "pooling": "mean",
+      "license": "mit",
+      "dimensions": 384,
+      "timing": {
+        "loadMs": 1094,
+        "documentsMs": 2682,
+        "queryMeanMs": 3
+      },
+      "open": {
+        "items": 87,
+        "precisionAtK": 0.377,
+        "ndcgAtK": 0.4651,
+        "mrr": 0.5494,
+        "recallAtDepth": 0.6359
+      },
+      "filtered": {
+        "items": 87,
+        "precisionAtK": 0.6575,
+        "ndcgAtK": 0.8428,
+        "mrr": 0.8649,
+        "recallAtDepth": 0.842
+      }
+    },
+    {
+      "system": "multilingual-e5-base",
+      "kind": "embedding",
+      "repo": "Xenova/multilingual-e5-base",
+      "dtype": "q8",
+      "pooling": "mean",
+      "license": "mit",
+      "dimensions": 768,
+      "timing": {
+        "loadMs": 5619,
+        "documentsMs": 4994,
+        "queryMeanMs": 6
+      },
+      "open": {
+        "items": 87,
+        "precisionAtK": 0.3471,
+        "ndcgAtK": 0.3941,
+        "mrr": 0.4937,
+        "recallAtDepth": 0.5457
+      },
+      "filtered": {
+        "items": 87,
+        "precisionAtK": 0.6345,
+        "ndcgAtK": 0.8051,
+        "mrr": 0.823,
+        "recallAtDepth": 0.827
+      }
+    },
+    {
+      "system": "multilingual-e5-large",
+      "kind": "embedding",
+      "repo": "Xenova/multilingual-e5-large",
+      "dtype": "q8",
+      "pooling": "mean",
+      "license": "mit",
+      "dimensions": 1024,
+      "timing": {
+        "loadMs": 13402,
+        "documentsMs": 16624,
+        "queryMeanMs": 18
+      },
+      "open": {
+        "items": 87,
+        "precisionAtK": 0.508,
+        "ndcgAtK": 0.582,
+        "mrr": 0.6575,
+        "recallAtDepth": 0.7378
+      },
+      "filtered": {
+        "items": 87,
+        "precisionAtK": 0.6621,
+        "ndcgAtK": 0.8476,
+        "mrr": 0.8761,
+        "recallAtDepth": 0.8589
+      }
+    },
+    {
+      "system": "bge-m3",
+      "kind": "embedding",
+      "repo": "Xenova/bge-m3",
+      "dtype": "q8",
+      "pooling": "cls",
+      "license": "mit",
+      "dimensions": 1024,
+      "timing": {
+        "loadMs": 14193,
+        "documentsMs": 10262,
+        "queryMeanMs": 17
+      },
+      "open": {
+        "items": 87,
+        "precisionAtK": 0.4782,
+        "ndcgAtK": 0.5783,
+        "mrr": 0.6893,
+        "recallAtDepth": 0.6987
+      },
+      "filtered": {
+        "items": 87,
+        "precisionAtK": 0.6644,
+        "ndcgAtK": 0.8418,
+        "mrr": 0.8549,
+        "recallAtDepth": 0.8458
+      }
+    },
+    {
+      "system": "snowflake-arctic-embed-l-v2.0",
+      "kind": "embedding",
+      "repo": "Snowflake/snowflake-arctic-embed-l-v2.0",
+      "dtype": "q8",
+      "pooling": "cls",
+      "license": "apache-2.0",
+      "dimensions": 1024,
+      "timing": {
+        "loadMs": 13832,
+        "documentsMs": 12503,
+        "queryMeanMs": 21
+      },
+      "open": {
+        "items": 87,
+        "precisionAtK": 0.4954,
+        "ndcgAtK": 0.5985,
+        "mrr": 0.6765,
+        "recallAtDepth": 0.7536
+      },
+      "filtered": {
+        "items": 87,
+        "precisionAtK": 0.6701,
+        "ndcgAtK": 0.8506,
+        "mrr": 0.8704,
+        "recallAtDepth": 0.8555
+      }
+    },
+    {
+      "system": "qwen3-embedding-0.6b",
+      "kind": "embedding",
+      "repo": "onnx-community/Qwen3-Embedding-0.6B-ONNX",
+      "dtype": "q8",
+      "pooling": "last_token",
+      "license": "apache-2.0",
+      "dimensions": 1024,
+      "timing": {
+        "loadMs": 11922,
+        "documentsMs": 97860,
+        "queryMeanMs": 172
+      },
+      "open": {
+        "items": 87,
+        "precisionAtK": 0.292,
+        "ndcgAtK": 0.3487,
+        "mrr": 0.4692,
+        "recallAtDepth": 0.5497
+      },
+      "filtered": {
+        "items": 87,
+        "precisionAtK": 0.631,
+        "ndcgAtK": 0.7977,
+        "mrr": 0.8199,
+        "recallAtDepth": 0.8384
+      }
+    }
+  ]
+}

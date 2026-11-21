@@ -3,7 +3,9 @@ import { canonicalSha256 } from './evaluation-rng.mjs';
 import { EvaluationSetError } from './evaluation-set.mjs';
 import { validateResponse } from './evaluation-scoring.mjs';
 import { z } from 'zod';
-import { VALIDATED_BASELINE_ADAPTER_VERSION } from './validated-capture-binding.mjs';
+import { LOCAL_LLM_ADAPTER_VERSION, VALIDATED_BASELINE_ADAPTER_VERSION } from './validated-capture-binding.mjs';
+
+export { LOCAL_LLM_ADAPTER_VERSION };
 
 export const BASELINE_ADAPTER_VERSION = '1.0.0';
 export const MANUAL_REVIEW_RUBRIC_VERSION = 'manual-v1';
@@ -163,6 +165,30 @@ export function adaptValidatedLangflowResponse({ itemId, raw, outputSelector, re
     normalization: { adapter: 'langflow', adapterVersion: VALIDATED_BASELINE_ADAPTER_VERSION,
       mode: 'structured', rawOutputHash: baselineRawOutputHash(raw), outputSelector: { ...outputSelector },
       review: null, requestMode: 'langflow-v2', runtimeRequestId: requestId },
+  };
+}
+
+/**
+ * Local open-model pipeline output (services/hf-eval). The raw capture holds the model's exact text; the harness only
+ * adds the schemaVersion/requestId envelope. Only outputs accepted by the runtime final validation are importable,
+ * and the decision fields are parsed unchanged: no review override, no ID or claim repair.
+ */
+export function adaptLocalLlmResponse({ itemId, raw, review, measurements, requestId } = {}) {
+  ensure(review === undefined, 'local LLM output cannot carry a review override');
+  ensure(text(requestId), 'local LLM import requires the original runtime requestId');
+  ensure(isRecord(raw) && raw.kind === 'jeju-local-llm-output' && typeof raw.output === 'string' && text(raw.model),
+    'local LLM import requires a jeju-local-llm-output capture');
+  ensure(isRecord(raw.gate) && raw.gate.status === 'accepted', 'local LLM output was not accepted by the final validation');
+  let parsed;
+  try { parsed = JSON.parse(raw.output); } catch { throw new EvaluationSetError('local LLM output is not exact JSON'); }
+  ensure(isRecord(parsed) && parsed.schemaVersion === undefined && parsed.requestId === undefined, 'local LLM output must not supply its own envelope');
+  const result = validatedResponseSchema.safeParse({ schemaVersion: '1.0', requestId, ...parsed });
+  ensure(result.success, 'local LLM output violates the validated response schema');
+  return {
+    response: normalizeResponse(itemId, result.data, measurements),
+    normalization: { adapter: 'local-llm', adapterVersion: LOCAL_LLM_ADAPTER_VERSION, mode: 'structured',
+      rawOutputHash: baselineRawOutputHash(raw), review: null, requestMode: 'langflow-v2', runtimeRequestId: requestId,
+      reportedModel: raw.model },
   };
 }
 
