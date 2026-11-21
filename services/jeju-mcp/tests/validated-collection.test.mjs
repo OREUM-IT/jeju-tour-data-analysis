@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import http from 'node:http';
+import { once } from 'node:events';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { collectBaselineCapture } from '../src/baseline-runner.mjs';
+import { collectBaselineCapture, loopbackHttpFetch } from '../src/baseline-runner.mjs';
 import { createBaselinePlan, scoreBaselineRun } from '../src/baseline-evaluation.mjs';
 import { canonicalSha256 } from '../src/evaluation-rng.mjs';
-import { adaptValidatedLangflowResponse } from '../src/baseline-adapters.mjs';
+import { adaptValidatedLangflowResponse, BASELINE_ADAPTER_VERSION } from '../src/baseline-adapters.mjs';
 import { VALIDATED_BASELINE_ADAPTER_VERSION } from '../src/validated-capture-binding.mjs';
 import { importCapture } from '../scripts/evaluate-baselines.mjs';
 import { main, parseArguments } from '../scripts/collect-baseline-responses.mjs';
@@ -177,4 +179,155 @@ test('CLI opts into v2, stores its binding, and rejects v2 for Gemini', async (t
   assert.equal(capture.system.adapterVersion, VALIDATED_BASELINE_ADAPTER_VERSION);
   assert.equal(capture.requestBinding.requestMode, 'langflow-v2');
   assert.ok(!logs.join('').includes(capture.records[0].runtimeRequest.requestId));
+});
+
+test('local-model timeout raises only the ceiling, for v2 Langflow on 127.0.0.1, before any request', async () => {
+  let calls = 0;
+  const counted = async (url, options) => { calls++; return goodFetch(url, options); };
+  await assert.rejects(collect({ timeoutMs: 120_001, fetchImpl: counted }), /timeoutMs must be 1\.\.120000$/);
+  await assert.rejects(collect({ localModelTimeout: true, timeoutMs: 1_200_001, fetchImpl: counted }), /timeoutMs must be 1\.\.1200000$/);
+  await assert.rejects(collect({ localModelTimeout: 'true', timeoutMs: 600_000, fetchImpl: counted }), /localModelTimeout must be a boolean/);
+  const legacyLangflow = { system: { ...system, adapterVersion: BASELINE_ADAPTER_VERSION }, requestMode: 'legacy' };
+  const gemini = { system: { ...system, id: 'gemini', adapterVersion: BASELINE_ADAPTER_VERSION }, requestMode: 'legacy',
+    outputSelector: undefined, endpoint: 'http://127.0.0.1:7860/api/assistant' };
+  // Endpoints the default rules already accept; other plain-HTTP hosts are refused by the existing endpoint rule.
+  for (const overrides of [legacyLangflow, gemini, ...['http://localhost:7860', 'http://[::1]:7860', 'http://127.0.0.1',
+    'https://127.0.0.1:7860', 'https://langflow.example.com'].map((origin) => ({ endpoint: `${origin}/api/v1/run/fixture-v2?stream=false` }))]) {
+    await assert.rejects(collect({ localModelTimeout: true, timeoutMs: 600_000, fetchImpl: counted, ...overrides }),
+      /localModelTimeout requires Langflow v2 mode and an http:\/\/127\.0\.0\.1:<port> endpoint/);
+  }
+  await assert.rejects(loopbackHttpFetch('http://localhost:7860/api/v1/run/fixture-v2?stream=false', { method: 'POST' }), TypeError);
+  assert.equal(calls, 0);
+  const result = await collect({ localModelTimeout: true, timeoutMs: 1_200_000, fetchImpl: counted });
+  assert.equal(calls, 1);
+  assert.ok(result.capture.records[0].raw);
+  assert.equal(result.telemetry.timeoutMs, 1_200_000);
+  assert.equal(result.telemetry.localModelTimeout, true);
+  assert.equal(Object.hasOwn(result.capture, 'localModelTimeout'), false);
+  const plain = await collect({ fetchImpl: counted });
+  assert.equal(plain.telemetry.timeoutMs, 60_000);
+  assert.equal(Object.hasOwn(plain.telemetry, 'localModelTimeout'), false);
+});
+
+test('local-model timeout is bound on resume, and default captures resume as before only without it', async () => {
+  const flagged = await collect({ localModelTimeout: true, timeoutMs: 600_000 });
+  const resumed = await collect({ localModelTimeout: true, timeoutMs: 600_000, resumeCapture: flagged.capture, resumeTelemetry: flagged.telemetry });
+  assert.deepEqual(resumed.capture.records[0], flagged.capture.records[0]);
+  assert.equal(resumed.telemetry.attemptedCases, 2);
+  assert.equal(resumed.telemetry.localModelTimeout, true);
+  assert.equal(resumed.telemetry.timeoutMs, 600_000);
+  // Existing behaviour: a default run may still resume with another timeout inside the default ceiling.
+  const plain = await collect({ timeoutMs: 60_000 });
+  const plainResumed = await collect({ timeoutMs: 120_000, resumeCapture: plain.capture, resumeTelemetry: plain.telemetry });
+  assert.equal(plainResumed.telemetry.attemptedCases, 2);
+  assert.equal(plainResumed.telemetry.timeoutMs, 120_000);
+  assert.equal(Object.hasOwn(plainResumed.telemetry, 'localModelTimeout'), false);
+  const claimed = (localModelTimeout) => ({ capture: plain.capture, telemetry: { ...plain.telemetry, localModelTimeout } });
+  for (const [options, prior] of [
+    [{}, flagged], [{ timeoutMs: 120_000 }, flagged],
+    [{ localModelTimeout: true, timeoutMs: 600_000 }, plain], [{ localModelTimeout: true, timeoutMs: 60_000 }, plain],
+    [{ localModelTimeout: true, timeoutMs: 900_000 }, flagged], [{ localModelTimeout: true, timeoutMs: 120_000 }, flagged],
+    [{}, claimed(false)], [{ localModelTimeout: true, timeoutMs: 60_000 }, claimed(false)], [{}, claimed(true)],
+  ]) {
+    let calls = 0;
+    await assert.rejects(collect({ ...options, resumeCapture: prior.capture, resumeTelemetry: prior.telemetry,
+      fetchImpl: async () => { calls++; return json({}); } }), /resume local-model timeout setting changed/);
+    assert.equal(calls, 0);
+  }
+});
+
+test('local-model timeout defaults to the loopback node:http transport and keeps fetch outcome classification', async (t) => {
+  const seen = [];
+  const arrivals = {};
+  let stalled;
+  const server = http.createServer(async (req, res) => {
+    const flow = new URL(req.url, 'http://127.0.0.1').pathname.split('/').at(-1);
+    arrivals[flow] = (arrivals[flow] ?? 0) + 1;
+    if (flow === 'stall') stalled = new Promise((resolve) => res.once('close', () => resolve(!res.writableFinished)));
+    let body = '';
+    try { for await (const chunk of req) body += chunk; } catch { return; }
+    seen.push({ flow, method: req.method, headers: req.headers, body });
+    if (flow === 'stall') return;
+    if (flow === 'partial') { res.writeHead(200, { 'content-type': 'application/json' }); res.write('{'); return; }
+    if (flow === 'status204') { res.writeHead(204); res.end(); return; }
+    if (flow === 'redirect') { res.writeHead(307, { location: '/api/v1/run/ok?stream=false' }); res.end('moved'); return; }
+    if (flow === 'failure') { res.writeHead(503, { 'content-type': 'text/plain' }); res.end('synthetic outage'); return; }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(output(accepted(JSON.parse(JSON.parse(body).input_value).requestId))));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const endpoint = (flow) => `http://127.0.0.1:${server.address().port}/api/v1/run/${flow}?stream=false`;
+  const builtIn = globalThis.fetch;
+  let builtInCalls = 0;
+  globalThis.fetch = (...input) => { builtInCalls++; return builtIn(...input); };
+  t.after(() => { globalThis.fetch = builtIn; });
+  const local = (flow, extra = {}) => collect({ endpoint: endpoint(flow), headers: { 'x-api-key': 'synthetic-local-key' },
+    localModelTimeout: true, timeoutMs: 600_000, fetchImpl: undefined, ...extra });
+  const result = await local('ok');
+  assert.equal(builtInCalls, 0);
+  assert.ok(result.capture.records[0].raw);
+  assert.equal(result.telemetry.events[0].outcome, 'completed');
+  assert.equal(result.telemetry.events[0].httpStatus, 200);
+  assert.equal(seen[0].method, 'POST');
+  assert.equal(seen[0].headers['x-api-key'], 'synthetic-local-key');
+  assert.equal(seen[0].headers['content-type'], 'application/json');
+  assert.equal(seen[0].headers['accept-encoding'], 'identity');
+  assert.equal(Number(seen[0].headers['content-length']), Buffer.byteLength(seen[0].body));
+  assert.equal(JSON.parse(JSON.parse(seen[0].body).input_value).requestId, result.capture.records[0].runtimeRequest.requestId);
+  // The same server outcomes classify identically through the transport and the built-in fetch used without the flag.
+  for (const [flow, outcome, httpStatus] of [['ok', 'completed', 200], ['status204', 'missing_response_body', 204],
+    ['redirect', 'redirect_blocked', 307], ['failure', 'http_error', 503]]) {
+    for (const run of [() => local(flow), () => collect({ endpoint: endpoint(flow), fetchImpl: undefined })]) {
+      const { telemetry } = await run();
+      assert.deepEqual([telemetry.events[0].outcome, telemetry.events[0].httpStatus], [outcome, httpStatus]);
+    }
+  }
+  assert.equal(builtInCalls, 4);
+  // Exact per-flow counts also show that neither transport followed the 307 to the "ok" flow.
+  assert.deepEqual(arrivals, { ok: 3, status204: 2, redirect: 2, failure: 2 });
+  // Its own timeout still applies and closes the stalled local request without a retry.
+  const timedOut = await local('stall', { timeoutMs: 50, maxCases: 2 });
+  assert.equal(timedOut.telemetry.events[0].outcome, 'timeout');
+  assert.equal(timedOut.capture.records[0].error.code, 'timeout');
+  assert.equal(timedOut.capture.records[1].error.code, 'not_executed');
+  assert.equal(await stalled, true);
+  // A body that stalls after its first byte also ends as the runner's timeout through either transport.
+  for (const run of [() => local('partial', { timeoutMs: 50 }), () => collect({ endpoint: endpoint('partial'), timeoutMs: 50, fetchImpl: undefined })]) {
+    const { capture, telemetry } = await run();
+    assert.equal(capture.records[0].error.code, 'timeout');
+    assert.deepEqual([telemetry.events[0].outcome, telemetry.events[0].httpStatus, telemetry.events[0].responseBytes], ['timeout', 200, 1]);
+  }
+  assert.deepEqual(arrivals, { ok: 3, status204: 2, redirect: 2, failure: 2, stall: 1, partial: 2 });
+  assert.equal(builtInCalls, 5);
+});
+
+test('CLI records --local-model-timeout and refuses a resume that changes the flag or its timeout before any request', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'jeju-v2-local-timeout-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const local = path.join(root, '.local'); await mkdir(local);
+  const file = (name) => path.join(local, `${name}.json`);
+  for (const [key, value] of [['catalog', inputs.catalog], ['set', inputs.set], ['plan', plan]]) await writeFile(file(key), JSON.stringify(value));
+  const args = (output, ...extra) => ['--execute', '--catalog', file('catalog'), '--set', file('set'), '--plan', file('plan'),
+    '--system', 'langflow', '--request-mode', 'langflow-v2', '--model', system.modelId, '--prompt-version', system.promptVersion,
+    '--tool-version', system.toolVersion, '--endpoint', defaults.endpoint, '--output-index', '0', '--component-id', selector.componentId,
+    '--output', file(`${output}-capture`), '--telemetry', file(`${output}-telemetry`), ...extra];
+  let calls = 0;
+  const runtime = { env: { LANGFLOW_API_KEY: 'synthetic' }, log: () => {}, fetchImpl: async (url, options) => { calls++; return goodFetch(url, options); } };
+  const first = await main(args('first', '--local-model-timeout', '--timeout-ms', '600000'), runtime);
+  assert.equal(first.successfulResponses, 1);
+  const telemetry = JSON.parse(await readFile(file('first-telemetry'), 'utf8'));
+  assert.equal(telemetry.localModelTimeout, true);
+  assert.equal(telemetry.timeoutMs, 600000);
+  const resume = ['--resume-capture', file('first-capture'), '--resume-telemetry', file('first-telemetry')];
+  for (const [name, extra] of [['dropped', []], ['default-ceiling', ['--timeout-ms', '120000']], ['changed', ['--local-model-timeout', '--timeout-ms', '900000']]]) {
+    await assert.rejects(main(args(name, ...resume, ...extra), runtime), /resume local-model timeout setting changed/);
+    for (const suffix of ['capture', 'telemetry']) assert.equal(await stat(file(`${name}-${suffix}`)).then(() => true, () => false), false);
+  }
+  assert.equal(calls, 1);
+  const next = await main(args('next', ...resume, '--local-model-timeout', '--timeout-ms', '600000'), runtime);
+  assert.equal(next.attemptedCases, 2);
+  assert.equal(next.newAttemptedCases, 1);
+  assert.equal(calls, 2);
 });

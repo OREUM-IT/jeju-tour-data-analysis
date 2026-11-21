@@ -57,6 +57,40 @@ test('live CLI is opt-in with one-case default and rejects ambiguous or unbounde
   assert.throws(() => parseArguments(args(p, 'langflow').slice(0, -4)), /requires/);
 });
 
+test('--local-model-timeout raises only the timeout ceiling, for explicit v2 Langflow on 127.0.0.1 only', () => {
+  const p = { catalog: 'a', set: 'b', plan: 'c', capture: 'd', telemetry: 'e' };
+  const loopback = 'http://127.0.0.1:7860/api/v1/run/fixture?stream=false';
+  const v2 = (endpoint = loopback) => [...args(p, 'langflow', endpoint), '--request-mode', 'langflow-v2'];
+  const flag = '--local-model-timeout';
+  // Without the flag, v2 on 127.0.0.1 keeps the 60000 default and the 120000 ceiling.
+  assert.equal(parseArguments(v2()).timeoutMs, 60000);
+  assert.equal(parseArguments(v2())['local-model-timeout'], undefined);
+  assert.equal(parseArguments([...v2(), '--timeout-ms', '120000']).timeoutMs, 120000);
+  assert.throws(() => parseArguments([...v2(), '--timeout-ms', '120001']), /^Error: --timeout-ms must be an integer from 1 to 120000\.$/);
+  // The flag changes neither the default nor the floor; it accepts up to 1200000 in either argument order.
+  assert.equal(parseArguments([...v2(), flag]).timeoutMs, 60000);
+  assert.equal(parseArguments([...v2(), flag])['local-model-timeout'], true);
+  assert.equal(parseArguments([...v2(), flag, '--timeout-ms', '120001']).timeoutMs, 120001);
+  assert.equal(parseArguments([...v2(), '--timeout-ms', '1200000', flag]).timeoutMs, 1200000);
+  for (const value of ['1200001', '0', '600000.5']) {
+    assert.throws(() => parseArguments([...v2(), flag, '--timeout-ms', value]), /^Error: --timeout-ms must be an integer from 1 to 1200000\.$/);
+  }
+  assert.throws(() => parseArguments([...v2(), flag, flag]), /repeated/);
+  assert.throws(() => parseArguments([...v2(), flag, 'true']), /Unknown/);
+  for (const other of [args(p), args(p, 'langflow', loopback), [...args(p, 'langflow', loopback), '--request-mode', 'legacy']]) {
+    assert.throws(() => parseArguments([...other, flag, '--timeout-ms', '600000']),
+      /^Error: --local-model-timeout is only supported for Langflow with --request-mode langflow-v2\.$/);
+  }
+  for (const endpoint of ['http://localhost:7860/api/v1/run/fixture?stream=false', 'http://LOCALHOST:7860/api/v1/run/fixture?stream=false',
+    'http://[::1]:7860/api/v1/run/fixture?stream=false', 'http://127.0.0.2:7860/api/v1/run/fixture?stream=false',
+    'http://127.0.0.1.nip.io:7860/api/v1/run/fixture?stream=false', 'http://127.0.0.1/api/v1/run/fixture?stream=false',
+    'https://127.0.0.1:7860/api/v1/run/fixture?stream=false', 'https://langflow.example.com/api/v1/run/fixture?stream=false',
+    'http://example.com:7860/api/v1/run/fixture?stream=false', 'not-a-url']) {
+    assert.throws(() => parseArguments([...v2(endpoint), flag, '--timeout-ms', '600000']),
+      /^Error: --local-model-timeout requires an --endpoint origin of exactly http:\/\/127\.0\.0\.1:<port>\.$/);
+  }
+});
+
 test('live CLI executes one loopback Gemini case, reserves private files and preserves full coverage', async (t) => {
   const p = await files(t);
   const requests = [];
