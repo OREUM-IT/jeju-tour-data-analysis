@@ -43,7 +43,16 @@
 - `services/langflow/local_ollama_bootstrap.py`: PC 한 대에서 Langflow·MCP·Ollama를 확인하고 흐름을 가져온다. [AWS bootstrap](../deploy/langflow/bootstrap.py)과 같은 원칙을 따르며 하는 일은 다음과 같다.
   - 익명 접근과 자동 로그인을 거부하고, Langflow 1.13.3을 요구한다.
   - MCP v2 준비 상태(981곳)를 확인하고, Ollama 태그와 도구 지원(`tools` capability)을 확인한다.
-  - `JEJU_MCP_TOKEN` Credential을 만들고, `jeju-mcp-v2` 서버를 등록하고, 흐름을 가져온 뒤 저장 내용이 파일과 같은지 비교한다.
+  - `JEJU_MCP_TOKEN` Credential을 만들고 `jeju-mcp-v2` 서버를 등록한다. 이미 있으면 그대로 둔다.
+  - **Langflow 쪽 MCP 확인:** Langflow는 Credential 값과 등록 헤더 값을 가려서 돌려주므로 앞 단계는 항목이 있는지만 안다. 이 확인이 없으면 오래된 토큰이 남아 있어도 `passed`가 나오고, 모든 문항이 요청 준비 단계(`REQUEST_PREPARATION_FAILED`)에서 실패한다.
+    - 흐름을 가져오기 전에 Langflow의 MCPTools 구성 요소로 도구 목록을 두 번 받는다. 한 번은 저장된 Credential을 헤더(`Bearer {{JEJU_MCP_TOKEN}}`)로 강제하고, 한 번은 흐름 실행 때처럼 등록된 헤더만 쓴다.
+    - 두 번 모두 `constraints.check`·`places.get`·`places.search` 3개가 정확히 나와야 하며, 통과하면 출력에 `mcpProbe: passed`가 붙는다. 모델과 흐름은 실행하지 않고 아무것도 저장하지 않는다.
+    - 실패하면 흐름을 가져오지 않고 API 키도 만들지 않는다. 기존 Credential·등록·흐름도 바꾸지 않으므로 원인을 고친 뒤 다시 실행한다. 실패 코드는 다음과 같다.
+      - `LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED`: 저장된 `JEJU_MCP_TOKEN`으로 목록을 받지 못했다. 저장된 토큰이 지금 MCP 토큰과 다르거나(예: `.env.local`을 다시 만든 경우), `langflow.env`에 `LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1`이 없거나, 프록시가 있는 PC에서 `NO_PROXY`가 빠져 Langflow가 MCP에 닿지 못한 경우다.
+      - `LANGFLOW_MCP_REGISTRATION_PROBE_FAILED`: 저장된 토큰은 맞지만 등록된 헤더가 다른 토큰이나 변수를 쓴다.
+      - `MCP_TOOL_SET_MISMATCH`: 받은 도구가 3개와 다르다.
+      - `LANGFLOW_MCP_PROBE_FAILED`: 확인 요청 자체가 거부되거나 응답 형식이 다르다.
+  - 흐름을 가져온 뒤 저장 내용이 파일과 같은지 비교한다.
   - API 키는 `--write-api-key`로 지정한 새 파일에만 쓰고 출력하지 않는다.
 
 ## 4. PC 준비 (한 번)
@@ -67,6 +76,7 @@
 6. **Langflow 설정:** `Copy-Item services\langflow\langflow.env.example services\langflow\langflow.env`로 복사한다.
    - `LANGFLOW_SUPERUSER_PASSWORD`를 긴 무작위 값으로 바꾼다.
    - `LANGFLOW_AUTO_LOGIN=false`, `LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1`을 유지한다.
+   - `NO_PROXY=127.0.0.1,localhost`가 반드시 있어야 한다. 없으면 시스템이나 환경 변수에 프록시가 설정된 PC에서 Langflow가 Ollama·MCP로 보내는 loopback 요청도 프록시를 거친다. 예시가 바뀌기 전에 만든 `langflow.env`에도 이 줄을 더한다.
 
 ## 5. 실행
 
@@ -87,7 +97,7 @@
    .\.langflow-venv\Scripts\python.exe services\langflow\local_ollama_bootstrap.py --write-api-key services\jeju-mcp\.local\langflow-api-key.env
    Remove-Item Env:LANGFLOW_SUPERUSER_PASSWORD, Env:MCP_SERVICE_TOKEN
    ```
-   출력의 `status`가 `passed`이면 `flowId`를 적어 둔다.
+   출력의 `status`와 `mcpProbe`가 `passed`이면 `flowId`를 적어 둔다. 실패 코드의 뜻은 3절에 있다.
 4. **10문항 시범.** `services\jeju-mcp`에서 실행한다.
    ```
    Get-Content .local\langflow-api-key.env | ForEach-Object { if ($_ -match '^LANGFLOW_API_KEY=(.*)$') { $env:LANGFLOW_API_KEY = $Matches[1] } }
@@ -102,6 +112,8 @@
    node scripts/evaluate-baselines.mjs import --catalog .local/agent-catalog-b0602a1.json --set .local/evaluation-set-template-b0602a1.json --plan .local/baseline-plan-template-b0602a1.json --capture .local/<마지막 capture>.json --output .local/ollama-run.json
    node scripts/evaluate-baselines.mjs score --catalog .local/agent-catalog-b0602a1.json --set .local/evaluation-set-template-b0602a1.json --plan .local/baseline-plan-template-b0602a1.json --run .local/ollama-run.json --details .local/ollama-scores.json --report ..\..\reports\baseline-ollama-qwen3-4b-cpu-<날짜>.json
    ```
+
+**첫 문항이 모델이 아니라 설정 때문에 실패하면 이어서 실행하지 않는다.** 예: 요청 준비의 `REQUEST_PREPARATION_FAILED`, API 키 거부, 꺼진 서버. 이어서 실행하면 모델과 무관한 그 실패가 96문항 분모에 남는다. 멈추고 설정을 고친 뒤 설정 스크립트를 다시 실행해 `passed`를 확인하고(API 키 파일이 이미 있으면 `--write-api-key` 없이), `--resume-*` 없이 새 파일 이름(예: `ollama-capture-r2-1.json`, `ollama-telemetry-r2-1.json`)으로 처음부터 새로 수집한다. 중단된 수집·계측 파일은 지우거나 덮어쓰지 않고 `.local`에 두며, 결과 보고에 그 파일 이름과 중단 이유를 적는다.
 
 흐름을 Langflow 화면에서 열어 저장하면 저장 내용이 파일과 달라진다. 그러면 설정 스크립트가 `EXISTING_FLOW_DIFFERS`로 멈추고, 선택이 바뀌면 실행 시 `OLLAMA_MODEL_SELECTION_INVALID`로 막힌다. 흐름은 API로만 가져와 실행한다.
 

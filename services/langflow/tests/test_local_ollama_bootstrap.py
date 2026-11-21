@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import tempfile
 import unittest
@@ -30,16 +31,28 @@ ARTIFACT = ROOT / 'jeju-tour-agent-ollama-v2.flow.json'
 USER = 'operator'
 PASSWORD = 'private-password-' + 'p' * 24
 TOKEN = 'synthetic-mcp-token-' + 'm' * 44
+OTHER = 'other-mcp-token-' + 'o' * 48  # a second token; the MCP server accepts exactly one
 ACCESS = 'access-' + 'a' * 60
 API_KEY = 'sk-' + 'K' * 43
 ENVIRONMENT = {'LANGFLOW_SUPERUSER': USER, 'LANGFLOW_SUPERUSER_PASSWORD': PASSWORD, 'MCP_SERVICE_TOKEN': TOKEN}
-SECRETS = (PASSWORD, TOKEN, ACCESS, API_KEY)
+SECRETS = (PASSWORD, TOKEN, OTHER, ACCESS, API_KEY)
 FLOW_ID = 'e7b2be4f-a8da-492d-9736-5d234bf91a22'
 KEY_ID = '0c7a7f61-3d0f-4c47-9d0b-1f6a8b2b3c4d'
 DIGEST = 'd' * 64
 READY = {'ready': True, 'catalogSchemaVersion': '2.0', 'dataMode': 'app-export', 'placeCount': 981,
          'readOnly': True, 'productionReady': False, 'dataVersion': 'sha256:' + 'b' * 64}
 OLLAMA_METADATA = {('GET', '/api/version'), ('POST', '/api/show'), ('GET', '/api/tags')}
+MCP_TOOLS = ('places.search', 'places.get', 'constraints.check')
+FORCED = {'Authorization': 'Bearer {{JEJU_MCP_TOKEN}}'}
+PROBE_ROUTE = ('POST', '/api/v1/custom_component/update')
+# Like Langflow 1.13.3's /api/v1/all entry, with no tools_metadata before tool mode. use_cache
+# starts True so the probe has to turn it off itself.
+MCP_COMPONENT = {'display_name': 'MCP Tools', 'tool_mode': False, 'outputs': [], 'template': {
+    'code': {'value': 'class MCPToolsComponent:  # synthetic stand-in\n    pass\n'},
+    'mcp_server': {'type': 'mcp', 'value': {}}, 'headers': {'type': 'dict', 'value': {}},
+    'use_cache': {'type': 'bool', 'value': True}, 'tool_execution_timeout': {'type': 'float', 'value': 0.0},
+    'tool': {'type': 'str', 'value': '', 'options': []}}}
+PLACEHOLDER = re.compile(r'\{\{\s*([A-Za-z_][A-Za-z0-9_\-]*)\s*\}\}')  # Langflow 1.13.3's variable pattern
 
 
 def node(node_id, kind, fields):
@@ -170,15 +183,77 @@ def reply(value, status=200):
 class FakeLangflow:
     """Stateful subset of the Langflow 1.13.3 routes the bootstrap uses; anything else is recorded."""
 
-    def __init__(self, *, anonymous=False, auto_login=False, version='1.13.3'):
+    def __init__(self, *, anonymous=False, auto_login=False, version='1.13.3', ssrf_allows_loopback=True):
         self.anonymous, self.auto_login, self.version = anonymous, auto_login, version
         self.variables, self.credential_values, self.server, self.flows, self.keys = [], {}, None, {}, {}
         self.calls, self.unexpected, self.flow_queries = [], [], []
         self.alter_import = self.on_key_created = None
         self.delete_status = 200
+        # The MCP server that MCPTools reaches; run_main links the same fake the bootstrap checks.
+        self.mcp, self.ssrf_allows_loopback = None, ssrf_allows_loopback
+        self.catalog = {'inputs': {}, 'models_and_agents': {'MCPTools': copy.deepcopy(MCP_COMPONENT)}}
+        self.update_status, self.probe_headers, self.probe_replies = 200, [], []
 
     def writes(self):
-        return [call for call in self.calls if call[0] != 'GET']
+        """Calls that can change state; the MCPTools probe only refreshes a component in memory."""
+        return [call for call in self.calls if call[0] != 'GET' and call != PROBE_ROUTE]
+
+    def seed(self, *, token=TOKEN, header='Bearer {{JEJU_MCP_TOKEN}}'):
+        """An earlier run's credential and registration, whose values Langflow returns masked."""
+        self.variables = [{'id': '4f1f3bb6-4c39-4b51-8f43-6f2e4f0b9a10', 'name': 'JEJU_MCP_TOKEN', 'type': 'Credential',
+                           'value': None, 'has_value': True, 'default_fields': []}]
+        self.credential_values = {'JEJU_MCP_TOKEN': token}
+        self.server = {'url': 'http://127.0.0.1:8789/mcp', 'mode': 'Streamable_HTTP',
+                       'headers': {'Authorization': header}}
+
+    def list_tools(self, component_headers):
+        """Langflow 1.13.3 order: component headers win, then stored variables fill {{NAME}}."""
+        merged = {**(self.server or {}).get('headers', {}), **component_headers}
+        values = self.credential_values
+        resolved = {key: values[value] if value in values else
+                    PLACEHOLDER.sub(lambda match: values.get(match.group(1), match.group(0)), value)
+                    for key, value in merged.items()}
+        authorization = resolved.get('Authorization', '')
+        tools = self.mcp.list_tools(authorization) if self.server and self.ssrf_allows_loopback else None
+        # Real error text can carry the resolved header; the bootstrap must never print it.
+        return (list(tools), '') if tools is not None else ([], 'Error updating tool list for ' + authorization)
+
+    def update_component(self, body):
+        """The two MCPTools build-config refreshes of the probe; anything else is a 400."""
+        template = body.get('template') if isinstance(body.get('template'), dict) else {}
+        value = {name: template.get(name, {}).get('value') for name in
+                 ('headers', 'use_cache', 'tool_execution_timeout', 'mcp_server')}
+        step = (body.get('field'), body.get('field_value'), body.get('tool_mode'))
+        reference = {'name': 'jeju-mcp-v2', 'config': {}}
+        if not (set(body) == {'code', 'frontend_node', 'field', 'field_value', 'template', 'tool_mode'}
+                and body['code'] == MCP_COMPONENT['template']['code']['value']
+                and isinstance(body['frontend_node'], dict) and isinstance(value['headers'], dict)
+                and value['use_cache'] is False
+                and isinstance(value['tool_execution_timeout'], float) and 0 < value['tool_execution_timeout'] <= 30
+                and (step == ('mcp_server', reference, False)
+                     or (step == ('tool_mode', True, True) and value['mcp_server'] == reference))):
+            return reply({'detail': 'unexpected component update'}, 400)
+        if self.update_status == 'timeout':
+            raise httpx.ReadTimeout('no answer while holding ' + ACCESS)
+        if self.update_status == 'malformed':
+            return reply({'detail': 'updated'})
+        if self.update_status != 200:
+            return reply({'detail': 'component update failed'}, self.update_status)
+        self.probe_headers.append(copy.deepcopy(template['headers']['value']))
+        tools, detail = self.list_tools(template['headers']['value'])
+        node = copy.deepcopy(body['frontend_node'])
+        node['template'] = copy.deepcopy(template)
+        if step[0] == 'mcp_server':
+            # Langflow echoes the resolved registration, header values included, after a server update.
+            node['template']['mcp_server']['value'] = {'name': 'jeju-mcp-v2', 'config': copy.deepcopy(self.server)}
+            node['template']['tool'].update(options=tools, placeholder=detail or 'Select a tool')
+        else:
+            node['tool_mode'] = True
+            node['template']['tools_metadata'] = {
+                'value': [{'name': name, 'tags': [name], 'status': True} for name in tools],
+                'placeholder': '' if tools else 'Error loading actions'}
+        self.probe_replies.append(json.dumps(node))
+        return reply(node)
 
     def __call__(self, request):
         method, path = request.method, request.url.path
@@ -218,6 +293,10 @@ class FakeLangflow:
             masked = copy.deepcopy(self.server)
             masked['headers'] = {key: '********' for key in masked.get('headers', {})}
             return reply(masked)
+        if (method, path) == ('GET', '/api/v1/all'):
+            return reply(self.catalog)
+        if (method, path) == PROBE_ROUTE:
+            return self.update_component(json.loads(request.content))
         if path == '/api/v1/flows/' and method == 'GET':
             self.flow_queries.append(dict(request.url.params))
             return reply([{'id': key, 'name': value['name'], 'folder_id': 'folder'} for key, value in self.flows.items()])
@@ -246,8 +325,11 @@ class FakeLangflow:
 
 
 class FakeMCP:
-    def __init__(self, ready=None, *, down=False):
+    """The v2 MCP server: /readyz for the bootstrap's direct check, list_tools for Langflow's MCPTools."""
+
+    def __init__(self, ready=None, *, down=False, token=TOKEN, tools=MCP_TOOLS):
         self.ready, self.down, self.calls = dict(READY) if ready is None else ready, down, []
+        self.token, self.tools, self.listed = token, tools, []
 
     def __call__(self, request):
         self.calls.append((request.method, request.url.path))
@@ -255,9 +337,15 @@ class FakeMCP:
             raise httpx.ConnectError('refused while sending ' + TOKEN, request=request)
         if (request.method, request.url.path) != ('GET', '/readyz'):
             return reply({'error': 'Route not available.'}, 404)
-        if request.headers.get('Authorization') != 'Bearer ' + TOKEN:
+        if request.headers.get('Authorization') != 'Bearer ' + self.token:
             return reply({'error': 'Unauthorized.'}, 401)
         return reply(self.ready)
+
+    def list_tools(self, authorization):
+        """Tool names for an accepted bearer token; None when refused or down."""
+        accepted = not self.down and authorization == 'Bearer ' + self.token
+        self.listed.append(accepted)
+        return list(self.tools) if accepted else None
 
 
 class FakeOllama:
@@ -303,6 +391,7 @@ class LocalOllamaBootstrapTest(unittest.TestCase):
     def run_main(self, *arguments, environment=ENVIRONMENT, flow=True):
         handlers = {bootstrap.LANGFLOW_URL: self.langflow, bootstrap.MCP_URL: self.mcp,
                     bootstrap.OLLAMA_URL: self.ollama}
+        self.langflow.mcp = self.mcp  # Langflow's MCPTools reaches the same server the bootstrap checks
         original, options = httpx.Client, []
 
         def client(**kwargs):
@@ -338,8 +427,8 @@ class LocalOllamaBootstrapTest(unittest.TestCase):
         self.assertEqual(result, {
             'status': 'passed', 'langflowVersion': '1.13.3', 'authenticated': True, 'flowStatus': 'imported',
             'flowId': FLOW_ID, 'endpoint': f'http://127.0.0.1:7860/api/v1/run/{FLOW_ID}?stream=false',
-            'mcpCredential': 'created', 'mcpServer': 'registered', 'dataMode': 'app-export', 'placeCount': 981,
-            'dataVersion': READY['dataVersion'], 'ollamaVersion': '0.12.6', 'model': 'qwen3:4b',
+            'mcpCredential': 'created', 'mcpServer': 'registered', 'mcpProbe': 'passed', 'dataMode': 'app-export',
+            'placeCount': 981, 'dataVersion': READY['dataVersion'], 'ollamaVersion': '0.12.6', 'model': 'qwen3:4b',
             'modelDigest': DIGEST, 'modelQuantization': 'Q4_K_M', 'modelParameterSize': '4.0B',
             'apiKeyWritten': False, 'modelExecuted': False, 'productionReady': False})
         self.assertEqual(self.langflow.credential_values, {'JEJU_MCP_TOKEN': TOKEN})
@@ -353,6 +442,14 @@ class LocalOllamaBootstrapTest(unittest.TestCase):
         self.assertEqual(self.mcp.calls, [('GET', '/readyz')])
         self.assertEqual(self.langflow.keys, {})
         self.assertNotIn(TOKEN, json.dumps(self.langflow.flows))
+        # Langflow listed the tools with the stored credential forced, then with the registered header
+        # alone; both ran after registration and before the import, and every listing was accepted.
+        self.assertEqual(self.langflow.probe_headers, [FORCED, FORCED, {}, {}])
+        self.assertEqual(self.mcp.listed, [True] * 4)
+        calls = self.langflow.calls
+        probes = [index for index, call in enumerate(calls) if call == PROBE_ROUTE]
+        self.assertLess(calls.index(('POST', '/api/v2/mcp/servers/jeju-mcp-v2')), probes[0])
+        self.assertLess(probes[-1], calls.index(('POST', '/api/v1/flows/')))
 
     def test_rerun_preserves_credential_registration_and_flow(self):
         self.run_main()
@@ -360,8 +457,8 @@ class LocalOllamaBootstrapTest(unittest.TestCase):
         self.langflow.calls.clear()
         result = self.run_main()
         self.assertEqual((result['status'], result['flowId'], result['flowStatus'], result['mcpCredential'],
-                          result['mcpServer']), ('passed', FLOW_ID, 'preserved-existing', 'preserved-existing',
-                                                 'preserved-existing'))
+                          result['mcpServer'], result['mcpProbe']),
+                         ('passed', FLOW_ID, *['preserved-existing'] * 3, 'passed'))
         self.assertEqual(self.langflow.writes(), [('POST', '/api/v1/login')])
         self.assertEqual((self.langflow.variables, self.langflow.server, self.langflow.flows), state)
 
@@ -452,6 +549,81 @@ class LocalOllamaBootstrapTest(unittest.TestCase):
                 self.assertNotIn(('POST', '/api/v2/mcp/servers/jeju-mcp-v2'), self.langflow.calls)
                 self.assertEqual(self.langflow.flows, {})
 
+    def test_stale_stored_credential_fails_the_probe_and_nothing_is_changed_or_written(self):
+        # Langflow masks the value, so only listing the tools through it shows that it is stale.
+        path = self.folder / 'langflow-api-key.env'
+        self.langflow.seed(token=OTHER)
+        state = copy.deepcopy((self.langflow.variables, self.langflow.credential_values, self.langflow.server))
+        self.assert_failed('LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED', '--write-api-key', str(path))
+        self.assertEqual((self.langflow.variables, self.langflow.credential_values, self.langflow.server), state)
+        self.assertEqual(self.langflow.writes(), [('POST', '/api/v1/login')])
+        self.assertEqual((self.langflow.flows, self.langflow.keys), ({}, {}))
+        self.assertFalse(os.path.lexists(path))
+        # The forced credential failed first, so the registered header was never tried.
+        self.assertEqual(self.langflow.probe_headers, [FORCED, FORCED])
+        self.assertEqual(self.mcp.listed, [False, False])
+        # A response carried the stale token; run_main has already checked that nothing printed it.
+        self.assertTrue(any(OTHER in text for text in self.langflow.probe_replies))
+
+    def test_rerun_after_the_mcp_token_changed_fails_instead_of_passing(self):
+        self.run_main()
+        state = copy.deepcopy((self.langflow.variables, self.langflow.credential_values, self.langflow.server,
+                               self.langflow.flows))
+        self.langflow.calls.clear()
+        # .env.local was recreated: MCP and the environment use a new token, Langflow keeps the first one.
+        self.mcp = FakeMCP(token=OTHER)
+        self.assert_failed('LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED',
+                           environment={**ENVIRONMENT, 'MCP_SERVICE_TOKEN': OTHER})
+        self.assertEqual((self.langflow.variables, self.langflow.credential_values, self.langflow.server,
+                          self.langflow.flows), state)
+        self.assertEqual(self.langflow.writes(), [('POST', '/api/v1/login')])
+        self.assertEqual(self.mcp.calls, [('GET', '/readyz')])
+
+    def test_registration_header_with_another_or_unresolved_token_fails_the_probe(self):
+        # A literal old token, an unknown variable left verbatim, and a bare token without "Bearer".
+        for header in ('Bearer ' + OTHER, 'Bearer {{JEJU_MCP_TOKEN_OLD}}', 'JEJU_MCP_TOKEN'):
+            with self.subTest(header=header):
+                self.langflow, self.mcp = FakeLangflow(), FakeMCP()
+                self.langflow.seed(header=header)
+                server = copy.deepcopy(self.langflow.server)
+                self.assert_failed('LANGFLOW_MCP_REGISTRATION_PROBE_FAILED')
+                self.assertEqual(self.langflow.server, server)
+                self.assertEqual(self.langflow.writes(), [('POST', '/api/v1/login')])
+                self.assertEqual(self.langflow.flows, {})
+                self.assertEqual(self.langflow.probe_headers, [FORCED, FORCED, {}, {}])
+                self.assertEqual(self.mcp.listed, [True, True, False, False])
+
+    def test_a_different_tool_set_fails_the_probe(self):
+        for tools in (('places.search', 'places.get'), MCP_TOOLS + ('system.execute',), ('places.search',) * 3):
+            with self.subTest(tools=tools):
+                self.langflow, self.mcp = FakeLangflow(), FakeMCP(tools=tools)
+                self.assert_failed('MCP_TOOL_SET_MISMATCH')
+                self.assertEqual(self.langflow.flows, {})
+                self.assertNotIn(('POST', '/api/v1/flows/'), self.langflow.calls)
+
+    def test_unreachable_mcp_from_langflow_or_a_refused_probe_stops_before_the_flow(self):
+        # Without LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1 Langflow refuses the loopback MCP URL. The first
+        # run has created the credential and registration by then; the run after the fix keeps them.
+        self.langflow = FakeLangflow(ssrf_allows_loopback=False)
+        self.assert_failed('LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED')
+        self.assertEqual((self.mcp.listed, self.langflow.flows, self.langflow.keys), ([], {}, {}))
+        self.langflow.ssrf_allows_loopback = True
+        result = self.run_main()
+        self.assertEqual((result['status'], result['mcpCredential'], result['mcpServer'], result['mcpProbe'],
+                          result['flowStatus']), ('passed', 'preserved-existing', 'preserved-existing', 'passed',
+                                                  'imported'))
+        # A refused, malformed or unanswered probe request, or an unexpected component catalog.
+        catalogs = [{'inputs': {}}, {'models_and_agents': {'MCPTools': {'template': {'code': {'value': 'x'}}}}}]
+        for status, catalog in [(500, None), ('malformed', None), ('timeout', None), (200, catalogs[0]),
+                                (200, catalogs[1])]:
+            with self.subTest(status=status, catalog=catalog):
+                self.langflow, self.mcp = FakeLangflow(), FakeMCP()
+                self.langflow.update_status = status
+                if catalog is not None:
+                    self.langflow.catalog = catalog
+                self.assert_failed('LANGFLOW_MCP_PROBE_FAILED')
+                self.assertEqual(self.langflow.flows, {})
+
     def test_secrets_and_exception_text_never_reach_the_output(self):
         self.mcp = FakeMCP(down=True)  # the transport error message contains the MCP token
         self.assert_failed('MCP_UNAVAILABLE')
@@ -470,6 +642,9 @@ class LocalOllamaBootstrapTest(unittest.TestCase):
         self.assertEqual(self.langflow.keys, {KEY_ID: {'name': 'jeju-ollama-eval'}})
         if os.name == 'posix':
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        calls = self.langflow.calls
+        self.assertLess(max(index for index, call in enumerate(calls) if call == PROBE_ROUTE),
+                        calls.index(('POST', '/api/v1/api_key/')))
 
     def test_existing_api_key_file_is_not_overwritten_and_no_key_is_created(self):
         path = self.folder / 'langflow-api-key.env'

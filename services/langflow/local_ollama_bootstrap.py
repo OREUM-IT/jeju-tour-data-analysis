@@ -5,11 +5,13 @@ Single-machine counterpart of deploy/langflow/bootstrap.py for the evaluation PC
 Langflow 1.13.3 on 127.0.0.1:7860, the v2 MCP catalog on 127.0.0.1:8789 and the
 Ollama daemon on 127.0.0.1:11434. Ollama is asked for model metadata only
 (/api/version, /api/show, /api/tags); nothing is pulled, loaded, generated or run.
+Langflow lists the MCP tools through the stored credential before the flow is imported.
 Prints one JSON line of non-secret values; a failure prints only a fixed code.
 """
 import argparse
 import ast
 import contextlib
+import copy
 import json
 import os
 from pathlib import Path
@@ -39,6 +41,10 @@ EDGES = {
 }
 FLOW_QUERY = {'get_all': 'true', 'header_flows': 'true', 'remove_example_flows': 'true'}
 OLLAMA_LABEL = re.compile(r'[0-9A-Za-z._+-]{1,64}')
+# Header sources for the Langflow-side tool listing, in order, with the code each one fails with.
+MCP_PROBES = (('LANGFLOW_MCP_CREDENTIAL_PROBE_FAILED', {'Authorization': 'Bearer {{JEJU_MCP_TOKEN}}'}),
+              ('LANGFLOW_MCP_REGISTRATION_PROBE_FAILED', {}))
+PROBE_TOOL_TIMEOUT = 10.0
 
 
 class BootstrapError(Exception):
@@ -256,6 +262,48 @@ def ensure_server(langflow):
     return status
 
 
+def probe_mcp_tools(langflow):
+    """Read-only: Langflow's own MCPTools component must list exactly the three MCP tools.
+
+    Langflow masks Credential values and registered header values, so ensure_variables and
+    ensure_server only see that both exist. A stale JEJU_MCP_TOKEN, or a registration whose
+    header carries another token, would pass them and then fail every run at JejuPrepareRequest.
+    As in deploy/langflow/bootstrap.py the tools are listed twice: once forcing the stored
+    Credential through a component header (component headers win over the registration's, then
+    Langflow resolves {{JEJU_MCP_TOKEN}} from its database), once with the registered header
+    alone, which is what the flow's MCPTools node uses at run time. Langflow refuses the
+    loopback MCP URL without LANGFLOW_SSRF_ALLOWED_HOSTS=127.0.0.1, so a missing allowlist
+    also fails here. A refused or unreachable server leaves the list empty rather than
+    failing the request. Nothing is saved, and the returned nodes, which can echo the
+    registration, are never printed.
+    """
+    # Langflow has just answered; a transport failure now is the probe's, e.g. a stalled MCP connection.
+    probe = Service(langflow.client, 'LANGFLOW_MCP_PROBE_FAILED')
+    catalog = payload(probe.get('/api/v1/all'), code='LANGFLOW_MCP_PROBE_FAILED')
+    reference = {'name': SERVER_NAME, 'config': {}}
+    for code, headers in MCP_PROBES:
+        try:
+            node = copy.deepcopy(catalog['models_and_agents']['MCPTools'])
+            for field, value, tool_mode in (('mcp_server', reference, False), ('tool_mode', True, True)):
+                template = node['template']
+                template['headers']['value'] = headers
+                # A cached tool list could hide a credential that no longer works.
+                template['use_cache']['value'] = False
+                template['tool_execution_timeout']['value'] = PROBE_TOOL_TIMEOUT
+                if tool_mode:
+                    template['mcp_server']['value'] = reference  # never the echoed registration
+                node = payload(probe.post('/api/v1/custom_component/update', json={
+                    'code': template['code']['value'], 'frontend_node': node, 'field': field,
+                    'field_value': value, 'template': template, 'tool_mode': tool_mode,
+                }), code='LANGFLOW_MCP_PROBE_FAILED')
+            names = sorted(row['name'] for row in node['template']['tools_metadata']['value'])
+        except (KeyError, TypeError, AttributeError):
+            raise BootstrapError('LANGFLOW_MCP_PROBE_FAILED') from None
+        require(names, code)
+        require(names == TOOLS, 'MCP_TOOL_SET_MISMATCH')
+    return 'passed'
+
+
 def ensure_flow(langflow, flow):
     name = flow['name']
     listed = payload(langflow.get('/api/v1/flows/', params=FLOW_QUERY), code='FLOW_LIST_INVALID', kind=list)
@@ -321,13 +369,15 @@ def bootstrap(client, mcp_client, ollama_client, environment, flow, *, model=DEF
     # Every check above is read-only; Langflow is changed only after all of them pass.
     credential = ensure_variables(langflow, token)
     server = ensure_server(langflow)
+    # The probe needs both; no flow is imported and no key is created unless it passes.
+    mcp_probe = probe_mcp_tools(langflow)
     flow_id, flow_status = ensure_flow(langflow, flow)
     if api_key_path is not None:
         write_api_key(langflow, api_key_path)
     return {'status': 'passed', 'langflowVersion': VERSION, 'authenticated': True,
             'flowStatus': flow_status, 'flowId': flow_id,
             'endpoint': f'{LANGFLOW_URL}/api/v1/run/{flow_id}?stream=false',
-            'mcpCredential': credential, 'mcpServer': server, 'dataMode': ready['dataMode'],
+            'mcpCredential': credential, 'mcpServer': server, 'mcpProbe': mcp_probe, 'dataMode': ready['dataMode'],
             'placeCount': ready['placeCount'], 'dataVersion': ready['dataVersion'], **model_info,
             'apiKeyWritten': api_key_path is not None, 'modelExecuted': False, 'productionReady': False}
 
