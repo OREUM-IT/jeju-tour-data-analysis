@@ -131,6 +131,26 @@ async function reserveOutputs(outputs) {
 
 const sameFile = (left, right) => left.isFile() && left.dev === right.dev && left.ino === right.ino;
 
+const WINDOWS_RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+export const WINDOWS_RENAME_ATTEMPTS = 40;
+
+/**
+ * Windows refuses to replace a file that another process (antivirus, the indexer, an open viewer) holds without delete
+ * sharing, usually only for a moment. Retry those codes there for about 35 seconds, re-checking the destination before
+ * every attempt. Other platforms and other errors fail at once, as before.
+ */
+export async function renameReplacing(from, to, { check = async () => {}, platform = process.platform, renameImpl = rename,
+  wait = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    await check();
+    try { return await renameImpl(from, to); }
+    catch (error) {
+      if (platform !== 'win32' || !WINDOWS_RENAME_RETRY_CODES.has(error?.code) || attempt >= WINDOWS_RENAME_ATTEMPTS) throw error;
+      await wait(Math.min(50 * 2 ** (attempt - 1), 1000));
+    }
+  }
+}
+
 async function removeUnusedReservation(entry) {
   if (entry.saved) return;
   const current = await lstat(entry.path).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
@@ -153,10 +173,11 @@ async function atomicCheckpoint(entry, serialized) {
     const identity = await handle.stat();
     await handle.close();
     handle = undefined;
-    if (await realpath(parent) !== parent || !sameFile(await lstat(entry.path), entry.identity)) {
-      throw new Error('Checkpoint destination changed while writing.');
-    }
-    await rename(temporaryPath, entry.path);
+    await renameReplacing(temporaryPath, entry.path, { check: async () => {
+      if (await realpath(parent) !== parent || !sameFile(await lstat(entry.path), entry.identity)) {
+        throw new Error('Checkpoint destination changed while writing.');
+      }
+    } });
     temporaryPath = null;
     entry.identity = identity;
     entry.saved = true;
@@ -180,8 +201,11 @@ async function persistSnapshot(reserved, { capture, telemetry }) {
   for (const [entry, value] of serialized) await atomicCheckpoint(entry, value);
 }
 
-/** Without an injected fetchImpl the runner picks the transport: built-in fetch, or loopback HTTP for --local-model-timeout. */
-export async function main(args = process.argv.slice(2), { paths = {}, env = process.env, fetchImpl, signal, log = console.log } = {}) {
+/**
+ * Without an injected fetchImpl the runner picks the transport: built-in fetch, or loopback HTTP for --local-model-timeout.
+ * stopSignal (used by run-local-ollama-collection.mjs) lets the case in flight finish and starts no further case.
+ */
+export async function main(args = process.argv.slice(2), { paths = {}, env = process.env, fetchImpl, signal, stopSignal, log = console.log } = {}) {
   const options = parseArguments(args);
   if (options.help) { log(USAGE); return { status: 'help' }; }
   const [catalog, set, plan, personas, themeMap, spec, resumeCapture, resumeTelemetry] = await Promise.all([
@@ -206,7 +230,7 @@ export async function main(args = process.argv.slice(2), { paths = {}, env = pro
       localModelTimeout: options['local-model-timeout'] === true,
       maxResponseBytes: options.maxResponseBytes, maxTotalResponseBytes: 16 * 1024 * 1024,
       stopOnError: true, continueOnModelMismatch: options['continue-on-model-mismatch'] === true,
-      signal, fetchImpl, resumeCapture, resumeTelemetry, requestMode: options.requestMode, catalog,
+      signal, stopSignal, fetchImpl, resumeCapture, resumeTelemetry, requestMode: options.requestMode, catalog,
       onProgress: ({ attempted, total, outcome }) => log(JSON.stringify({ status: 'collecting', attempted, planned: total, outcome })),
       onCheckpoint: (snapshot) => persistSnapshot(reserved, snapshot),
     });
