@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-local-llm-collection-summary",
+  "resultType": "local_cpu_run_diagnostics",
+  "planSha256": "6da7f074b598e59ac1e34005b2ae7a479e45424ffafac4d9b773374972feb0d4",
+  "system": {
+    "id": "local_llm",
+    "modelId": "ggml-org/Qwen3.5-4B-GGUF:Q4_K_M",
+    "promptVersion": "local-llm-prompt-v2-rule-action",
+    "toolVersion": "fixed-retrieval-v1+snowflake-arctic-embed-l-v2.0+top12",
+    "adapterVersion": "local-llm-1.0.0"
+  },
+  "startedAt": "2026-11-22T09:11:05.912Z",
+  "completedAt": "2026-11-22T09:43:45.698Z",
+  "cases": 96,
+  "outcomes": {
+    "accepted": 96
+  },
+  "modelActions": {
+    "ask_clarification": 8,
+    "cannot_confirm": 32,
+    "impossible": 7,
+    "recommend": 49
+  },
+  "blockedReasons": {},
+  "candidatePoolSize": {
+    "p50": 12,
+    "max": 981
+  },
+  "shownCandidates": {
+    "p50": 12,
+    "max": 12
+  },
+  "latencyMs": {
+    "p50": 24547,
+    "p95": 30310,
+    "max": 40961
+  },
+  "promptTokens": {
+    "p50": 729,
+    "max": 1213
+  },
+  "completionTokens": {
+    "p50": 70,
+    "max": 102
+  },
+  "costUsd": null,
+  "note": "blockedReasons counts each reason code once per case. Latency includes query embedding, retrieval and generation on a 4-core CPU."
+}

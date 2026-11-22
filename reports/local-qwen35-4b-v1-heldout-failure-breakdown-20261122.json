@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-local-llm-failure-breakdown",
+  "label": "qwen-v1-heldout",
+  "resultType": "diagnostic_counts_not_quality_claim",
+  "goldSha256": "8c2d8299fbc3caf10b7dbc2426b07e7e399a3ebdfdf4c78f806aae0d6e90bd9b",
+  "planSha256": "cfc257de2d2c38f07c4809146178a7ae79880667831fde3691b84d01b0a94f0f",
+  "cases": 96,
+  "actionCorrect": 55,
+  "byExpected": {
+    "recommend": {
+      "items": 48,
+      "actionCorrect": 45,
+      "returned": {
+        "ask_clarification:accepted": 3,
+        "recommend:accepted": 45
+      },
+      "runtimeDateConflict": 0,
+      "emptyPool": 0
+    },
+    "cannot_confirm": {
+      "items": 32,
+      "actionCorrect": 6,
+      "returned": {
+        "ask_clarification:final_validation_blocked": 4,
+        "cannot_confirm:accepted": 6,
+        "cannot_confirm:final_validation_blocked": 22
+      },
+      "runtimeDateConflict": 0,
+      "emptyPool": 0
+    },
+    "ask_clarification": {
+      "items": 8,
+      "actionCorrect": 4,
+      "returned": {
+        "ask_clarification:accepted": 4,
+        "recommend:accepted": 4
+      },
+      "runtimeDateConflict": 8,
+      "emptyPool": 0
+    },
+    "impossible": {
+      "items": 8,
+      "actionCorrect": 0,
+      "returned": {
+        "ask_clarification:accepted": 8
+      },
+      "runtimeDateConflict": 0,
+      "emptyPool": 7
+    }
+  },
+  "retrieval": {
+    "itemsWithShownCandidatesAndRelevant": 77,
+    "atLeastOneRelevantShown": 72,
+    "meanRelevantShareOfShown": 0.75
+  },
+  "note": "runtimeDateConflict counts items whose request adapter audit already reports a date conflict; emptyPool counts items with no catalog candidate after filters and exclusions."
+}
