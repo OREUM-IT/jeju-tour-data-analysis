@@ -42,14 +42,14 @@ for (const item of set.items) {
   const it = search.ruleIntent(q);
   const [vector] = (await extractor([vectorFile.queryPrefix + q], { pooling: 'mean', normalize: true })).tolist();
   const sims = embeddings.semanticScores(Float32Array.from(vector), places);
-  const variants: Record<string, (n: number, extra: number) => string[]> = {
+  const variants: Record<string, (n: number) => string[]> = {
     keyword: (n) => search.rank(places, it, n).map((x: { p: { id: string } }) => x.p.id),
-    blended: (n, extra) => search.blendSemantic(places, it, search.rank(places, it, n), sims, n, extra).map((x: { p: { id: string } }) => x.p.id),
+    blended: (n) => search.blendSemantic(places, it, search.rank(places, it, n), sims, n).map((x: { p: { id: string } }) => x.p.id),
   };
   for (const [name, run] of Object.entries(variants)) {
-    // Keyword-fallback results (20, of which up to 6 semantic) and the 60 candidates given to the Gemini pick step (up to 15 semantic).
-    const results = metrics(run(20, 6), relevant, 10);
-    const candidates = metrics(run(60, 15), relevant, 60);
+    // Keyword-fallback results (20) and the 60 candidates given to the Gemini pick step; semantic places only fill free slots.
+    const results = metrics(run(20), relevant, 10);
+    const candidates = metrics(run(60), relevant, 60);
     push(name, 'resultsPrecisionAt10', results.precision); push(name, 'resultsMrr', results.mrr); push(name, 'resultsEmpty', results.empty);
     push(name, 'candidatesRecallAt60', candidates.recall); push(name, 'candidatesEmpty', candidates.empty);
   }

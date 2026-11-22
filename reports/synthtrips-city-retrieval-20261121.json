@@ -1,0 +1,163 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "synthtrips-city-retrieval",
+  "resultType": "external_english_retrieval_check_not_jeju_agent_quality",
+  "dataset": {
+    "repo": "ashmib/synthTRIPS",
+    "license": "mit",
+    "generator": "Gemini1Point5Pro",
+    "configs": 2302,
+    "cities": 200,
+    "kbRows": 4767
+  },
+  "relevance": "config.city (cities matching the generation filters), binary",
+  "metrics": {
+    "k": 10,
+    "recallDepth": 50
+  },
+  "queryKinds": "dataset fields query_v, query_p0, query_p1 scored separately; the dataset card does not define the variants",
+  "systems": [
+    {
+      "system": "bm25-bigram",
+      "results": {
+        "query_v": {
+          "queries": 2302,
+          "precisionAtK": 0.1441,
+          "ndcgAtK": 0.1624,
+          "mrr": 0.2939,
+          "recallAtDepth": 0.4089
+        },
+        "query_p0": {
+          "queries": 2302,
+          "precisionAtK": 0.1312,
+          "ndcgAtK": 0.1372,
+          "mrr": 0.2486,
+          "recallAtDepth": 0.4065
+        },
+        "query_p1": {
+          "queries": 2302,
+          "precisionAtK": 0.1343,
+          "ndcgAtK": 0.1425,
+          "mrr": 0.2703,
+          "recallAtDepth": 0.4209
+        }
+      }
+    },
+    {
+      "system": "multilingual-e5-small",
+      "repo": "Xenova/multilingual-e5-small",
+      "dtype": "q8",
+      "results": {
+        "query_v": {
+          "queries": 2302,
+          "precisionAtK": 0.1857,
+          "ndcgAtK": 0.1923,
+          "mrr": 0.2765,
+          "recallAtDepth": 0.4316
+        },
+        "query_p0": {
+          "queries": 2302,
+          "precisionAtK": 0.1742,
+          "ndcgAtK": 0.1824,
+          "mrr": 0.2837,
+          "recallAtDepth": 0.409
+        },
+        "query_p1": {
+          "queries": 2302,
+          "precisionAtK": 0.1563,
+          "ndcgAtK": 0.1645,
+          "mrr": 0.2642,
+          "recallAtDepth": 0.3757
+        }
+      },
+      "encodeMs": 17159
+    },
+    {
+      "system": "multilingual-e5-large",
+      "repo": "Xenova/multilingual-e5-large",
+      "dtype": "q8",
+      "results": {
+        "query_v": {
+          "queries": 2302,
+          "precisionAtK": 0.222,
+          "ndcgAtK": 0.2777,
+          "mrr": 0.4083,
+          "recallAtDepth": 0.4607
+        },
+        "query_p0": {
+          "queries": 2302,
+          "precisionAtK": 0.1962,
+          "ndcgAtK": 0.2427,
+          "mrr": 0.3721,
+          "recallAtDepth": 0.4389
+        },
+        "query_p1": {
+          "queries": 2302,
+          "precisionAtK": 0.151,
+          "ndcgAtK": 0.1669,
+          "mrr": 0.2838,
+          "recallAtDepth": 0.3961
+        }
+      },
+      "encodeMs": 71615
+    },
+    {
+      "system": "bge-m3",
+      "repo": "Xenova/bge-m3",
+      "dtype": "q8",
+      "results": {
+        "query_v": {
+          "queries": 2302,
+          "precisionAtK": 0.203,
+          "ndcgAtK": 0.2279,
+          "mrr": 0.3521,
+          "recallAtDepth": 0.4376
+        },
+        "query_p0": {
+          "queries": 2302,
+          "precisionAtK": 0.1818,
+          "ndcgAtK": 0.2016,
+          "mrr": 0.3147,
+          "recallAtDepth": 0.4004
+        },
+        "query_p1": {
+          "queries": 2302,
+          "precisionAtK": 0.1577,
+          "ndcgAtK": 0.1693,
+          "mrr": 0.283,
+          "recallAtDepth": 0.4162
+        }
+      },
+      "encodeMs": 63067
+    },
+    {
+      "system": "snowflake-arctic-embed-l-v2.0",
+      "repo": "Snowflake/snowflake-arctic-embed-l-v2.0",
+      "dtype": "q8",
+      "results": {
+        "query_v": {
+          "queries": 2302,
+          "precisionAtK": 0.1715,
+          "ndcgAtK": 0.1857,
+          "mrr": 0.2687,
+          "recallAtDepth": 0.4222
+        },
+        "query_p0": {
+          "queries": 2302,
+          "precisionAtK": 0.1665,
+          "ndcgAtK": 0.1806,
+          "mrr": 0.2797,
+          "recallAtDepth": 0.4078
+        },
+        "query_p1": {
+          "queries": 2302,
+          "precisionAtK": 0.15,
+          "ndcgAtK": 0.1585,
+          "mrr": 0.2557,
+          "recallAtDepth": 0.3864
+        }
+      },
+      "encodeMs": 74727
+    }
+  ]
+}

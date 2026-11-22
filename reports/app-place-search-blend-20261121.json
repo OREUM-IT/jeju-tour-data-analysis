@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-app-place-search-blend-check",
+  "resultType": "offline_rule_intent_proxy_not_live_search",
+  "goldSha256": "b982194547edc386b1bfb5d9588cbe607dc99fbf960072b9b20221904f21217d",
+  "places": 981,
+  "embedding": {
+    "model": "intfloat/multilingual-e5-large",
+    "source": "local-onnx:Xenova/multilingual-e5-large fp32 (same weights as intfloat/multilingual-e5-large)",
+    "textVersion": "app-place-text-v1"
+  },
+  "scoredItems": 87,
+  "note": "ruleIntent replaces the Gemini intent step; the Gemini pick step is not run. resultsEmpty/candidatesEmpty are shares of queries with no result at all.",
+  "systems": {
+    "keyword": {
+      "resultsPrecisionAt10": 0.5448,
+      "resultsMrr": 0.6439,
+      "resultsEmpty": 0,
+      "candidatesRecallAt60": 0.8155,
+      "candidatesEmpty": 0
+    },
+    "blended": {
+      "resultsPrecisionAt10": 0.5448,
+      "resultsMrr": 0.6439,
+      "resultsEmpty": 0,
+      "candidatesRecallAt60": 0.8155,
+      "candidatesEmpty": 0
+    }
+  }
+}
