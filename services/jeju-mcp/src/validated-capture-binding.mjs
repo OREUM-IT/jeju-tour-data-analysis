@@ -3,6 +3,9 @@ import { canonicalSha256 } from './evaluation-rng.mjs';
 import { buildValidatedLangflowRequest, VALIDATED_REQUEST_ADAPTER_VERSION, VALIDATED_REQUEST_GRAMMAR_VERSION } from './validated-request-adapter.mjs';
 
 export const VALIDATED_BASELINE_ADAPTER_VERSION = 'langflow-v2-1.0.0';
+// Local open-model pipeline that consumes the same validated request and runtime final validation.
+export const LOCAL_LLM_ADAPTER_VERSION = 'local-llm-1.0.0';
+const VALIDATED_SYSTEMS = Object.freeze({ langflow: VALIDATED_BASELINE_ADAPTER_VERSION, local_llm: LOCAL_LLM_ADAPTER_VERSION });
 export const VALIDATED_REQUEST_MODE = 'langflow-v2';
 const PREFLIGHT_ID = 'baseline-preflight';
 const ensure = (condition, message) => { if (!condition) throw new Error(`Invalid validated capture: ${message}`); };
@@ -44,12 +47,12 @@ export function validateRuntimeRequest(entry, catalog, binding) {
 /** Import/resume checks retain failures and require the actual opaque identity, never a model-supplied replacement. */
 export function validateValidatedCapture(plan, capture, catalog) {
   if (capture.requestBinding === undefined) {
-    ensure(capture.system?.adapterVersion !== VALIDATED_BASELINE_ADAPTER_VERSION
+    ensure(!Object.values(VALIDATED_SYSTEMS).includes(capture.system?.adapterVersion)
       && capture.records.every((record) => record.runtimeRequest === undefined), 'v2 records cannot omit request provenance');
     return 'legacy';
   }
-  ensure(capture.system?.id === 'langflow' && capture.system.adapterVersion === VALIDATED_BASELINE_ADAPTER_VERSION,
-    'v2 request provenance requires the v2 Langflow adapter');
+  ensure(Object.hasOwn(VALIDATED_SYSTEMS, capture.system?.id ?? '') && capture.system.adapterVersion === VALIDATED_SYSTEMS[capture.system.id],
+    'v2 request provenance requires the v2 Langflow or local LLM adapter');
   ensure(same(capture.requestBinding, prepareValidatedCollection(plan, catalog)), 'request mode, catalog, grammar or prepared inputs changed');
   const cases = new Map(plan.cases.map((entry) => [entry.caseId, entry]));
   const seenIds = new Set();

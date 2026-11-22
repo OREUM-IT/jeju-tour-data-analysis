@@ -4,7 +4,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBaselinePlan, validateBaselinePlan, createOracleRun, scoreBaselineRun } from '../src/baseline-evaluation.mjs';
-import { adaptGeminiResponse, adaptLangflowResponse, adaptValidatedLangflowResponse } from '../src/baseline-adapters.mjs';
+import { adaptGeminiResponse, adaptLangflowResponse, adaptLocalLlmResponse, adaptValidatedLangflowResponse } from '../src/baseline-adapters.mjs';
 import { validateValidatedCapture } from '../src/validated-capture-binding.mjs';
 import { MAX_SOURCE_BYTES, writeCatalogExclusive } from './import-catalog.mjs';
 import { PERSONA_PATH, THEME_MAP_PATH } from './export-agent-catalog.mjs';
@@ -91,10 +91,11 @@ async function checkPaths(options) {
 /** Captures contain human-reviewed semantics or an explicit structured Langflow message, never keyword guesses. */
 export function importCapture(plan, capture, { catalog } = {}) {
   if (capture?.schemaVersion !== '1.0' || capture.kind !== 'jeju-baseline-capture' || capture.planSha256 !== plan.planSha256
-      || !['gemini', 'langflow'].includes(capture.system?.id) || !Array.isArray(capture.records)) {
+      || !['gemini', 'langflow', 'local_llm'].includes(capture.system?.id) || !Array.isArray(capture.records)) {
     throw new Error('Capture must identify the plan and a supported baseline system.');
   }
   const requestMode = validateValidatedCapture(plan, capture, catalog);
+  if (capture.system.id === 'local_llm' && requestMode !== 'langflow-v2') throw new Error('Local LLM captures need validated request provenance.');
   const cases = new Map(plan.cases.map((entry) => [entry.caseId, entry]));
   const seen = new Set();
   const records = capture.records.map((entry) => {
@@ -108,7 +109,8 @@ export function importCapture(plan, capture, { catalog } = {}) {
     if (capture.system.id === 'gemini' && (entry.raw?.engine !== 'gemini' || entry.raw?.model !== capture.system.modelId)) {
       throw new Error('Gemini capture did not use the declared model; keyword fallback is not a Gemini baseline.');
     }
-    const adapt = capture.system.id === 'gemini' ? adaptGeminiResponse : requestMode === 'langflow-v2' ? adaptValidatedLangflowResponse : adaptLangflowResponse;
+    const adapt = capture.system.id === 'gemini' ? adaptGeminiResponse : capture.system.id === 'local_llm' ? adaptLocalLlmResponse
+      : requestMode === 'langflow-v2' ? adaptValidatedLangflowResponse : adaptLangflowResponse;
     const normalized = adapt({ itemId: item.itemId, raw: entry.raw, review: entry.review, measurements: entry.measurements, outputSelector: entry.outputSelector, requestId: entry.runtimeRequest?.requestId });
     if (capture.system.id === 'langflow') {
       // The adapter has already validated an unambiguous output selection. Missing metadata remains unverified.
@@ -117,6 +119,9 @@ export function importCapture(plan, capture, { catalog } = {}) {
       if (requestMode === 'legacy' && reportedModel !== undefined && reportedModel !== capture.system.modelId) {
         throw new Error('Langflow capture reported a different model than the declared baseline.');
       }
+    }
+    if (capture.system.id === 'local_llm' && normalized.normalization.reportedModel !== capture.system.modelId) {
+      throw new Error('Local LLM capture reported a different model than the declared baseline.');
     }
     if (capture.system.adapterVersion !== normalized.normalization.adapterVersion) throw new Error('Capture adapterVersion does not match the normalizer.');
     return { caseId: item.caseId, requestSha256: item.requestSha256, ...normalized };
