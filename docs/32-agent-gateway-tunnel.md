@@ -532,7 +532,15 @@ SQL
   - 가짜 모델 8회 예산 검사.
   - 저장된 코드로 OpenAI 클라이언트를 네트워크 없이 생성.
 
-  결과는 PR CI에서 확인한다.
+  PR #32 CI(`3d2e0d6`)에서 모두 통과했다.
+  - 키 없음 거부: `GATEWAY_CREDENTIAL_UNAVAILABLE`, 표시 파일 없음.
+  - 전환: `gateway-rule-action-applied`(`updated`, 재실행은 `already-current`).
+  - 흐름 고정: `flowVerified:true`, `gateway-rule-action-checked`.
+  - 가짜 모델 8회: 마지막 호출에서 JSON.
+  - 클라이언트: `openaiClientInitialized:true`, `networkCalls:0`.
+  - 되돌리기: `gateway-rule-action-rolled-back` 뒤 8회 흐름 고정 확인.
+
+  첫 실행은 이 단계가 Langflow 로그인 제한(분당 5회)을 넘어 실패했다. 단계 안에 대기를 넣어 해결했다. 운영 helper는 실행당 로그인이 2회라 해당하지 않는다.
 - **하지 않은 것**:
   - 실제 gpt-5.4-mini 호출.
   - Langflow 1.13.3 Agent가 OpenAI 모델 값으로 실제 실행되는지.
