@@ -91,7 +91,7 @@ function requestHeaders(headers) {
   return selected;
 }
 
-function validateOptions({ plan, system, maxCases, timeoutMs, localModelTimeout, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, fetchImpl, onProgress, onCheckpoint, outputSelector }) {
+function validateOptions({ plan, system, maxCases, timeoutMs, localModelTimeout, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, stopSignal, fetchImpl, onProgress, onCheckpoint, outputSelector }) {
   ensure(isRecord(plan) && plan.kind === 'jeju-baseline-plan' && plan.schemaVersion === '1.0'
     && SHA256.test(plan.planSha256 ?? '') && ownHash(plan, 'planSha256') === plan.planSha256, 'a hash-verified baseline plan is required');
   ensure(Array.isArray(plan.cases) && plan.cases.length > 0 && plan.cases.length <= MAX_CASES
@@ -115,6 +115,7 @@ function validateOptions({ plan, system, maxCases, timeoutMs, localModelTimeout,
     'continueOnModelMismatch must be a boolean and can only be enabled for Gemini');
   ensure(onCheckpoint === undefined || typeof onCheckpoint === 'function', 'onCheckpoint must be a function');
   ensure(signal === undefined || signal instanceof AbortSignal, 'signal must be an AbortSignal');
+  ensure(stopSignal === undefined || stopSignal instanceof AbortSignal, 'stopSignal must be an AbortSignal');
   if (system.id === 'langflow') {
     ensure(isRecord(outputSelector) && Object.keys(outputSelector).length === 2 && Number.isSafeInteger(outputSelector.outputIndex)
       && outputSelector.outputIndex >= 0 && nonempty(outputSelector.componentId), 'Langflow needs an explicit outputIndex and componentId');
@@ -325,15 +326,17 @@ function priorCollection(resumeCapture, resumeTelemetry, { plan, system, url, ou
  * Explicit localModelTimeout raises only the timeoutMs ceiling to LOCAL_MODEL_TIMEOUT_MAX_MS for v2 Langflow at
  * http://127.0.0.1:<port>, is recorded in telemetry and must match exactly, with the same timeoutMs, on resume.
  * Without an injected fetchImpl it uses loopbackHttpFetch, because the built-in fetch gives up after 300 seconds.
+ * Optional stopSignal is an operator stop between cases: it never aborts the request in flight, which still ends and
+ * is recorded normally, and no further case starts (stoppedReason operator_stop). signal still aborts immediately.
  */
 export async function collectBaselineCapture({
   plan, system, endpoint, headers = {}, outputSelector,
   maxCases = plan?.cases?.length, timeoutMs = 60_000, maxResponseBytes = 1024 * 1024,
   maxTotalResponseBytes = 16 * 1024 * 1024, stopOnError = true, continueOnModelMismatch = false, localModelTimeout = false,
-  signal, fetchImpl = localModelTimeout === true ? loopbackHttpFetch : globalThis.fetch, onProgress, onCheckpoint,
+  signal, stopSignal, fetchImpl = localModelTimeout === true ? loopbackHttpFetch : globalThis.fetch, onProgress, onCheckpoint,
   resumeCapture, resumeTelemetry, requestMode = 'legacy', catalog,
 } = {}) {
-  validateOptions({ plan, system, maxCases, timeoutMs, localModelTimeout, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, fetchImpl, onProgress, onCheckpoint, outputSelector });
+  validateOptions({ plan, system, maxCases, timeoutMs, localModelTimeout, maxResponseBytes, maxTotalResponseBytes, stopOnError, continueOnModelMismatch, signal, stopSignal, fetchImpl, onProgress, onCheckpoint, outputSelector });
   const url = endpointUrl(endpoint, system.id);
   const selectedHeaders = requestHeaders(headers);
   ensure(['legacy', 'langflow-v2'].includes(requestMode) && (requestMode !== 'langflow-v2' || system.id === 'langflow'), 'requestMode must be legacy or Langflow-only langflow-v2');
@@ -374,8 +377,9 @@ export async function collectBaselineCapture({
     const entry = plan.cases[index];
     const identity = { caseId: entry.caseId, requestSha256: entry.requestSha256 };
     if (records[index].error?.code !== 'not_executed') continue;
-    if (stoppedReason !== null || newAttempted >= maxCases || signal?.aborted || totalBytes >= maxTotalResponseBytes) {
-      stoppedReason ??= signal?.aborted ? 'aborted' : totalBytes >= maxTotalResponseBytes ? 'total_response_budget' : 'case_limit';
+    if (stoppedReason !== null || newAttempted >= maxCases || signal?.aborted || stopSignal?.aborted || totalBytes >= maxTotalResponseBytes) {
+      stoppedReason ??= signal?.aborted ? 'aborted' : stopSignal?.aborted ? 'operator_stop'
+        : totalBytes >= maxTotalResponseBytes ? 'total_response_budget' : 'case_limit';
       continue;
     }
     if (prepared[index].runtimeRequest !== undefined) identity.runtimeRequest = prepared[index].runtimeRequest;
@@ -436,6 +440,7 @@ export async function collectBaselineCapture({
     } catch { stoppedReason = 'progress_callback_error'; }
     if (attempted < plan.cases.length && stoppedReason === null) {
       if (signal?.aborted) stoppedReason = 'aborted';
+      else if (stopSignal?.aborted) stoppedReason = 'operator_stop';
       else if (newAttempted >= maxCases) stoppedReason = 'case_limit';
       else if (totalBytes >= maxTotalResponseBytes) stoppedReason = 'total_response_budget';
     }
