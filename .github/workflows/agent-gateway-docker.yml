@@ -84,10 +84,14 @@ jobs:
         run: |
           compose="docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml"
           $compose exec -T jeju-mcp node --input-type=module - < deploy/tests/check-rule-action.mjs
+          # Langflow allows 5 logins per minute; each prepare-gateway flow mode and
+          # each CI check below logs in once. Wait out the previous step's logins.
+          sleep 61
           # Without the OpenAI credential the switch is refused before any flow PATCH and leaves no marker.
           refused=0
-          python3 deploy/prepare-gateway.py --rule-action-flow || refused=$?
+          output=$(python3 deploy/prepare-gateway.py --rule-action-flow) || refused=$?
           test "$refused" = 1
+          printf '%s' "$output" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == "GATEWAY_CREDENTIAL_UNAVAILABLE"'
           pending=0
           python3 deploy/prepare-gateway.py --flow-change-pending || pending=$?
           test "$pending" = 3
@@ -97,6 +101,7 @@ jobs:
           $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
           $compose exec -T agent-gateway node /app/check.mjs --internal
           python3 deploy/prepare-gateway.py --check-rule-action-flow
+          sleep 61
           $compose exec -T -e CI=true langflow python - --expect 8 < deploy/tests/check-gateway-call-budget.py
           $compose exec -T -e CI=true langflow python - < deploy/tests/check-openai-client.py
           python3 deploy/prepare-gateway.py --rule-action-rollback-flow
