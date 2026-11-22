@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "1.0",
+  "kind": "jeju-app-place-search-free-query-check",
+  "resultType": "offline_rule_intent_proxy_author_written_queries",
+  "querySetVersion": "free-queries-v1",
+  "queries": 35,
+  "relevance": "a place is relevant when it matches any listed category OR has any listed theme with weight >= 0.5, AND matches zone when given; stay places are never relevant",
+  "places": 981,
+  "embedding": {
+    "model": "intfloat/multilingual-e5-large",
+    "source": "local-onnx:Xenova/multilingual-e5-large fp32 (same weights as intfloat/multilingual-e5-large)",
+    "queryVectors": "local fp32 ONNX (Xenova/multilingual-e5-large)"
+  },
+  "keywordStage": {
+    "emptyAt20": 1,
+    "shortOf20": 7,
+    "shortOf60": 12
+  },
+  "note": "Queries were written by the assistant, not users. ruleIntent replaces the Gemini intent step and the Gemini pick step is not run. candidatesRelevantFound is the mean number of rule-relevant places among the up-to-60 candidates.",
+  "groups": {
+    "all": {
+      "keyword": {
+        "items": 35,
+        "resultsPrecisionAt10": 0.7857,
+        "resultsMrr": 0.8438,
+        "resultsEmpty": 0.0286,
+        "candidatesRelevantFound": 40.1429,
+        "candidatesCount": 46.1143
+      },
+      "blended": {
+        "items": 35,
+        "resultsPrecisionAt10": 0.8314,
+        "resultsMrr": 0.8652,
+        "resultsEmpty": 0,
+        "candidatesRelevantFound": 43.3143,
+        "candidatesCount": 54.3429
+      }
+    },
+    "fillActive": {
+      "keyword": {
+        "items": 12,
+        "resultsPrecisionAt10": 0.5917,
+        "resultsMrr": 0.6278,
+        "resultsEmpty": 0.0833,
+        "candidatesRelevantFound": 18.6667,
+        "candidatesCount": 19.5
+      },
+      "blended": {
+        "items": 12,
+        "resultsPrecisionAt10": 0.725,
+        "resultsMrr": 0.6903,
+        "resultsEmpty": 0,
+        "candidatesRelevantFound": 27.9167,
+        "candidatesCount": 43.5
+      }
+    }
+  }
+}

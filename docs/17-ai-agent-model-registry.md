@@ -29,7 +29,7 @@ JSON의 `key`는 레지스트리 내부 참조다. 공급자의 실제 모델 ID
 | Claude / Anthropic API | 정확한 모델 ID 미선정 | 공급자 어댑터 설계만 있음. 관광 앱 미연동 | API 계정의 사용 가능 모델·데이터 정책·비용 확인 후 어댑터 구현 |
 | Qwen3-4B / Ollama | 한국어 제품 평가 우선 후보. `qwen3:4b`는 확인 대기 태그 | 공식 언어·라이선스·실행 문서 검토. 모델 적재·한국어 평가 미수행 | 태그가 가리키는 정확한 변형·양자화·digest 확인 후 공통 평가 |
 | Qwen3.5-4B / llama-cpp-python (로컬 CPU) | 사용자가 Qwen3-4B 대신 선택(2026-11-21). `ggml-org/Qwen3.5-4B-GGUF:Q4_K_M`, digest `sha256:217002fa…a89c14`, 생각 모드 끔 | 고정 단일 경로(서버 검색·조건 판정→JSON 1회→최종 검증)로 96문항 수집·채점. [집계](../reports/baseline-local-qwen35-4b-20261121.json) 응답 70·차단 26, 전체 동작 정답 52/96 ([33 문서](33-huggingface-models-evaluation.md)) | `cannot_confirm`에 장소를 비우는 계약 오해를 고친 뒤 별도 문항으로 확인 |
-| multilingual-e5-large / Hugging Face Inference Providers | 장소 검색 질의 임베딩. 장소 벡터는 같은 가중치의 fp32 ONNX로 미리 계산 | 6종 비교와 SynthTRIPs 외부 점검에서 선택. 앱 브랜치에 연결했고 원격 호출은 `HF_TOKEN`이 없어 미수행 | 토큰 등록 후 원격·로컬 벡터 일치, 자유 질의 효과 측정 |
+| multilingual-e5-large / Hugging Face Inference Providers | 장소 검색 질의 임베딩. 장소 벡터는 같은 가중치의 fp32 ONNX로 미리 계산 | 6종 비교와 SynthTRIPs 외부 점검에서 선택해 앱에 연결. 운영에서 결제 설정 전 `http_402`, 설정 뒤 원격 호출 성공(2026-11-22). 작성자 자유 질의 12개에서 규칙 검색 P@10 0.592→0.725 ([33 문서](33-huggingface-models-evaluation.md) 4절) | 원격·로컬 벡터 수치 일치, 실제 결과 기여 비율, 호출 비용 |
 | Llama 3.2 3B Instruct / Ollama | 연결·JSON·도구 호출 비교 후보. `llama3.2:3b`는 확인 대기 태그 | 공식 모델카드 검토. 한국어는 공식 지원 언어에 없음. 실행 미수행 | 실제 모델 정보와 기능 확인, 한국어 품질은 별도 비교 |
 | 임베딩 | 선택 모델 없음 | `embeddinggemma`는 공식 문서 예시로만 검토 | 한국어·제주 지명·별칭 검색 평가 후 모델·차원·인덱스 버전 결정 |
 | 재정렬 모델 | 선택 모델 없음 | 도입·구현 미확정 | 규칙/BM25/hybrid 기준선 대비 순위 이득과 지연·비용 비교 |
