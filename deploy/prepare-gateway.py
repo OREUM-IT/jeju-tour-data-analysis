@@ -22,7 +22,11 @@ HEX = re.compile(r'[a-f0-9]{64}')
 # Single-file bind mounts keep the inode from Langflow container creation, so a
 # git update is invisible there. Stream the reviewed host script over stdin.
 BOOTSTRAP = ROOT / 'langflow' / 'gateway-bootstrap.py'
-FLOW_LIMITS = {'update': 8, 'rollback': 4, 'check': 8}
+FLOW_LIMITS = {'update': 8, 'rollback': 4, 'check': 8,
+               'rule-action': 8, 'rule-action-rollback': 8, 'check-rule-action': 8}
+CHECK_MODES = ('check', 'check-rule-action')
+SCOPES = {'update': 'gateway-flow-updated', 'rollback': 'gateway-flow-rolled-back',
+          'rule-action': 'gateway-rule-action-applied', 'rule-action-rollback': 'gateway-rule-action-rolled-back'}
 MIGRATION_KEYS = {'status', 'flowStatus', 'flowId', 'flowSha256', 'modelCallLimit', 'modelExecuted', 'productionReady'}
 CHECK_KEYS = {'status', 'flowMatches', 'nodeCount', 'edgeCount', 'toolCount', 'modelCallLimit', 'flowSha256',
               'modelExecuted', 'productionReady'}
@@ -170,10 +174,10 @@ def flow(root, mode, *, runner=subprocess.run):
         validate_pair(control, gateway, mcp)
         if gateway['GATEWAY_BOOTSTRAP_STATUS'] != 'ready' or os.path.lexists(root / '.gateway-provisioning'):
             raise ValueError('GATEWAY_PROVISIONING_REQUIRED')
-        created = mode != 'check' and not pending_marker(root)
+        created = mode not in CHECK_MODES and not pending_marker(root)
         if created:
             # Written before Langflow can change: an interrupted switch is resumable.
-            write_private(root / PENDING, 'Gateway flow switch started; rerun deploy/apply-agent-call-budget.sh to finish.\n')
+            write_private(root / PENDING, 'Gateway flow switch started; rerun the same deploy/apply-agent-*.sh helper to finish.\n')
         result = runner(compose_command() + ['exec', '-T', 'langflow', 'python', '-', '--' + mode],
                         input=BOOTSTRAP.read_bytes(), capture_output=True, timeout=180, check=False)
         if result.returncode or len(result.stdout) > 16 * 1024:
@@ -187,7 +191,7 @@ def flow(root, mode, *, runner=subprocess.run):
             common = (value['status'] == 'passed' and value['modelExecuted'] is False
                       and value['productionReady'] is False and value['modelCallLimit'] == FLOW_LIMITS[mode]
                       and isinstance(value['flowSha256'], str) and HEX.fullmatch(value['flowSha256']))
-            if mode == 'check':
+            if mode in CHECK_MODES:
                 valid = set(value) == CHECK_KEYS and value['flowMatches'] is True
             else:
                 valid = (set(value) == MIGRATION_KEYS and value['flowId'] == gateway['LANGFLOW_GATEWAY_FLOW_ID']
@@ -198,18 +202,19 @@ def flow(root, mode, *, runner=subprocess.run):
             raise ValueError('GATEWAY_FLOW_RESULT_INVALID') from None
         summary = {'status': 'passed', 'modelCallLimit': value['modelCallLimit'],
                    'modelExecuted': False, 'productionReady': False}
-        if mode == 'check':
+        if mode in CHECK_MODES:
             # The running Gateway pins this SHA; a mismatch means it fails closed.
             if value['flowSha256'] != gateway['LANGFLOW_GATEWAY_FLOW_SHA256']:
                 raise ValueError('GATEWAY_FLOW_PIN_MISMATCH')
-            return {**summary, 'scope': 'gateway-flow-checked', 'settingsChanged': False}
+            return {**summary, 'scope': 'gateway-flow-checked' if mode == 'check' else 'gateway-rule-action-checked',
+                    'settingsChanged': False}
         changed = value['flowSha256'] != gateway['LANGFLOW_GATEWAY_FLOW_SHA256']
         if changed:
             # Only the pinned SHA changes; the API key, flow ID and tokens stay byte-identical.
             completed = {**gateway, 'LANGFLOW_GATEWAY_FLOW_SHA256': value['flowSha256']}
             validate_pair(control, completed, mcp)
             replace_gateway(root, completed)
-        return {**summary, 'scope': 'gateway-flow-updated' if mode == 'update' else 'gateway-flow-rolled-back',
+        return {**summary, 'scope': SCOPES[mode],
                 'flowStatus': value['flowStatus'], 'settingsChanged': changed}
 
 
@@ -263,15 +268,23 @@ if __name__ == '__main__':
     modes.add_argument('--update-flow', action='store_true', help='Pin the 8-call flow; no key or flow creation.')
     modes.add_argument('--rollback-flow', action='store_true', help='Pin the previous 4-call flow; no key or flow creation.')
     modes.add_argument('--check-flow', action='store_true', help='Read-only: stored flow is the 8-call build and is pinned.')
+    modes.add_argument('--rule-action-flow', action='store_true',
+                       help='Pin the rule-action OpenAI flow (from the exact 8-call flow); no key or flow creation.')
+    modes.add_argument('--rule-action-rollback-flow', action='store_true',
+                       help='Pin the 8-call Vertex flow again (from the exact rule-action flow); no key or flow creation.')
+    modes.add_argument('--check-rule-action-flow', action='store_true',
+                       help='Read-only: stored flow is the rule-action build and is pinned.')
     modes.add_argument('--flow-change-pending', action='store_true',
                        help=f'Read-only: exit 0 if a flow switch is unfinished, {NOT_PENDING_EXIT} if not.')
     modes.add_argument('--complete-flow-change', action='store_true',
                        help='Clear the unfinished-switch marker after the Gateway is re-pinned and ready.')
     args = parser.parse_args()
-    switching = args.update_flow or args.rollback_flow
+    switching = args.update_flow or args.rollback_flow or args.rule_action_flow or args.rule_action_rollback_flow
     try:
-        if switching or args.check_flow:
-            mode = 'update' if args.update_flow else 'rollback' if args.rollback_flow else 'check'
+        if switching or args.check_flow or args.check_rule_action_flow:
+            mode = ('update' if args.update_flow else 'rollback' if args.rollback_flow
+                    else 'rule-action' if args.rule_action_flow else 'rule-action-rollback' if args.rule_action_rollback_flow
+                    else 'check-rule-action' if args.check_rule_action_flow else 'check')
             print(json.dumps(flow(ROOT / '.local', mode)))
         elif args.flow_change_pending or args.complete_flow_change:
             result = flow_change(ROOT / '.local', 'pending' if args.flow_change_pending else 'complete')
@@ -288,8 +301,8 @@ if __name__ == '__main__':
             unfinished = switching and pending_marker(ROOT / '.local')
         except Exception:
             unfinished = switching
-        details = ('The Langflow flow switch is unfinished; rerun deploy/apply-agent-call-budget.sh '
-                   '(or --rollback) to finish. No secret output.' if unfinished else
+        details = ('The Langflow flow switch is unfinished; rerun the same deploy/apply-agent-*.sh helper '
+                   '(or its --rollback) to finish. No secret output.' if unfinished else
                    'Settings preserved; this run did not change the Langflow flow. No secret output.' if switching else
                    'Settings preserved. Review permissions or incomplete provisioning marker; no secret output.')
         print(json.dumps({'status': 'failed', 'code': code, 'details': details}))

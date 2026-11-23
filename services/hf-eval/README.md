@@ -7,8 +7,10 @@
 | `scripts/compare-embeddings.mjs` | 임베딩 6종과 BM25(문자 bigram)를 981곳·96문항에서 비교한다. 전체 카탈로그와, 닫힌 템플릿 문법이 허용하는 후보 안에서의 순위를 따로 잰다 | 모델 첫 다운로드만 |
 | `scripts/synthtrips-retrieval.mjs` | HF 데이터셋 `ashmib/synthTRIPS`(MIT)의 유럽 200개 도시·질의 2,302개로 같은 임베딩을 외부 검증한다 | 없음(데이터를 미리 받아 둠) |
 | `local_llm_server.py` | GGUF 모델을 llama-cpp-python으로 `127.0.0.1`에서만 띄운다. JSON 스키마를 GBNF 문법으로 바꿔 출력을 제한한다. Qwen3.5는 빈 `<think></think>`로 생각 모드를 끈다 | 없음 |
-| `scripts/collect-local-llm.mjs` | 템플릿 요청 → 카탈로그 후보 → 임베딩 재정렬 → 조건 판정 → JSON 생성 한 번 → 런타임 최종 검증. 결과는 기존 `evaluate-baselines.mjs import/score`로 채점한다 | 루프백만 |
+| `scripts/collect-local-llm.mjs` | 템플릿 요청 → 카탈로그 후보 → 임베딩 재정렬 → 조건 판정 → JSON 생성 한 번 → 런타임 최종 검증. 결과는 기존 `evaluate-baselines.mjs import/score`로 채점한다. `--mode rule-action`이면 동작은 서버 규칙(날짜 충돌·후보 없음·근거 판정)이 정하고 모델은 장소 ID만 고른다 | 루프백만 |
 | `scripts/summarize-local-llm.mjs` | 수집 진단(.local)을 공개 가능한 집계로 줄인다 | 없음 |
+| `scripts/analyze-local-llm-failures.mjs` | 채점된 실행의 기대·응답 동작 분해, 서버가 미리 알 수 있던 동작, 검색 범위를 집계한다 | 없음 |
+| `scripts/heldout.mjs` | 공개 명세에서 `seed`만 바꾼 새 평가셋을 `.local`에 만들고, 기존 빌더·채점기를 그 명세로 실행한다. 시드 외 차이는 거부한다 | 없음 |
 | `scripts/embed-texts.mjs` | 앱의 `build-place-embeddings.ts --texts-out` 결과를 로컬 ONNX로 임베딩한다(토큰 없이 앱 벡터 파일 만들기) | 모델 첫 다운로드만 |
 | `scripts/compare-app-search.mts` | 앱의 키워드 검색과 임베딩 혼합 후보를 96문항에서 비교한다(Gemini 단계는 실행하지 않음) | 없음 |
 

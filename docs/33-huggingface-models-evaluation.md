@@ -1,6 +1,6 @@
 # Hugging Face 모델·데이터셋 평가: SynthTRIPs · Qwen3.5-4B · 장소 검색 임베딩
 
-기준일: 2026-11-22 한국 시간(실행 시각은 2026-11-21 UTC, 보고서 파일명도 UTC 날짜). 사용자 요청(2026-11-21): “평가 데이터셋을 Hugging Face에서 받아 에이전트 평가에 쓰기, 후보 공개 모델(Qwen 등)을 한국어 제주 질문으로 직접 평가하기, 임베딩 모델을 골라 장소 검색에 붙이기 — 다”. 사용자 선택: 결과는 이 저장소에 PR로, 모델은 Qwen3-4B 대신 **Qwen3.5-4B**, Hugging Face CDN 호스트 허용.
+기준일: 2026-11-22 한국 시간(실행 시각은 2026-11-21 UTC, 보고서 파일명도 UTC 날짜). 사용자 요청(2026-11-21): “평가 데이터셋을 Hugging Face에서 받아 에이전트 평가에 쓰기, 후보 공개 모델(Qwen 등)을 한국어 제주 질문으로 직접 평가하기, 임베딩 모델을 골라 장소 검색에 붙이기 — 다”. 사용자 선택: 결과는 이 저장소에 PR로, 모델은 Qwen3-4B 대신 **Qwen3.5-4B**, Hugging Face CDN 호스트 허용. 2.1절(Qwen 고도화)은 2026-11-22 UTC 실행이다.
 
 모두 분석 세션 컨테이너(4 vCPU·15GB RAM·GPU 없음)에서 실행했다. 운영 앱·AWS·Langflow 설정은 바꾸지 않았다. 앱 연결은 앱 저장소의 별도 PR이며 아직 원격 호출을 하지 않았다. `productionReady:false`를 유지한다. 도구 사용법은 [hf-eval README](../services/hf-eval/README.md)에 있다.
 
@@ -10,6 +10,7 @@
 |---|---|---|
 | SynthTRIPs(HF `ashmib/synthTRIPS`, MIT) | 유럽 200개 도시·질의 2,302×3개로 임베딩을 외부 점검. `multilingual-e5-large`가 세 질의 유형 중 두 개에서 1위 | 영어·유럽 도시. 제주 Agent 정답으로 쓰지 않는다 |
 | Qwen3.5-4B 로컬(Q4_K_M, CPU) | 96문항: 수락 70·최종 검증 차단 26, 전체 동작 정답 **52/96** (v2 Langflow 67/96, 기존 Gemini 48/96) | 시스템 구성이 다르다(아래 2절). 모델 우열 주장 아님 |
+| Qwen 고도화(2.1절) | 시드만 바꾼 새 96문항: 서버 규칙이 동작을 정하고 모델은 장소만 고르면 차단 26→0, 동작 정답 55→**95/96**(겹치지 않는 73문항 42→73). 장소 선택 지표는 비슷하다 | 동작 정답은 규칙과 정답 규칙의 일치에 가깝다. 모델 향상이 아니다 |
 | 임베딩 6종 비교 | 전체 카탈로그 nDCG@10: arctic-l 0.599 · e5-large 0.582 · bge-m3 0.578 · e5-small 0.465 · BM25 0.310 | 정답은 규칙으로 만든 필터 일치 집합이며 사용자 관련성이 아니다 |
 | 앱 장소 검색 연결 | e5-large 선택. 키워드 후보는 그대로 두고 빈 자리만 의미 후보로 채움. 96문항 템플릿에서는 **키워드 검색과 같은 결과** | 효과는 키워드 해석이 비거나 적은 자유 질의에서만 생기며 이번 자료로는 측정하지 못했다 |
 
@@ -71,6 +72,83 @@ v2 Langflow는 모델이 MCP 도구를 골라 부르는 Agent다. 이번 경로�
 26건 차단은 모두 같은 모양이다: **장소를 하나도 고르지 않고** `cannot_confirm`(22건) 또는 `ask_clarification`(4건)에 확인 주제만 붙였다. 런타임 계약은 `cannot_confirm`이면 확인이 필요한 장소를 함께 내야 한다(`no_unconfirmed_candidate`). 모델은 “확인할 수 없다”를 “고르지 않는다”로 해석했다. 정답 동작별로는 기대 `cannot_confirm` 32건 중 6건만 수락됐고, 기대 `impossible` 8건은 모두 `ask_clarification`으로 답했다.
 
 고치는 방법은 프롬프트에 “cannot_confirm에도 후보 장소를 넣는다”를 명시하거나, 스키마를 동작별로 나눠(`cannot_confirm`→`placeIds` 1개 이상) 문법으로 강제하는 것이다. 같은 96문항으로 고친 뒤 다시 재면 평가셋에 맞춘 조정이 되므로 이번에는 하지 않았다. 고친 버전은 프롬프트 버전을 올리고, 별도 문항(작성 질의나 새 시드)으로 먼저 확인한다.
+
+[실패 분해](../reports/local-qwen35-4b-failure-breakdown-20261121.json)로 보면 틀린 44건 대부분이 **서버가 이미 아는 사실로 정할 수 있는 동작**이었다. 기대 `ask_clarification` 8건은 요청 변환 감사가 이미 날짜 충돌을 보고했고, 기대 `impossible` 8건 중 7건은 필터·제외 뒤 후보가 0곳이었다. 반면 검색은 대체로 맞았다. 장소가 필요한 79문항 중 75문항에서 보여 준 12곳 안에 정답 후보가 있었고, 보여 준 후보 중 정답 비율은 평균 0.733이었다.
+
+### 2.1 고도화 실험: 동작은 서버 규칙, 모델은 장소 선택만 (2026-11-22)
+
+사용자 요청(2026-11-22): “성능 비교 후 고도화 방향성이 있는지 우선 파악” → “1~2 진행하고 문서에도 기록”. 1은 아래 규칙 동작 모드 구현, 2는 새 96문항 재평가다.
+
+**구현(`collect-local-llm.mjs --mode rule-action`, 프롬프트 버전 `local-llm-prompt-v2-rule-action`).**
+
+1. 서버가 실행 시점 정보만으로 동작을 먼저 정한다.
+   - 요청 변환 감사에 날짜 충돌이 있으면 `ask_clarification`로 정한다.
+   - 필터·제외 뒤 후보가 없거나, 모든 후보가 확인된 `fail`이면 `impossible`로 정한다.
+   - 이 두 경우는 모델을 부르지 않는다.
+2. 나머지 경우에는 모델이 보여 준 12곳 중 1~5곳의 ID만 고른다. 고를 수 있는 ID는 문법(GBNF `enum`)으로 제한한다. 선호와 걷기 최소화 같은 문맥은 프롬프트로만 전달한다.
+3. 고른 장소에 대해 서버가 조건별 근거(`runtimeRequirementEvidence`)로 판정을 만든다.
+   - 모든 필수 조건이 `pass`이면 `recommend`이다.
+   - 아니면 `cannot_confirm`과 확인 고지를 붙이고, `unknown` 조건에서 확인 주제를 만든다.
+4. 결과는 v1과 같은 최종 검증(`createRuntimeValidator`)을 통과해야 수락된다.
+
+정답 파일은 어느 단계에서도 읽지 않는다. 이 규칙은 원래 96문항의 실패를 본 뒤에 설계했다.
+
+**새 96문항(held-out).**
+
+- 공개 명세(`data/evaluation-spec.json`)에서 `seed`만 바꾼 명세(`jeju-evalset-heldout-20261122`)로 기존 빌더가 새 평가셋을 만들었다(`services/hf-eval/scripts/heldout.mjs`). 이 도구는 시드 외의 차이를 거부한다.
+- 정답은 규칙으로만 계산했다(gold sha256 `8c2d8299…bd9b`, plan sha256 `cfc257de…f0f`).
+- 동작 분포는 원래 세트와 같은 48·32·8·8이다.
+- 원래 세트와 템플릿 문장이 같은 문항이 23개 있어, 겹치지 않는 73문항도 따로 셌다.
+- oracle 자체 검사는 동작 정확도 1.0이다.
+- 질의와 정답은 `.local`에만 있다.
+- 새 세트로 수집한 뒤에는 규칙과 프롬프트를 바꾸지 않았다.
+
+**결과** ([v2 채점](../reports/baseline-local-qwen35-4b-v2-heldout-20261122.json) · [v1 채점](../reports/baseline-local-qwen35-4b-v1-heldout-20261122.json) · 실패 분해 [v2](../reports/local-qwen35-4b-v2-heldout-failure-breakdown-20261122.json)·[v1](../reports/local-qwen35-4b-v1-heldout-failure-breakdown-20261122.json) · 수집 집계 [v2](../reports/local-qwen35-4b-v2-heldout-collection-20261122.json)·[v1](../reports/local-qwen35-4b-v1-heldout-collection-20261122.json))
+
+같은 모델·검색·최종 검증에서 동작을 정하는 방식만 다르다.
+
+| 지표 (새 96문항) | v1 모델이 동작까지 결정 | v2 서버 규칙이 동작 결정 |
+|---|---:|---:|
+| 수락 / 최종 검증 차단 | 70 / 26 | **96 / 0** |
+| 전체 동작 정답 | 55/96 | **95/96** |
+| 겹치지 않는 73문항 동작 정답 | 42/73 | **73/73** |
+| 기대 동작별 (recommend·cannot_confirm·ask·impossible) | 45/48 · 6/32 · 4/8 · 0/8 | 48/48 · 32/32 · 8/8 · 7/8 |
+| 모델 호출 문항 | 96 | 81 (나머지 15건은 서버가 0.1초 안에 결정) |
+| 허용 밖 ID (전체) | 12/269 (4.5%) | 31/386 (8.0%, 10문항: 후보 범위 밖 24·걷기 최소화에 탐방로 7) |
+| 미확인 조건을 pass·fail로 단언 | 0/6 | 0/32 |
+| 확인 고지 / 주제 범위 | 8/22 · 0.273 | 32/48 · 0.604 |
+| 지연 p50 / p95 (모델 호출분, CPU) | 30.9초 / 59.7초 (수락분) | 23.8초 / 27.5초 |
+
+v1은 새 세트에서도 처음 세트와 같은 방식으로 실패했다. 차단 26건 중 22건이 `no_unconfirmed_candidate`, 26건 모두 `unsupported_confirmation_topic`이었다. 새 문항에서도 같은 계약 오해가 재현됐다는 뜻이다.
+
+**모델이 실제로 맡은 부분(장소 선택)은 거의 같다.** 두 방식 모두 장소를 낸 공통 문항만 비교하면 다음과 같다.
+
+| 지표 (공통 문항) | v1 | v2 |
+|---|---:|---:|
+| Recall@5 (54문항) | 0.880 | 0.917 |
+| Precision@5 (51문항) | 0.929 | 0.910 |
+| 테마 일치 (51문항) | 0.692 | 0.689 |
+| 허용 밖 ID (51문항) | 12/249 | 14/249 |
+
+**해석.**
+
+- 개선은 전부 동작 결정을 서버로 옮긴 데서 나왔다. 서버 규칙은 정답 규칙과 같은 카탈로그 근거와 요청 감사를 보므로, 동작 정답 95/96은 **규칙끼리 일치한다는 뜻에 가깝고 모델 능력의 향상이 아니다**.
+- 그래도 “4B 모델에게 동작 판단을 맡기지 말고 장소 선택만 맡긴다”는 방향은 새 문항에서도 유지됐다. 차단 26→0, 지연 분산 감소, 모델 호출 15% 감소가 근거다.
+- 남은 오류는 서버 규칙과 정답 규칙의 차이 두 가지다.
+  - 걷기 최소화 요청에서 탐방로·자전거길을 빼지 않는다. 그래서 `impossible`이어야 할 1건을 `recommend`로 냈고, 허용 밖 ID 7개도 이 때문이다.
+  - 확인 주제를 필수 조건에서만 만든다. 그래서 문맥 조건(걷기 거리 8·혼잡 3·이동 수단 3·동행 2) 16건에서 `recommend`에 확인 고지가 빠졌다.
+  - 둘 다 이번 결과를 본 뒤에 고치면 새 세트에도 맞춘 조정이 된다. 고친다면 다른 시드로 다시 확인해야 한다.
+- 허용 밖 ID 비율이 늘어난 것은 v2가 장소를 내는 문항이 많아진 영향이 크다. 공통 문항에서는 12→14개로 비슷하다.
+- 참고로 원래 96문항에도 v2를 돌렸다([채점](../reports/baseline-local-qwen35-4b-v2-original-20261122.json) · [실패 분해](../reports/local-qwen35-4b-v2-original-failure-breakdown-20261122.json) · [수집](../reports/local-qwen35-4b-v2-original-collection-20261122.json)). 결과는 95/96이고, v1은 52/96이었다. 규칙 설계에 쓴 세트라 이 수치는 판단 근거로 쓰지 않는다.
+- v2 Langflow(67/96)나 Gemini와의 우열은 주장하지 않는다. 시스템 구성이 다르고, 운영 Gateway는 이미 서버 근거로 조건 판정을 재구성하는 별도 경로를 갖고 있다(32 문서).
+- 운영 앱과 Langflow 흐름에는 아무것도 적용하지 않았다. `productionReady:false`를 유지한다.
+
+**고도화 방향(제안, 미검증).**
+
+1. 동작은 서버 규칙으로 정하고 모델은 장소 선택만 하는 구조를 유지한다.
+2. 위 두 규칙 차이(걷기 최소화 경로 제외, 문맥 확인 주제)를 반영한 뒤 **새 시드의 세 번째 세트**로 확인한다.
+3. 그다음 작성 질의·사람 검수로 장소 선택 품질을 본다. 템플릿 질의의 Precision@5는 이미 0.9 안팎이라 이 세트로는 모델 차이가 잘 드러나지 않는다.
+4. 운영 Agent에 같은 구조를 적용할지는 별도 결정이다.
 
 ## 3. 장소 검색 임베딩 비교
 
@@ -164,10 +242,19 @@ NODE_USE_ENV_PROXY=1 node services/hf-eval/scripts/compare-embeddings.mjs --cata
 NO_PROXY=127.0.0.1,localhost node services/hf-eval/scripts/collect-local-llm.mjs --plan services/jeju-mcp/.local/baseline-plan.json --catalog services/jeju-mcp/.local/agent-catalog-b0602a1.json --vectors services/jeju-mcp/.local/embeddings/snowflake-arctic-embed-l-v2.0.json --embedding snowflake-arctic-embed-l-v2.0 --model-id "ggml-org/Qwen3.5-4B-GGUF:Q4_K_M" --capture services/jeju-mcp/.local/capture.json --diagnostics services/jeju-mcp/.local/diag.json
 ```
 
-이후 `evaluate-baselines.mjs import`·`score`(기존 절차)와 `summarize-local-llm.mjs`로 집계한다. 테스트: `services/jeju-mcp` 223개(새 `local-llm-import` 2개 포함), `services/hf-eval` 5개, 앱 `scripts/test-place-embeddings.ts` 5개.
+이후 `evaluate-baselines.mjs import`·`score`(기존 절차)와 `summarize-local-llm.mjs`로 집계한다. 실패 분해는 `analyze-local-llm-failures.mjs`로 만든다.
+
+2.1절의 새 세트는 다음 순서로 만들고 잰다.
+
+1. 명세를 만든다: `node services/hf-eval/scripts/heldout.mjs spec --seed jeju-evalset-heldout-20261122 --output .local/evaluation-spec-heldout-1.json`
+2. 같은 도구의 `build --spec …`로 평가셋을 만든다(인자는 `build-evaluation-set.mjs`와 같다).
+3. `eval --spec … prepare|self-check|import|score`로 계획 작성·자체 검사·가져오기·채점을 한다(인자는 `evaluate-baselines.mjs`와 같다).
+4. 수집은 위 명령에 `--mode rule-action`을 더한다. 기본값은 `model-action`(v1)이다.
+
+테스트: `services/jeju-mcp` 223개(새 `local-llm-import` 2개 포함), `services/hf-eval` 6개(규칙 동작 1개 추가), 앱 `scripts/test-place-embeddings.ts` 5개.
 
 ## 6. 남은 일
 
-- Qwen: `cannot_confirm` 계약 오해를 고친 프롬프트·스키마를 새 문항으로 확인. 사람 검수·합성 보안 14개는 계속 미실행.
+- Qwen: 2.1절의 규칙 동작 모드로 새 96문항에서 차단 0·동작 95/96을 확인했다. 남은 규칙 차이 두 가지(걷기 최소화 경로 제외, 문맥 확인 주제)는 고친 뒤 새 시드의 세 번째 세트로 확인한다. 장소 선택 품질은 작성 질의·사람 검수가 필요하다. 사람 검수·합성 보안 14개는 계속 미실행이다.
 - 임베딩: 원격 질의 벡터와 로컬 fp32 장소 벡터의 수치 일치 확인(`router.huggingface.co` 접근 가능한 환경에서 같은 문장 1~2개 비교). 의미 후보가 실제 결과에 들어간 비율을 보려면 응답에 출처 표시가 필요하다. 호출 비용은 사용자 결제 화면에서 며칠 뒤 확인.
 - SynthTRIPs: persona alignment 기준을 작성 질의 사람 검수표로 옮길지 결정.

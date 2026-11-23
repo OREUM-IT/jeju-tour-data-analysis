@@ -359,6 +359,72 @@ test('more than five valid selections are capped in model order and no requireme
   assert.deepEqual(malformed, recovered);
 });
 
+test('rule-action selection: the server composes action, claims and notices from model-chosen IDs only', () => {
+  const original = request({ requirements: [{ type: 'indoor_required', value: true }] });
+  const { validate, strict, body, prepared } = validationFixture({ original,
+    extraPlaces: [place('failed', '합성 야외 전시관', { attributes: { indoor: verified(false) } })] });
+  const selection = { placeIds: ['food', 'p2', 'failed', 'p2', 'excluded', 'p1', 'missing'] };
+  const unchanged = structuredClone(selection);
+  assert.equal(strict.validate(body(selection)).status, 'blocked');
+  const composed = validate(selection);
+  assert.equal(composed.status, 'accepted');
+  assert.deepEqual(composed.reasons, []);
+  assert.deepEqual(composed.response, recommendation(['p2', 'p1'], { action: 'cannot_confirm', confirmationNotice: true,
+    requirementClaims: [
+      { placeId: 'p2', requirement: 'indoor_required', verdict: 'unknown' },
+      { placeId: 'p1', requirement: 'indoor_required', verdict: 'pass' },
+    ], noticeTopics: ['indoor_unverified'] }));
+  for (const key of ['requestSha256', 'catalogSha256', 'catalogVersion', 'policyVersion', 'candidateCount']) assert.equal(composed[key], prepared[key]);
+  // The Gateway re-validates the composed response; it must come back unchanged.
+  assert.deepEqual(validate(composed.response), composed);
+  assert.equal(strict.validate(body(composed.response)).status, 'accepted');
+  assert.deepEqual(selection, unchanged);
+  const only = validate({ placeIds: ['p1'] });
+  assert.deepEqual(only.response, recommendation(['p1'], {
+    requirementClaims: [{ placeId: 'p1', requirement: 'indoor_required', verdict: 'pass' }] }));
+});
+
+test('rule-action selection caps five in model order and ignores any model action when IDs are the only key', () => {
+  const extraPlaces = Array.from({ length: 7 }, (_, index) => place(`extra-${index}`, `합성 추가 ${index}`));
+  const { validate } = validationFixture({ extraPlaces });
+  const ordered = ['extra-6', 'extra-2', 'p2', 'extra-4', 'p1', 'extra-0', 'extra-1'];
+  assert.deepEqual(validate({ placeIds: ordered }).response, recommendation(ordered.slice(0, 5)));
+  // Extra keys are not a selection: they follow the existing strict/recovery path.
+  const legacy = validate({ placeIds: ['p2'], action: 'impossible' });
+  assert.equal(legacy.status, 'blocked');
+});
+
+test('rule-action selection returns impossible only when no registered candidate survives verified failures', () => {
+  const closed = { attributes: { hours: verified({ openMin: 540, closeMin: 1080, text: '매일 09:00~18:00' }) } };
+  const lateOnly = request({ filters: { category: 'art', zone: 'JC', text: '합성 늦은' },
+    requirements: [{ type: 'open_at', value: '20:00' }] });
+  const fixture = validationFixture({ original: lateOnly, extraPlaces: [place('late', '합성 늦은 전시관', closed)] });
+  assert.equal(fixture.prepared.candidateCount, 1);
+  for (const placeIds of [[], ['late'], ['p2', 'missing']]) {
+    const result = fixture.validate({ placeIds });
+    assert.equal(result.status, 'accepted');
+    assert.deepEqual(result.response, recommendation([], { action: 'impossible' }));
+    assert.deepEqual(fixture.validate(result.response), result);
+  }
+  const empty = validationFixture({ original: request({ filters: { category: 'art', text: '존재하지 않는 이름' } }) });
+  assert.equal(empty.prepared.candidateCount, 0);
+  assert.equal(empty.validate({ placeIds: [] }).response.action, 'impossible');
+});
+
+test('rule-action selection without an eligible ID stays blocked while viable candidates exist', () => {
+  const { validate, strict, body } = validationFixture({
+    original: request({ requirements: [{ type: 'indoor_required', value: true }] }),
+    extraPlaces: [place('failed', '합성 야외 전시관', { attributes: { indoor: verified(false) } })],
+  });
+  for (const selection of [{ placeIds: [] }, { placeIds: ['missing', 'excluded', 'food'] }, { placeIds: ['failed'] },
+    { placeIds: 'p2' }, { placeIds: ['p2', 1] }, { placeIds: [' p2'] }, { placeIds: Array(51).fill('p2') }]) {
+    const blocked = validate(selection);
+    assert.equal(blocked.status, 'blocked');
+    assert.deepEqual(blocked, strict.validate(body(selection)));
+    assert.equal('response' in blocked, false);
+  }
+});
+
 test('deadline and process restart fail closed without carrying scopes into a fresh process', () => {
   let now = NOW;
   const input = catalog();

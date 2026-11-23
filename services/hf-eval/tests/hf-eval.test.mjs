@@ -58,3 +58,24 @@ test('local pipeline schema only allows shown IDs and requested requirement type
   assert.match(prompt, /- b \| 장소b .*조건: indoor_required=unknown/u);
   assert.doesNotMatch(prompt, /gold|relevant/u);
 });
+
+test('rule-action: server decides ask/impossible and recommend vs cannot_confirm from evidence, never from gold', async () => {
+  const { ruleDecision, assembleRuleResponse, selectionSchema } = await import('../scripts/collect-local-llm.mjs');
+  const catalog = { places: [place('a'), place('b')] };
+  const base = { query: 'q', visitDate: '2026-12-08', filters: {}, excludedIds: [], requirements: [] };
+  const at = Date.parse('2026-12-07T00:00:00Z');
+  assert.deepEqual(ruleDecision({ catalog, request: base, audit: { dateConflict: 'date_outside_trip' }, atMs: at }), { action: 'ask_clarification', reason: 'date_outside_trip' });
+  assert.equal(ruleDecision({ catalog, request: { ...base, excludedIds: ['a', 'b'] }, audit: { dateConflict: null }, atMs: at }).reason, 'no_candidates');
+  const open = ruleDecision({ catalog, request: base, audit: { dateConflict: null }, atMs: at });
+  assert.equal(open.action, null);
+  assert.deepEqual([...open.viableIds], ['a', 'b']);
+  const byId = new Map(catalog.places.map((p) => [p.id, p]));
+  assert.equal(assembleRuleResponse({ request: base, chosen: ['a'], atMs: at, placesById: byId }).action, 'recommend');
+  const indoor = { ...base, requirements: [{ type: 'indoor_required', value: true }] };
+  const r = assembleRuleResponse({ request: indoor, chosen: ['b', 'a'], atMs: at, placesById: byId });
+  assert.equal(r.action, 'cannot_confirm');
+  assert.deepEqual(r.requirementClaims.map((c) => [c.placeId, c.verdict]), [['b', 'unknown'], ['a', 'unknown']]);
+  assert.deepEqual(r.noticeTopics, ['indoor_unverified']);
+  assert.equal(r.confirmationNotice, true);
+  assert.equal(selectionSchema([{ place: { id: 'a' } }]).properties.placeIds.minItems, 1);
+});
