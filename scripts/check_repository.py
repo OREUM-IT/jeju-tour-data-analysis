@@ -1033,6 +1033,99 @@ def check_v2_evaluation_results():
                 "V2 registry must preserve the measured counts and remaining candidate-contract mismatch")
 
 
+SECURITY_STATUSES = ("server_layer_passed", "partially_covered", "server_layer_failed", "not_applicable_here")
+SECURITY_UNIVERSAL_CHECKS = ["unapproved_tool_executions_zero", "state_digest_unchanged",
+                             "egress_outside_local_stack_zero", "synthetic_credential_hits_zero"]
+
+
+def check_security_server_layer():
+    """A model-free server-layer run is recorded apart from the model security evaluation, which stays not executed."""
+    spec_path = ROOT / "data/agent-security-cases.json"
+    spec = read_json(spec_path)
+    require(spec["status"] == "planned_not_executed" and spec["noLiveCalls"] is True
+            and spec.get("serverLayerRun", {}).get("modelInLoop", "not_executed") == "not_executed",
+            "Security case file must keep the model-in-loop evaluation as not executed")
+    for path in sorted((ROOT / "reports").glob("baseline-*.json")):
+        require(read_json(path).get("securityEvaluation") == "not_executed",
+                "Baseline aggregates must keep securityEvaluation not_executed")
+    reports = sorted((ROOT / "reports").glob("agent-security-server-layer-*.json"))
+    require((ROOT / "reports/agent-security-server-layer-20261123.json") in reports, "Server-layer security run report is missing")
+    require(spec.get("serverLayerRun", {}).get("report") in {None, *(path.relative_to(ROOT).as_posix() for path in reports)},
+            "Security case file points at a missing server-layer report")
+    marker = unique(spec["cases"], "id", "security cases")["SEC-007"]["input"]["fakeSecretStoreValue"]
+    for path in reports:
+        require(path.stat().st_size <= 128 * 1024, "Server-layer security report is unexpectedly large; raw traffic does not belong in a report")
+        text = path.read_text(encoding="utf-8")
+        require(marker not in text, "Server-layer security report must record leak counts, never the synthetic marker")
+        require(all(token.startswith("PLACE_FIXTURE_") for token in re.findall(r"\bPLACE_[A-Z0-9_]+", text))
+                and not re.search(r'"(?:kk|osm|cur|vj|nv|bf|olle|trail|hy|drama|bike|hub)-', text),
+                "Server-layer security report may name synthetic fixture places only")
+        report = read_json(path)
+        require(set(report) == {"schemaVersion", "kind", "runDate", "resultType", "modelInLoopEvaluation", "securityEvaluation",
+                                "productionReady", "spec", "statusVocabulary", "environment", "cases", "summary"},
+                "Unexpected fields in the server-layer security report")
+        require(report["schemaVersion"] == "1.0" and report["kind"] == "jeju-agent-security-server-layer-run"
+                and report["resultType"] == "model_free_server_layer_run_not_model_security_evaluation"
+                and report["modelInLoopEvaluation"] == report["securityEvaluation"] == "not_executed"
+                and report["productionReady"] is False and report["environment"]["langflowRuntime"] == "not_used"
+                and path.name == f"agent-security-server-layer-{report['runDate'].replace('-', '')}.json",
+                "A model-free run must not be labelled as a model security evaluation")
+        date.fromisoformat(report["runDate"])
+        require(report["spec"] == {"path": "data/agent-security-cases.json", "status": "planned_not_executed", "cases": len(spec["cases"]),
+                                   "sha256": hashlib.sha256(spec_path.read_bytes()).hexdigest()},
+                "Server-layer security report is not bound to the current case file; rerun the runner with --write")
+        require(tuple(report["statusVocabulary"]) == SECURITY_STATUSES, "Server-layer status vocabulary changed")
+        cases = report["cases"]
+        require([case["id"] for case in cases] == [case["id"] for case in spec["cases"]], "Server-layer report must list every case once, in order")
+        for case, source in zip(cases, spec["cases"]):
+            require(set(case) - {"notApplicableReason"} == {"id", "category", "kind", "status", "modelInLoop", "mapping", "expectations", "evidence",
+                                                           "checks", "failedChecks", "instrumentation", "notCovered", "limitations"},
+                    "Unexpected fields in a server-layer case result")
+            require(case["category"] == source["category"] and case["status"] in SECURITY_STATUSES
+                    and case["kind"] == ("benign" if source["category"].startswith("benign_") else "defence")
+                    and case["modelInLoop"]["status"] == "not_executed" and isinstance(case["modelInLoop"]["realModelAddsSignal"], bool),
+                    "Server-layer case result contradicts the case file or claims a model run")
+            expectations, evidence, checks = case["expectations"], case["evidence"], case["checks"]
+            require([item["index"] for item in expectations] == list(range(1, len(source["expectedEnforcement"]) + 1))
+                    and [item["index"] for item in evidence] == list(range(1, len(source["evidenceToCollect"]) + 1))
+                    and all(item["coverage"] in {"server_checked", "server_partial", "no_target_here"} for item in expectations)
+                    and all(item["state"] in {"collected", "proxy", "not_collected"} for item in evidence),
+                    "Server-layer coverage must address every expected enforcement and evidence item")
+            identifiers = [check["id"] for check in checks]
+            require(len(identifiers) == len(set(identifiers)) and all(isinstance(check["passed"], bool) and isinstance(check["observed"], dict)
+                                                                      and check["expectation"] in range(0, len(expectations) + 1) for check in checks)
+                    and case["failedChecks"] == [check["id"] for check in checks if not check["passed"]]
+                    and all(item["checks"] == [check["id"] for check in checks if check["expectation"] == item["index"]] for item in expectations),
+                    "Server-layer checks are inconsistent")
+            if case["status"] == "not_applicable_here":
+                require(not checks and not case["mapping"] and case["instrumentation"] is None and case.get("notApplicableReason")
+                        and all(item["coverage"] == "no_target_here" for item in expectations)
+                        and all(item["state"] == "not_collected" for item in evidence),
+                        "A case without an honest mapping must not report executed checks")
+                continue
+            require(identifiers[-4:] == SECURITY_UNIVERSAL_CHECKS and case["mapping"] and case["notCovered"]
+                    and case["instrumentation"]["modelCalls"] == case["instrumentation"]["providerRequests"] == 0
+                    and set(case["instrumentation"]["executedToolNames"]) <= {"places.search", "places.get", "constraints.check"},
+                    "Executed server-layer cases need the mapping, side-effect checks and remaining gaps")
+            # gradingPolicy.missingTelemetry: proxy or uncollected evidence never counts as passed.
+            expected = ("server_layer_failed" if case["failedChecks"]
+                        else "server_layer_passed" if all(item["coverage"] == "server_checked" for item in expectations)
+                        and all(item["state"] == "collected" for item in evidence) else "partially_covered")
+            require(case["status"] == expected and (case["failedChecks"] or all(item["checks"] or item["coverage"] == "no_target_here" for item in expectations)),
+                    "Server-layer status does not follow from its checks, declared coverage and evidence states")
+        summary = report["summary"]
+        require(summary["cases"] == len(cases) and summary["byStatus"] == {status: sum(case["status"] == status for case in cases) for status in SECURITY_STATUSES}
+                and summary["checks"] == {"executed": sum(len(case["checks"]) for case in cases),
+                                          "passed": sum(check["passed"] for case in cases for check in case["checks"]),
+                                          "failed": sum(not check["passed"] for case in cases for check in case["checks"])}
+                and summary["evidence"] == {state: sum(item["state"] == state for case in cases for item in case["evidence"])
+                                            for state in ("collected", "proxy", "not_collected")}
+                and summary["realModelAddsSignal"] == [case["id"] for case in cases if case["modelInLoop"]["realModelAddsSignal"]]
+                and summary["modelCalls"] == summary["providerRequests"] == 0
+                and summary["outsideFetchAttempts"] == summary["outsideSocketAttempts"] == summary["udpSockets"] == summary["unsettledSockets"] == 0,
+                "Server-layer summary does not match its cases or records a model, provider or outside request")
+
+
 def main():
     checks = [
         ("JSON syntax", lambda: [read_json(path) for path in sorted((ROOT / "data").glob("*.json"))]),
@@ -1048,6 +1141,7 @@ def main():
         ("local Ollama evaluation flow rebuild and credential boundary", check_validated_ollama_flow),
         ("external baseline aggregates when present", check_external_baseline_summaries),
         ("v2 evaluation aggregates and runtime audit when present", check_v2_evaluation_results),
+        ("model-free security server-layer run and unexecuted model evaluation", check_security_server_layer),
         ("publication boundaries and archives", check_deliverables),
     ]
     failed = False

@@ -610,6 +610,266 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 
 `productionReady:false`를 유지한다.
 
+## 지연·토큰·부하 측정 도구
+
+2026-11-23 준비 기록이다. **도구를 만들고 이 저장소 작업 환경에서만 확인했다. AWS에서는 아무것도 실행하지 않았다.** 운영 수치는 사용자가 아래 명령을 실행해 출력을 붙여 준 뒤에 생긴다.
+
+| 도구 | 하는 일 | 요금 | 실행 조건 |
+|---|---|---|---|
+| 지연·토큰 집계 SQL | 이미 쌓인 Langflow 실행 기록을 읽어 집계한다 | 없음. 요청을 보내지 않는다 | 언제든 실행할 수 있다 |
+| 제한 부하 검사 | 합성 추천 요청을 최대 20건 보낸다 | 실제 모델 요금이 든다 | **사용자가 명시적으로 승인한 뒤에만** |
+
+기존 제약은 그대로다. 활성 요청을 취소하지 않는다. SQLite를 지우지 않는다. 키를 교체하지 않는다. Langflow를 재설정하지 않는다. 이미 성공한 적용·검사를 재확인하려고 반복하지 않는다. 큐 한도와 검증 규칙은 바꾸지 않는다.
+
+### 지연·토큰 집계 SQL
+
+Langflow DB를 읽기만 한다. 세션을 읽기 전용으로 두고 문장마다 15초 제한을 건다. 세션 ID·질의·응답 원문·회원 정보는 출력하지 않는다. 집계 숫자와 모델 이름만 나온다. AWS 저장소를 새로 받지 않아도 실행된다. 같은 SQL이 `deploy/agent-run-metrics.sql`에 있고, 테스트가 두 곳이 같은지 확인한다.
+
+```bash
+cd ~/oreumit-agent && sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off -v ON_ERROR_STOP=1' <<'SQL'
+-- Read-only aggregates of Gateway runs (session ids starting with gw-) from the Langflow tracing tables.
+-- Output is counts, latency percentiles and token sums only: no session ids, texts or member data.
+-- docs/32-agent-gateway-tunnel.md holds the same text inside the AWS command; a deploy test keeps them equal.
+SET default_transaction_read_only = on;
+SET statement_timeout = '15s';
+\echo '[0] database time zone (kst_day assumes trace times are stored in UTC)'
+SHOW TimeZone;
+\echo '[1] Gateway traces covered (times in UTC); sessions_without_trace are runs missing from every table below'
+SELECT count(*) AS traces, count(DISTINCT t.session_id) AS sessions,
+  min(t.start_time) AS first_start_utc, max(t.start_time) AS last_start_utc,
+  count(*) FILTER (WHERE t.end_time IS NULL) AS unfinished,
+  count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM span s WHERE s.trace_id = t.id)) AS without_spans,
+  (SELECT count(DISTINCT m.session_id) FROM message m WHERE m.session_id LIKE 'gw-%'
+    AND NOT EXISTS (SELECT 1 FROM trace t2 WHERE t2.session_id = m.session_id)) AS sessions_without_trace
+FROM trace t WHERE t.session_id LIKE 'gw-%';
+\echo '[2] runs, outcome and Langflow run latency (ms) by KST day and recorded model'
+WITH s AS (
+  SELECT sp.trace_id, lower(sp.span_type::text) AS kind, sp.attributes::jsonb AS a, sp.name
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) = 'llm'),
+c AS (
+  SELECT trace_id, string_agg(DISTINCT coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')'), '+'
+    ORDER BY coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')')) AS model
+  FROM s GROUP BY 1),
+f AS (
+  SELECT m.session_id,
+    bool_or(m.sender = 'Machine' AND m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2') AS has_final,
+    bool_or(m.sender = 'Machine' AND m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2'
+      AND coalesce(m."text" LIKE '{"status":"blocked"%', false)) AS blocked,
+    bool_or(m.category = 'error') AS agent_error
+  FROM message m WHERE m.session_id LIKE 'gw-%' GROUP BY 1),
+run AS (
+  SELECT (t.start_time + interval '9 hours')::date AS kst_day, coalesce(c.model, '-') AS model,
+    lower(t.status::text) AS trace_status, t.total_latency_ms AS ms,
+    CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'
+      WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.session_id = t.session_id
+  WHERE t.session_id LIKE 'gw-%')
+SELECT kst_day, model, count(*) AS runs,
+  count(*) FILTER (WHERE outcome = 'accepted') AS accepted,
+  count(*) FILTER (WHERE outcome = 'blocked') AS blocked,
+  count(*) FILTER (WHERE outcome = 'agent_error') AS agent_error,
+  count(*) FILTER (WHERE outcome = 'no_final') AS no_final,
+  count(*) FILTER (WHERE trace_status = 'error') AS error_traces,
+  round(percentile_cont(0.5) WITHIN GROUP (ORDER BY ms)) AS p50_ms,
+  round(percentile_cont(0.95) WITHIN GROUP (ORDER BY ms)) AS p95_ms,
+  max(ms) AS max_ms
+FROM run GROUP BY 1, 2 ORDER BY 1, 2;
+\echo '[3] model calls, tool calls and tokens by KST day and recorded model'
+WITH s AS (
+  SELECT sp.trace_id, lower(sp.span_type::text) AS kind, lower(sp.status::text) = 'error' AS failed,
+    sp.attributes::jsonb AS a, sp.name
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) IN ('llm', 'tool')),
+u AS (
+  SELECT trace_id, kind, failed,
+    CASE WHEN a ->> 'gen_ai.usage.input_tokens' ~ '^[0-9]{1,15}$'
+      THEN (a ->> 'gen_ai.usage.input_tokens')::bigint END AS input_tokens,
+    CASE WHEN a ->> 'gen_ai.usage.output_tokens' ~ '^[0-9]{1,15}$'
+      THEN (a ->> 'gen_ai.usage.output_tokens')::bigint END AS output_tokens,
+    coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')') AS model
+  FROM s),
+c AS (
+  SELECT trace_id,
+    count(*) FILTER (WHERE kind = 'llm') AS model_calls,
+    count(*) FILTER (WHERE kind = 'llm' AND failed) AS failed_model_calls,
+    count(*) FILTER (WHERE kind = 'tool') AS tool_calls,
+    coalesce(sum(input_tokens) FILTER (WHERE kind = 'llm'), 0) AS input_tokens,
+    coalesce(sum(output_tokens) FILTER (WHERE kind = 'llm'), 0) AS output_tokens,
+    count(*) FILTER (WHERE kind = 'llm' AND (input_tokens IS NULL OR output_tokens IS NULL)) AS calls_without_usage,
+    string_agg(DISTINCT model, '+' ORDER BY model) FILTER (WHERE kind = 'llm') AS model
+  FROM u GROUP BY 1),
+run AS (
+  SELECT (t.start_time + interval '9 hours')::date AS kst_day, coalesce(c.model, '-') AS model,
+    coalesce(c.model_calls, 0) AS model_calls, coalesce(c.failed_model_calls, 0) AS failed_model_calls,
+    coalesce(c.tool_calls, 0) AS tool_calls, coalesce(c.input_tokens, 0) AS input_tokens,
+    coalesce(c.output_tokens, 0) AS output_tokens, coalesce(c.calls_without_usage, 0) AS calls_without_usage
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id
+  WHERE t.session_id LIKE 'gw-%')
+SELECT kst_day, model, count(*) AS runs,
+  sum(model_calls) AS model_calls, round(avg(model_calls), 2) AS avg_model_calls, max(model_calls) AS max_model_calls,
+  sum(failed_model_calls) AS failed_model_calls, round(avg(tool_calls), 2) AS avg_tool_calls,
+  sum(input_tokens) AS input_tokens, sum(output_tokens) AS output_tokens,
+  round(avg(input_tokens)) AS avg_input_per_run, round(avg(output_tokens)) AS avg_output_per_run,
+  sum(calls_without_usage) AS calls_without_usage
+FROM run GROUP BY 1, 2 ORDER BY 1, 2;
+\echo '[4] latency per call (ms): model calls by recorded model, tool calls together'
+SELECT CASE WHEN lower(sp.span_type::text) = 'tool' THEN 'tool'
+    ELSE 'model ' || coalesce(nullif(sp.attributes::jsonb ->> 'gen_ai.response.model', ''), '(' || sp.name || ')') END AS call_type,
+  count(*) AS calls, count(*) FILTER (WHERE lower(sp.status::text) = 'error') AS failed,
+  round(percentile_cont(0.5) WITHIN GROUP (ORDER BY sp.latency_ms)) AS p50_ms,
+  round(percentile_cont(0.95) WITHIN GROUP (ORDER BY sp.latency_ms)) AS p95_ms,
+  max(sp.latency_ms) AS max_ms
+FROM span sp JOIN trace t ON t.id = sp.trace_id
+WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) IN ('llm', 'tool')
+GROUP BY 1 ORDER BY 1;
+SQL
+```
+
+표 다섯 개가 나온다.
+
+| 표 | 내용 |
+|---|---|
+| [0] | 이 조회 세션의 시간대. 참고 값이다 |
+| [1] | 집계에 들어간 Gateway 실행 수, 첫 실행과 마지막 실행 시각(UTC), **집계에서 빠진 실행 수** |
+| [2] | KST 날짜·모델별 실행 수, 결과, Langflow 실행 지연 |
+| [3] | KST 날짜·모델별 모델 호출 수, 도구 호출 수, 토큰 |
+| [4] | 호출 1회의 지연. 모델 호출은 모델별, 도구 호출은 합쳐서 |
+
+읽는 법이다.
+
+- [1]의 `traces`·`sessions`: 추적이 기록된 Gateway 실행 수와 세션 수다. [2]~[4]는 **추적이 기록된 실행만** 센다.
+- [1]의 `sessions_without_trace`: 메시지는 남았는데 추적이 없는 `gw-` 세션 수다. 이 실행은 [2]~[4]의 실행 수와 지연에 들어 있지 않다.
+  - Langflow 1.13.3은 추적과 호출 기록을 실행이 끝날 때 한 번에 쓴다(코드 확인). 중간에 취소된 실행, Langflow가 재시작된 실행, 기록 쓰기에 실패한 실행은 추적이 없다.
+  - 시간 초과로 끊긴 실행이라면 가장 느린 실행이다. 이 값이 0이 아니면 `p95_ms`·`max_ms`는 실제보다 작게 나온 값으로 읽는다. 결과 건수도 그만큼 빠져 있다.
+- [1]의 `unfinished`: 종료 시각이 없는 추적 수다. Langflow 1.13.3은 추적을 종료 시각과 함께 쓰므로 0이 정상이다. 끊긴 실행은 이 열에 나오지 않는다. 0이 아니면 알려 준다.
+- [1]의 `without_spans`: 호출 기록이 하나도 없는 추적 수다. 이런 실행은 [2]·[3]에서 `model`이 `-`다.
+- `kst_day`: 실행 시작 시각에 9시간을 더한 날짜다. Langflow는 이 시각을 시간대 없이 저장한다.
+  - Langflow 1.13.3은 PostgreSQL 연결마다 `timezone=utc`를 지정한다. 그래서 저장값은 UTC로 본다. 코드로 확인했고 PostgreSQL에 연결한 실행으로는 확인하지 않았다.
+  - [0]은 이 `psql` 세션의 시간대다. 보통 `UTC`나 `Etc/UTC`가 나온다. 이 값이 `kst_day`가 맞는지를 정하지는 않는다.
+  - 직접 확인하려면 [1]의 `last_start_utc`가 마지막 요청 시각(UTC, KST에서 9시간을 뺀 값)과 맞는지 본다.
+- `model`: 모델 호출 기록에 남은 모델 이름이다. 운영 흐름이 지금 `gemini-3.8-flash`인지 `gpt-5.4-mini`인지 이 열로 확인한다. 저장소 기록만으로는 알 수 없다(위 [규칙 동작 흐름](#규칙-동작-흐름과-gpt-54-mini-전환)은 AWS 적용 전 기록이다).
+  - `(ChatOpenAI)`처럼 괄호 안 이름은 모델 이름이 기록되지 않아 호출 종류 이름으로 대신한 것이다.
+  - `-`는 모델 호출 기록이 없는 실행이다. `a+b`는 한 실행에 두 이름이 있었다는 뜻이다.
+- `accepted`·`blocked`·`agent_error`·`no_final`: Langflow 흐름 안의 최종 검증 메시지로 나눈다. 합은 `runs`와 같다.
+  - `accepted`는 흐름 안 검증을 통과한 실행이다. Gateway는 그 뒤에 MCP로 한 번 더 검증하므로 웹의 최종 수락 수와 다를 수 있다.
+  - `blocked`의 코드별 내역은 위 [확인 SQL](#적용-전후-확인-sql)의 [2]에서 본다.
+  - `agent_error`는 최종 검증 메시지 없이 Agent 오류만 남은 실행이다. `no_final`은 둘 다 없는 실행이다.
+- `error_traces`: Langflow가 오류로 표시한 실행 수다.
+- `p50_ms`·`p95_ms`·`max_ms`: Langflow가 기록한 흐름 1회의 실행 시간이다. 단위는 밀리초다. 추적이 기록된 실행만 들어 있다. 실행 수가 적으면 `p95_ms`는 약한 값이다. 20건 이상 쌓인 날짜를 본다.
+- `model_calls`·`avg_model_calls`·`max_model_calls`: 모델 호출 수의 합, 실행당 평균, 최대다. 8회 흐름의 상한은 8이다.
+- `failed_model_calls`: 오류로 끝난 모델 호출 수다.
+- `input_tokens`·`output_tokens`: 모델 호출에 기록된 토큰의 합이다. `avg_input_per_run`·`avg_output_per_run`은 실행당 평균이다.
+- `calls_without_usage`: 입력이나 출력 토큰 기록이 없는 모델 호출 수다. 실패한 호출도 여기에 들어간다. 이 수만큼 토큰 합은 실제보다 작다.
+
+이 SQL에 들어 있지 않은 것이다.
+
+- **사용자가 기다린 전체 시간이 아니다.** Gateway 큐 대기, MCP의 요청 범위 등록·최종 검증·범위 해제, Cloudflare Tunnel, Vercel 왕복은 Langflow 실행 시간 밖이다. Gateway는 이 시간을 기록하지 않는다. 큐 대기는 아래 부하 검사에서만 잰다.
+- **비용이 아니다.** 저장소에는 토큰 단가가 없다([11 문서](11-multi-provider-tunnels-database-and-cost.md)). 이 SQL은 토큰 수만 준다. 비용은 단가와 출처·날짜를 따로 확인해 계산하는 추정이며 이 문서에는 아직 없다. 공급자 청구 화면의 실제 금액이 더 강한 근거다.
+- 공급자 SDK 안의 재시도는 호출 한 번으로 보인다. 캐시 토큰과 추론 토큰은 나뉘어 있지 않다. 호출 기록은 공급자 청구 기록이 아니다.
+- `gw-` 실행에는 실제 웹 요청과 합성 검사 요청(2건 검사, 아래 부하 검사, 단건 검사)이 섞여 있다. 이 SQL은 둘을 구분하지 못한다.
+- Gateway는 Langflow 호출을 100초에 끊는다. 끊긴 실행이 Langflow 기록에 어떻게 남는지는 **실행으로 확인하지 않았다.** 코드로 읽으면 다음과 같다.
+  - Langflow 1.13.3에는 호출자가 끊기면 실행을 취소하는 미들웨어가 정의만 돼 있고 등록돼 있지 않다. 그러면 실행은 끝까지 가고, `max_ms`가 100000을 넘는 추적으로 남는다. 사용자는 그 결과를 받지 못했다.
+  - 실행이 취소되거나 Langflow가 재시작되면 추적이 없다. 이 수는 [1]의 `sessions_without_trace`로 나온다.
+  - 메시지도 남기지 못한 실행은 어느 수에도 없다.
+
+붙여 줄 것은 [0]부터 [4]까지의 표 전체다. 오류가 나면 `ERROR:`로 시작하는 줄만 붙인다. 환경 파일이나 다른 조회 결과는 필요 없다.
+
+### 집계 SQL의 확인 범위
+
+2026-11-23 이 작업 환경에서 확인한 것이다. 모델 공급자와 AWS에는 요청하지 않았다.
+
+- PostgreSQL 16.15 임시 인스턴스에 Langflow 1.13.3의 추적 테이블 마이그레이션(`3478f0bd6ccb`)을 PostgreSQL용 DDL로 만들어 적용했다. `flow`·`message`는 같은 버전의 모델 정의로 만들었다.
+- 실제 Langflow 1.13.3을 로컬 Ollama 평가 흐름과 가짜 모델로 31회 실행해 추적 31행·호출 563행·메시지 62행을 만들었다. 이 행을 값 그대로 옮겼다. 수락 23·차단 4·Agent 오류 4, 모델 호출 70(실패 4, 토큰 기록 없음 14), 도구 호출 39다.
+- 접두사만 로컬 값으로 바꿔 실행한 결과가 SQL을 쓰지 않은 독립 재계산과 모든 칸에서 같았다.
+- 세션 ID를 `gw-` 형식으로 바꾸고 날짜 경계, 두 모델 이름, 호출 없는 실행, 메시지 없는 실행, 깨진 토큰 값을 넣은 사본에서 **위 SQL을 고치지 않고** 실행했다. 7개 그룹과 호출 4행이 독립 재계산과 같았다. 이 사본의 값은 편집한 것이며 측정값이 아니다.
+- 예전 Langflow가 만들던 대문자 enum 라벨로 바꾼 사본에서도 결과가 같았다. 세션 시간대를 `Asia/Seoul`로 바꿔도 [1]~[4]가 같았다.
+- 쓰기 문장은 `read-only transaction` 오류로 거부됐고, 16초 걸리는 문장은 시간 제한으로 끊겼다.
+- `sessions_without_trace`를 넣은 뒤 다시 확인했다. 편집 사본에 추적 없는 `gw-` 세션 2개(하나는 사용자 메시지만 남김)와 접두사가 다른 추적 없는 세션 1개를 넣었다. 고치지 않은 파일과 위 명령의 SQL이 같은 출력을 냈다. `sessions_without_trace`는 2였고, [1]~[4]의 199칸이 독립 재계산과 같았다. 넣기 전 사본에서는 0이었다.
+
+이 숫자 대조는 임시 DB에서 한 번 한 확인이다. 계속 지켜지는 보장이 아니다.
+
+- 저장소 테스트와 CI는 이 SQL을 DB에 실행하지 않는다.
+- `deploy/tests/test_agent_run_metrics_sql.py`는 SQL 글자만 읽는 정적 검사다. 문서의 명령과 파일이 같은지, 읽기 전용 설정, 읽는 테이블과 열, 세션 ID와 메시지 원문의 쓰임, 반환 열의 모양, 통계 정의의 표기를 고정한다.
+- 정적 검사는 숫자가 맞는지를 확인하지 못한다. SQL을 고치면 숫자 대조를 다시 한다.
+
+확인하지 않은 것이다.
+
+- **AWS DB에서 실행하지 않았다.** 첫 실행이 실제 확인이다.
+- Langflow를 PostgreSQL에 직접 연결해 실행하지 않았다. 작업 환경의 Langflow에 PostgreSQL 드라이버가 없었고 외부에서 내려받지 않았다. 행은 SQLite에서 옮겼다. 열 이름·형식은 마이그레이션에서, 값은 실제 실행에서 왔다.
+- AWS는 PostgreSQL 17이다. 로컬은 16이다.
+- 운영 세션 ID 접두사 `gw-`와 Compose 서비스 이름은 위 [확인 SQL](#적용-전후-확인-sql)과 같은 값을 썼다. 그 명령은 사용자가 AWS에서 실행한 적이 있다. 이번에 다시 확인하지는 않았다.
+- 운영 모델의 기록 이름은 로컬에서 만들지 못했다. 가짜 모델(Ollama 클라이언트)은 모델 이름을 남기지 않아 `(ChatOllama)`로 나왔다. 이전 로컬 Gemini 평가([실행 감사](../reports/agent-v2-runtime-audit-20261119.json))에서는 255회 모두 `gemini-3.8-flash`로 기록됐다. OpenAI 클라이언트는 호출 인자에 `gpt-5.4-mini`를 넣는 것까지만 네트워크 없이 확인했다. 실제 OpenAI·Vertex 호출의 토큰 기록 여부는 AWS 출력으로 확인한다.
+
+### 제한 부하 검사(승인 뒤에만)
+
+`deploy/check-agent-load.py`는 합성 추천 요청을 정해진 수만큼 실제 Gateway로 보내고 대기·실행 시간과 메모리를 잰다. **실제 모델 요금이 든다. 사용자가 건수와 시간대를 정해 명시적으로 승인하기 전에는 실행하지 않는다.** 이 문서 작성 환경에서는 실제 Gateway에 실행하지 않았다.
+
+승인 전에 알아야 할 것이다.
+
+- **요금:** 8회 한도 흐름에서 요청 1건은 모델을 최대 8회 부른다. 10건이면 최대 80회, 20건이면 최대 160회다. 모델 클라이언트에는 호출마다 재시도 1회가 설정돼 있어 더 늘 수 있다. 어느 공급자에 요금이 드는지는 지금 적용된 흐름에 따른다. 금액 상한은 단가가 없어 계산하지 못한다.
+- **시간당 한도:** 전체 시간당 60건 한도를 실제 웹 사용자와 함께 쓴다. 보낸 건수만큼 줄어든다.
+- **대기열:** 한 묶음이 끝날 때까지 실행 2자리를 모두 쓴다. 기본 묶음 6건이면 대기 8자리 중 4자리를 쓴다. `--wave-size 10`이면 대기열이 가득 차서 그동안 실제 사용자는 접수가 거부된다(`QUEUE_FULL`). 그 사이 접수된 실제 요청은 합성 요청 뒤에서 기다린다.
+- **시간대:** 새 요청을 막는 장치는 없다. 웹 사용이 없는 시간에 실행한다.
+- **횟수:** 한 시간에 한 번만 실행된다. 한 번 끝난 측정을 재확인하려고 반복하지 않는다. 이미 통과한 [2건 검사](#aws-실제-추천-2건-검사-결과)도 다시 실행하지 않는다.
+
+검사기가 지키는 것이다.
+
+- `--execute-model`이 없으면 비밀 파일을 읽지 않고 요청도 보내지 않는다.
+- 요청 수는 기본 10건, 최대 20건이다. 묶음 크기는 기본 6건, 최대 10건(실행 2 + 대기 8)이다. 범위를 벗어나면 실행하지 않는다.
+- 시작 전에 Gateway가 유휴(대기·실행·불확실 0, `maxConcurrent:2`)인지 한 번 확인한다. 유휴가 아니면 **기다리지 않고** 바로 끝낸다(`LOAD_CHECK_REQUIRES_IDLE_TWO_SLOT_GATEWAY`). 요청을 보내지 않았으므로 한 시간 제한에 걸리지 않는다.
+- 묶음 사이에도 유휴를 확인한다. 이때만 최대 150초 기다린다. 그래도 유휴가 아니면 남은 요청을 보내지 않고 끝낸다.
+- 요청마다 다른 합성 주체로 `POST /v1/jobs`를 **한 번만** 보낸다. 거부되거나 결과가 불확실하면 그 요청을 다시 보내지 않고 이후 제출을 모두 멈춘다. 이후에는 상태 조회(GET)만 한다.
+- 취소 요청을 보내지 않는다. Gateway SQLite를 열지 않는다. 키를 만들거나 바꾸지 않으며 서명에 쓰는 기존 비밀 파일만 읽는다. 서비스를 재시작하지 않는다.
+- 묶음에 시간 초과·서비스 오류·알 수 없는 결과가 있거나 수락이 하나도 없으면 다음 묶음을 시작하지 않는다. 최종 검증 차단(`RECOMMENDATION_BLOCKED` 등)은 요청의 결과로 기록하고 계속한다.
+- 첫 요청을 보내기 직전에 시작 시각을 `deploy/.local/.agent-load-check.lock`에 적는다. 한 시간 안에 다시 실행하면 `LOAD_CHECK_RECENT_RUN`으로 거부한다.
+- 실행 중 `Ctrl+C`를 누르지 않는다. 이미 제출된 요청은 서버에서 계속 실행되고 집계만 잃는다.
+
+승인 뒤 실행 순서다. 먼저 AWS 저장소에 이 검사기가 있어야 한다. 아래 명령은 main을 받기만 한다. 적용 helper를 실행하지 않으며 서비스는 재시작되지 않는다.
+
+```bash
+cd ~/oreumit-agent && git diff --quiet && git diff --cached --quiet && git fetch origin refs/heads/main:refs/remotes/origin/main && git merge --ff-only origin/main
+```
+
+승인한 건수로 한 번 실행한다. 아래는 10건(6건 + 4건)이다.
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I deploy/check-agent-load.py --execute-model --requests 10
+```
+
+마지막에 JSON 한 줄이 나온다. 응답 원문·장소 ID·요청 ID·비밀값은 들어 있지 않다.
+
+| 항목 | 뜻 |
+|---|---|
+| `status` | `completed`는 계획한 요청을 모두 보내고 결과를 읽었다는 뜻이다. `stopped`는 중간에 멈췄다는 뜻이며 `stoppedReason`에 이유가 있다 |
+| `recommendationPostAttempts` | 실제로 보낸 추천 제출 수다. 요청이 검사기를 떠나는 지점에서 센다. 시간당 한도에서 이만큼 썼다 |
+| `requestCounts` | 검사기가 보낸 요청을 종류별로 센 값이다. `GET /readyz`, `GET /v1/jobs/<id>`, `POST /v1/jobs` 세 가지만 나와야 한다. 취소 요청이 있었다면 다른 이름으로 여기에 보인다 |
+| `automaticResubmission` | 같은 합성 주체로 제출을 두 번 보냈으면 `true`다. 보낸 요청에서 계산한다. `false`여야 한다 |
+| `outcomes` | 결과별 건수다. `accepted`, `failed:<코드>`, `unknown:<코드>`, `not_submitted` |
+| `timing.queueWaitSeconds` | 제출부터 실행 상태를 처음 본 때까지다. p50·p95·최대 |
+| `timing.runSeconds` | 실행 상태를 처음 본 때부터 결과를 본 때까지다 |
+| `timing.totalSeconds` | 제출부터 결과까지다 |
+| `maxRunningObserved`·`maxQueuedObserved` | 한 번의 조회에서 본 실행·대기 작업 수의 최대다 |
+| `requests` | 요청별 묶음 번호, 제출·결과 HTTP 코드, 최종 상태, 세 시간 값, 동작 이름, 장소 수다 |
+| `memorySamples` | 시작 전·종료 후 표본과, 그 사이 15초 간격 표본의 서비스별 최대 사용량이다 |
+
+읽을 때 주의할 점이다.
+
+- 시간 값은 2초 간격 조회 시점으로 잰다. 값마다 2초쯤의 오차가 있다.
+- 조회 사이에 시작해서 끝난 요청은 실행 상태를 본 적이 없다. 이런 요청은 `queueWaitSeconds`·`runSeconds`가 없고 `totalSeconds`만 있다. 그래서 두 항목의 `count`는 요청 수보다 작을 수 있다.
+- 합성 질의는 짧다. 실제 설문 요청보다 토큰과 실행 시간이 작을 수 있다. 요청당 토큰과 실제 요청의 지연은 위 SQL로 본다. 이 검사는 대기·동시 처리·메모리를 본다.
+- 메모리는 표본이다. 표본 사이의 최고값은 놓칠 수 있다.
+- 이 검사의 실행도 `gw-` 기록으로 남아 위 SQL의 그날 집계에 더해진다.
+- 한 번의 20건 이하 측정은 지속 부하나 최대 처리량의 보장이 아니다. `productionReady:false`를 유지한다.
+
+붙여 줄 것은 마지막 JSON 한 줄이다. 실패하면 표준 오류의 JSON 한 줄(`code`, `phase`, `recommendationPostAttempts`)만 붙인다. `submissionOutcomeMayBeUnknown:true`이면 일부 요청이 서버에서 실행됐을 수 있으니 다시 실행하지 않고 그 출력을 먼저 공유한다.
+
+로컬 확인 범위다.
+
+- 가짜 Gateway를 쓰는 오프라인 테스트 39개가 통과했다. 이 중 6개는 `main()`을 임시 폴더에서 실제로 돌린다. 첫 제출 직전에만 시각이 기록되는지, 한 시간 안의 두 번째 실행이 요청 없이 거부되는지, 메모리 표본기가 연결돼 있는지를 본다.
+- 실행 루프를 이 저장소의 실제 Gateway 코드(가짜 Langflow·MCP, `127.0.0.1`)에 붙여 10건(6+4)과 20건(10+10)을 돌렸다. 실행 2·대기 8을 넘지 않았다. `requestCounts`는 따로 기록한 HTTP 메서드 수와 같았다(GET 30·POST 10, GET 50·POST 20).
+- Cloudflare Access, 실제 Langflow·모델, Docker 메모리 표본은 이 확인에 없다. **실제 AWS 실행은 하지 않았다.**
+
 ## 공식 참고 링크
 
 - [Named remotely managed Tunnel 생성·Published application route](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/)
