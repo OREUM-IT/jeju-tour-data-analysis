@@ -192,6 +192,18 @@ test('get and check reject IDs outside registered candidates and invalid calls c
   throwsCode(() => scopes.call(tool('places.get', { ids: ['p1'] })), 'GATEWAY_TOOL_BUDGET_EXHAUSTED', 429);
 });
 
+test('one in-scope ID never makes an out-of-scope ID readable in the same get or check call', () => {
+  const scopes = createGatewayScopes({ catalog: catalog(), now: NOW });
+  scopes.register(registration(request({ requirements: [{ type: 'indoor_required', value: true }] })));
+  for (const name of ['places.get', 'constraints.check']) {
+    for (const ids of [['p1', 'food'], ['east', 'p1'], ['p2', 'excluded']]) {
+      throwsCode(() => scopes.call(tool(name, { ids })), 'GATEWAY_PLACE_OUTSIDE_SCOPE', 403);
+    }
+  }
+  throwsCode(() => scopes.call(tool('places.get', { ids: ['p1', 'missing'] })), 'GATEWAY_PLACE_OUTSIDE_SCOPE', 403);
+  assert.deepEqual(scopes.call(tool('places.get', { ids: ['p1', 'p2'] })).data.items.map(item => item.id), ['p1', 'p2']);
+});
+
 test('unknown names, extra envelope fields and malformed tool arguments cannot bypass the eight-call budget', () => {
   const scopes = createGatewayScopes({ catalog: catalog(), now: NOW });
   scopes.register(registration());

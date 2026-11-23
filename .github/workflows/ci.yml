@@ -5,6 +5,7 @@ on:
     branches: [main, 'codex/**']
     paths:
       - 'services/jeju-mcp/**'
+      - 'services/agent-gateway/**'
       - 'services/langflow/**'
       - 'examples/ollama-tunnel/**'
       - '.github/workflows/**'
@@ -22,6 +23,7 @@ on:
   pull_request:
     paths:
       - 'services/jeju-mcp/**'
+      - 'services/agent-gateway/**'
       - 'services/langflow/**'
       - 'examples/ollama-tunnel/**'
       - '.github/workflows/**'
