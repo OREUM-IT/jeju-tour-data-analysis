@@ -382,6 +382,120 @@ class GatewayBootstrapTests(unittest.TestCase):
             gateway.configure(Langflow(client.state), base_tests.MCP(), ENV, TEMPLATE, SOURCE, SETUP,
                               provision=True, migrate='update')
 
+    def test_rule_action_flow_changes_only_the_agent_client_prompt_and_credential(self):
+        budget = gateway.budget_flow(gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP))
+        pristine = copy.deepcopy(budget)
+        rule = gateway.rule_action_flow(budget)
+        self.assertEqual(budget, pristine)
+        old, new = agent_fields(budget), agent_fields(rule)
+        code = new['code']['value']
+        ast.parse(code)
+        for marker in gateway.VERTEX_METHOD_MARKERS:
+            self.assertIn(marker, old['code']['value'])
+            self.assertNotIn(marker, code)
+        self.assertEqual(code.count('def _get_llm(self):'), 1)
+        self.assertIn('from langchain_openai import ChatOpenAI', code)
+        # The call budget and final-answer guard of the 8-call build stay byte-identical.
+        self.assertEqual(code.count(gateway.GUARDED_LIMIT_LINES), 1)
+        self.assertIn('GUARDED_AGENT_MODEL_CALL_LIMIT = 8\n', code)
+        self.assertTrue(code.endswith('\n\n' + gateway.FINAL_ANSWER_GUARD))
+        self.assertEqual(new['api_key']['value'], 'JEJU_OPENAI_API_KEY')
+        self.assertIs(new['api_key']['load_from_db'], True)
+        self.assertEqual(new['model']['value'], gateway.RULE_MODEL_VALUE)
+        self.assertEqual(new['system_prompt']['value'], gateway.RULE_PROMPT)
+        self.assertIn('{"placeIds":[]}', gateway.RULE_PROMPT)
+        self.assertEqual((new['max_iterations']['value'], new['max_tokens']['value'], new['n_messages']['value']), (8, 4096, 0))
+        self.assertEqual(rule['description'], gateway.RULE_DESCRIPTION)
+        def without_agent_client(flow):
+            flow = copy.deepcopy(flow)
+            fields = agent_fields(flow)
+            for name in ('code', 'api_key', 'model', 'system_prompt', 'max_tokens'):
+                fields.pop(name)
+            flow.pop('description')
+            return flow
+        self.assertEqual(without_agent_client(budget), without_agent_client(rule))
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_TEMPLATE_MISMATCH$'):
+            gateway.rule_action_flow(rule)
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_TEMPLATE_MISMATCH$'):
+            gateway.rule_action_flow(legacy)
+
+    def test_rule_action_client_is_fixed_openai_with_a_validated_credential(self):
+        code = agent_fields(gateway.rule_action_flow(gateway.budget_flow(
+            gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP))))['code']['value']
+        method = next(node for node in ast.walk(ast.parse(code)) if isinstance(node, ast.FunctionDef) and node.name == '_get_llm')
+        namespace = {}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), 'rule-action-get-llm', 'exec'), namespace)
+        seen = []
+        class ChatOpenAI:
+            def __init__(self, **kwargs): seen.append(kwargs)
+        class Secret:
+            def __init__(self, value): self.value = value
+            def get_secret_value(self): return self.value
+        class Agent:
+            model = copy.deepcopy(gateway.RULE_MODEL_VALUE)
+            api_key = Secret('sk-' + 'x' * 40)
+            def _get_max_tokens_value(self): return 4096
+        with patch.dict(sys.modules, {'langchain_openai': types.SimpleNamespace(ChatOpenAI=ChatOpenAI)}):
+            namespace['_get_llm'](Agent())
+            self.assertEqual(seen, [{'model': 'gpt-5.4-mini', 'api_key': 'sk-' + 'x' * 40, 'base_url': 'https://api.openai.com/v1',
+                                     'streaming': True, 'max_retries': 1, 'timeout': 60, 'reasoning_effort': 'low',
+                                     'max_completion_tokens': 4096}])
+            for key in (None, '', 'x' * 40, 'sk-short', 'sk-' + 'x' * 30 + ' y', 'sk-' + 'ㄱ' * 30):
+                agent = Agent()
+                agent.api_key = Secret(key)
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, '^OPENAI_CREDENTIAL_INVALID$'):
+                    namespace['_get_llm'](agent)
+            for model in ([], [{'provider': 'OpenAI', 'name': 'gpt-5.4'}],
+                          [{'provider': 'Google Generative AI', 'name': 'gpt-5.4-mini'}], gateway.RULE_MODEL_VALUE * 2):
+                agent = Agent()
+                agent.model = model
+                with self.subTest(model=model), self.assertRaisesRegex(ValueError, '^OPENAI_MODEL_SELECTION_INVALID$'):
+                    namespace['_get_llm'](agent)
+        self.assertEqual(len(seen), 1)
+
+    def test_rule_action_switch_requires_openai_credential_and_rolls_back_without_it(self):
+        client = Langflow()
+        provisioned = run(client)
+        flow_id = provisioned['flowId']
+        current = copy.deepcopy(client.state['flows'][flow_id])
+        keys = copy.deepcopy(client.state['keys'])
+        for mode in ('rule-action', 'check-rule-action'):
+            missing = Langflow(client.state)
+            with self.subTest(mode=mode), self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_CREDENTIAL_UNAVAILABLE$'):
+                migrate(missing, mode)
+            self.assertEqual(mutations(missing), [])
+        client.state['variables'].append({'name': 'JEJU_OPENAI_API_KEY', 'type': 'Credential', 'has_value': True})
+        switcher = Langflow(client.state)
+        switched = migrate(switcher, 'rule-action')
+        stored = client.state['flows'][flow_id]
+        self.assertEqual(switched, {'status': 'passed', 'flowStatus': 'updated', 'flowId': flow_id,
+                                    'flowSha256': gateway.flow_sha256(stored['data']), 'modelCallLimit': 8,
+                                    'modelExecuted': False, 'productionReady': False})
+        self.assertNotEqual(switched['flowSha256'], provisioned['flowSha256'])
+        self.assertEqual(stored['description'], gateway.RULE_DESCRIPTION)
+        self.assertEqual([method for method, _ in mutations(switcher)], ['PATCH'])
+        checked = migrate(Langflow(client.state), 'check-rule-action')
+        self.assertEqual((checked['flowMatches'], checked['flowSha256'], checked['modelCallLimit']), (True, switched['flowSha256'], 8))
+        self.assertEqual(migrate(Langflow(client.state), 'rule-action')['flowStatus'], 'already-current')
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+            run(Langflow(client.state), provision=False)
+        for mode in ('update', 'rollback'):
+            with self.subTest(mode=mode), self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+                migrate(Langflow(client.state), mode)
+        client.state['variables'] = [item for item in client.state['variables'] if item['name'] != 'JEJU_OPENAI_API_KEY']
+        back = migrate(Langflow(client.state), 'rule-action-rollback')
+        self.assertEqual((back['flowStatus'], back['flowSha256'], back['modelCallLimit']), ('updated', provisioned['flowSha256'], 8))
+        self.assertEqual({key: value for key, value in client.state['flows'][flow_id].items() if key != 'version_token'},
+                         {key: value for key, value in current.items() if key != 'version_token'})
+        self.assertEqual(client.state['keys'], keys)
+        self.assertEqual(len(client.state['flows']), 1)
+        # The 4-call legacy graph is not a rule-action predecessor.
+        migrate(Langflow(client.state), 'rollback')
+        client.state['variables'].append({'name': 'JEJU_OPENAI_API_KEY', 'type': 'Credential', 'has_value': True})
+        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+            migrate(Langflow(client.state), 'rule-action')
+
     def test_migration_refuses_unknown_graphs_missing_flow_and_concurrent_edits(self):
         client = Langflow()
         flow_id = run(client)['flowId']
@@ -469,7 +583,10 @@ class GatewayBootstrapTests(unittest.TestCase):
             def __enter__(self): return self
             def __exit__(self, *_args): pass
         for argv, expected in ((['--check'], (False, None)), (['--provision'], (True, None)),
-                               (['--update'], (False, 'update')), (['--rollback'], (False, 'rollback'))):
+                               (['--update'], (False, 'update')), (['--rollback'], (False, 'rollback')),
+                               (['--rule-action'], (False, 'rule-action')),
+                               (['--rule-action-rollback'], (False, 'rule-action-rollback')),
+                               (['--check-rule-action'], (False, 'check-rule-action'))):
             seen = {}
             def configure(*_args, provision, migrate):
                 seen.update(provision=provision, migrate=migrate)

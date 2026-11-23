@@ -90,6 +90,52 @@ export function createGatewayScopes({ catalog, now, maxConcurrent = 2 } = {}) {
     return copy(prepared);
   }
 
+  // Server-owned response from explicit model-selected IDs: filters/exclusions and
+  // verified failures come from the registered scope, verdicts and notices from
+  // catalog evidence. The model's own action, claims and notices are never used.
+  function compose(scope, ids, at) {
+    const request = scope.prepared.request;
+    const evidence = place => request.requirements.map(entry => {
+      const date = entry.date ?? request.visitDate;
+      const requirement = { ...entry, ...(date === undefined ? {} : { date }) };
+      return { placeId: place.id, requirement: entry.type, verdict: runtimeRequirementEvidence(place, requirement, at).verdict };
+    });
+    const candidates = new Map(scope.candidates.map(place => [place.id, place]));
+    const seen = new Set(), placeIds = [], requirementClaims = [], topics = new Set();
+    for (const placeId of ids) {
+      if (seen.has(placeId)) continue;
+      seen.add(placeId);
+      const place = candidates.get(placeId);
+      if (!place) continue; // Includes original exclusions, filters and unknown catalog IDs.
+      const claims = evidence(place);
+      if (claims.some(claim => claim.verdict === 'fail')) continue;
+      placeIds.push(placeId);
+      requirementClaims.push(...claims);
+      for (const claim of claims) if (claim.verdict === 'unknown') topics.add(confirmationTopics[claim.requirement]);
+      if (placeIds.length === 5) break;
+    }
+    if (placeIds.length === 0) return null;
+    return { schemaVersion: '1.0', requestId: request.requestId,
+      action: topics.size ? 'cannot_confirm' : 'recommend', placeIds, requirementClaims,
+      confirmationNotice: topics.size > 0, noticeTopics: [...topics] };
+  }
+  // Rule-action selection: the model returns only {"placeIds": [...]}. The server
+  // decides impossible when no registered candidate survives verified failures;
+  // otherwise the selection must keep at least one eligible ID or stay blocked.
+  function selection(scope, raw, input, at) {
+    if (!Array.isArray(raw.placeIds) || raw.placeIds.length > 50
+      || !raw.placeIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 160 && id === id.trim())) return null;
+    const request = scope.prepared.request;
+    const viable = scope.candidates.some(place => request.requirements.every(entry => {
+      const date = entry.date ?? request.visitDate;
+      return runtimeRequirementEvidence(place, { ...entry, ...(date === undefined ? {} : { date }) }, at).verdict !== 'fail';
+    }));
+    const response = viable ? compose(scope, raw.placeIds, at)
+      : { schemaVersion: '1.0', requestId: request.requestId, action: 'impossible', placeIds: [],
+        requirementClaims: [], confirmationNotice: false, noticeTopics: [] };
+    return response && validator.validate({ ...input, response });
+  }
+
   function prepare(request) { return copy(bound(request).prepared); }
   function validate(body) {
     require(exact(body, ['request', 'response', 'expectedCatalogVersion'])
@@ -98,42 +144,25 @@ export function createGatewayScopes({ catalog, now, maxConcurrent = 2 } = {}) {
     require(body.expectedCatalogVersion === scope.prepared.catalogVersion, 409, 'GATEWAY_CATALOG_MISMATCH');
     const input = { ...body, request: scope.prepared.request };
     const original = validator.validate(input);
+    // Use the strict check's trusted server time; the second strict check of a
+    // composed response still rejects it if evidence expires in between.
+    const at = Date.parse(original.evaluatedAt);
+    const raw = body.response;
+    if (exact(raw, ['placeIds'])) {
+      const checked = selection(scope, raw, input, at);
+      return checked?.status === 'accepted' ? checked : original;
+    }
     if (original.status === 'accepted' && original.response.placeIds.length <= 5) return original;
 
     // Recover only explicit model-selected IDs bound to this original request. Never
     // extract IDs from prose, invent replacements, or trust model-authored claims.
-    const raw = body.response;
     if (!record(raw) || !['schemaVersion', 'requestId', 'action', 'placeIds'].every(key => Object.hasOwn(raw, key))
       || raw.schemaVersion !== '1.0' || raw.requestId !== scope.prepared.request.requestId
       || !['recommend', 'cannot_confirm'].includes(raw.action)
       || !Array.isArray(raw.placeIds) || raw.placeIds.length === 0 || raw.placeIds.length > 50
       || !raw.placeIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 160 && id === id.trim())) return original;
-    const request = scope.prepared.request;
-    const candidates = new Map(scope.candidates.map(place => [place.id, place]));
-    const seen = new Set(), placeIds = [], requirementClaims = [], topics = new Set();
-    // Use the first strict check's trusted server time; a second strict check below
-    // still rejects a result if evidence expires while this response is constructed.
-    const at = Date.parse(original.evaluatedAt);
-    for (const placeId of raw.placeIds) {
-      if (seen.has(placeId)) continue;
-      seen.add(placeId);
-      const place = candidates.get(placeId);
-      if (!place) continue; // Includes original exclusions, filters and unknown catalog IDs.
-      const claims = request.requirements.map(entry => {
-        const date = entry.date ?? request.visitDate;
-        const requirement = { ...entry, ...(date === undefined ? {} : { date }) };
-        return { placeId, requirement: entry.type, verdict: runtimeRequirementEvidence(place, requirement, at).verdict };
-      });
-      if (claims.some(claim => claim.verdict === 'fail')) continue;
-      placeIds.push(placeId);
-      requirementClaims.push(...claims);
-      for (const claim of claims) if (claim.verdict === 'unknown') topics.add(confirmationTopics[claim.requirement]);
-      if (placeIds.length === 5) break;
-    }
-    if (placeIds.length === 0) return original;
-    const response = { schemaVersion: '1.0', requestId: request.requestId,
-      action: topics.size ? 'cannot_confirm' : 'recommend', placeIds, requirementClaims,
-      confirmationNotice: topics.size > 0, noticeTopics: [...topics] };
+    const response = compose(scope, raw.placeIds, at);
+    if (!response) return original;
     const checked = validator.validate({ ...input, response });
     return checked.status === 'accepted' ? checked : original;
   }

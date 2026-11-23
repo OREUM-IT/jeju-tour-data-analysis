@@ -474,6 +474,142 @@ SQL
 
 적용 성공은 흐름 교체와 준비 검사 통과이며 추천 품질 개선이나 운영 준비 완료를 뜻하지 않는다. `productionReady:false`를 유지한다.
 
+## 규칙 동작 흐름과 gpt-5.4-mini 전환
+
+2026-11-22 구현·로컬 검증 기록이다. **AWS 적용과 실제 gpt-5.4-mini 호출은 아직 하지 않았다.**
+
+### 왜 바꾸는가
+
+로컬 Qwen 실험([33 문서 2.1절](33-huggingface-models-evaluation.md#21-고도화-실험-동작은-서버-규칙-모델은-장소-선택만-2026-11-22))에서 모델이 동작까지 정하면 차단이 26/96이었다. 서버 규칙이 동작을 정하고 모델은 장소만 고르게 하자 차단이 0/96이 됐다. 같은 결과는 새 96문항에서도 유지됐다. 운영 차단도 대부분 최종 JSON 형식 문제였다(위 [원인 진단](#원인-진단사용자-제공-운영-집계와-추정)).
+
+사용자 선택(2026-11-22)은 다음과 같다.
+- 흐름 전체를 교체한다.
+- 후보 검색은 지금처럼 모델이 도구로 하고, 판단은 서버가 한다.
+- 모델은 Vercel 앱의 여행 도우미와 같은 **gpt-5.4-mini**를 쓴다.
+- 모델 호출 위치는 **AWS Langflow**다.
+
+### 변경 범위
+
+- **모델의 출력**은 `{"placeIds":["…", …]}` 하나뿐이다.
+  - 모델은 지금처럼 `places.search`·`places.get` 도구로 장소를 찾는다. 도구는 원래 요청 범위로 제한되고 요청당 8회까지다.
+  - 동작·조건 판정·확인 안내는 모델이 쓰지 않는다.
+- **MCP의 응답 조립**(`/gateway/validate-response`):
+  - 위 모양의 응답을 받으면 등록된 요청 범위 안의 ID만 남긴다.
+  - 확인된 조건 실패 장소, 중복, 범위 밖 ID를 버리고 모델 순서대로 최대 5곳을 남긴다.
+  - 조건 판정은 카탈로그 근거로 만든다. 모두 pass이면 `recommend`, 아니면 `cannot_confirm`과 확인 주제를 붙인다.
+  - 조건 실패를 빼고도 남는 후보가 하나도 없으면 모델 출력과 관계없이 `impossible`이다.
+  - 후보는 있는데 고른 ID가 하나도 남지 않으면 지금처럼 차단한다. **서버가 장소를 대신 고르지 않는다.**
+  - 조립한 응답은 기존 엄격 최종 검증을 다시 통과해야 한다.
+  - 웹 요청에는 날짜 충돌 정보가 없으므로 `ask_clarification`은 만들지 않는다.
+  - 기존 전체 형식 응답의 엄격 검증과 후보 복구는 그대로다. 그래서 되돌린 Vertex 흐름과도 호환된다.
+- **Langflow Gateway 흐름**: 같은 흐름 ID·API 키를 유지하고 Agent 노드만 바꾼다.
+  - 모델 클라이언트: 검토된 Vertex 생성 코드를 OpenAI 전용 코드로 교체한다. 주소 `api.openai.com`·모델 `gpt-5.4-mini`는 고정이며, 추론 강도 low, 재시도 1회, 60초 제한이다.
+  - 자격증명: 새 Langflow Credential 변수 `JEJU_OPENAI_API_KEY`를 쓴다.
+  - 시스템 지침: `placeIds`만 출력하도록 바꾼다.
+  - 출력 한도: 4096토큰. 추론 토큰이 출력 한도에 함께 들어가기 때문이다.
+  - 모델 8회(마지막은 도구 없는 답변 전용)·90초·도구 3종·최종 검증 노드는 그대로다.
+  - Vertex 자격증명은 되돌리기용으로 남긴다.
+- **바뀌지 않는 것**: Gateway·대기열·인증·Tunnel·Vercel 앱·웹 화면 계약.
+- **데이터 흐름의 변화**: 설문 답변이 Google Vertex 대신 **OpenAI**로 전달된다. Vercel 앱의 여행 도우미·번역은 이미 OpenAI로 보내고 있다.
+- **OpenAI 키**: Vercel과 같은 계정이어도 AWS용 **별도 프로젝트 키**와 사용 한도를 권장한다. 그래야 사용량을 구분하고 따로 폐기할 수 있다.
+
+### 검증한 것과 하지 않은 것
+
+- MCP 단위 테스트(`gateway-scopes`) 4개를 추가했다. 대상은 선택→조립, 5곳 상한·순서, 후보 없음→`impossible`, 남는 ID 없음→차단, 재검증 멱등성이다. jeju-mcp 245개, agent-gateway 77개가 통과했다.
+- 흐름 변환·전환·되돌리기 테스트(`test_gateway_bootstrap`) 3개를 추가했다.
+  - Agent의 모델 클라이언트·키 이름·모델 값·지침·출력 한도·설명만 바뀐다.
+  - OpenAI 키가 없으면 PATCH 전에 거부한다. 되돌리기는 키 없이 가능하다.
+  - 4회 흐름에서 바로 전환하지 않는다.
+  - prepare-gateway(1개), 적용 helper(7개), 키 등록(4개) 테스트도 추가했다. 기존 테스트와 함께 deploy 145개 중 144개가 통과했다. 나머지 1개(`test_export_catalog`)는 main에서도 이 작업 환경의 git 제한으로 실패한다.
+- 실제 981곳 카탈로그로 오프라인 조립 검사(`deploy/tests/check-rule-action.mjs`)를 통과했다. 모델과 네트워크는 쓰지 않았다.
+- langchain-openai 1.8.5로 저장될 Agent 코드의 클라이언트를 만들어 요청 본문을 확인했다(네트워크 없음).
+  - 본문은 `model:gpt-5.4-mini`, `stream:true`, `reasoning_effort:low`, `max_completion_tokens:4096`이다. `temperature`와 `max_tokens`는 없다.
+  - `tool_choice="none"` 바인딩도 유지된다.
+- CI(`agent-gateway-docker.yml`)는 공식 Langflow 1.13.3에서 다음을 확인하도록 했다.
+  - 8회 흐름→규칙 흐름→8회 흐름 교체.
+  - 키 없음 거부.
+  - 흐름 고정 검사.
+  - 가짜 모델 8회 예산 검사.
+  - 저장된 코드로 OpenAI 클라이언트를 네트워크 없이 생성.
+
+  PR #32 CI(`3d2e0d6`)에서 모두 통과했다.
+  - 키 없음 거부: `GATEWAY_CREDENTIAL_UNAVAILABLE`, 표시 파일 없음.
+  - 전환: `gateway-rule-action-applied`(`updated`, 재실행은 `already-current`).
+  - 흐름 고정: `flowVerified:true`, `gateway-rule-action-checked`.
+  - 가짜 모델 8회: 마지막 호출에서 JSON.
+  - 클라이언트: `openaiClientInitialized:true`, `networkCalls:0`.
+  - 되돌리기: `gateway-rule-action-rolled-back` 뒤 8회 흐름 고정 확인.
+
+  첫 실행은 이 단계가 Langflow 로그인 제한(분당 5회)을 넘어 실패했다. 단계 안에 대기를 넣어 해결했다. 운영 helper는 실행당 로그인이 2회라 해당하지 않는다.
+- **하지 않은 것**:
+  - 실제 gpt-5.4-mini 호출.
+  - Langflow 1.13.3 Agent가 OpenAI 모델 값으로 실제 실행되는지.
+  - 장소 선택 품질, 차단 감소, 지연, 비용.
+  - 사용자 AWS 적용.
+
+### AWS에 적용할 명령
+
+PR이 main에 병합된 뒤, 웹에서 새 추천을 제출하지 않는 때 AWS SSH에서 **한 줄씩** 실행한다.
+
+```bash
+cd ~/oreumit-agent && git diff --quiet && git diff --cached --quiet && git fetch origin refs/heads/main:refs/remotes/origin/main && git merge --ff-only origin/main
+```
+
+OpenAI 키를 Langflow Credential로 등록한다. 입력은 화면에 표시되지 않으며 키는 명령 인자·환경변수·파일·로그에 남지 않는다. OpenAI를 호출하지 않는다. 같은 이름 변수가 이미 있으면 `existing_preserved`로 그대로 둔다. 바꿔야 하면 Langflow 관리 화면에서 변수를 지운 뒤 다시 실행한다.
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/set-openai-key.sh
+```
+
+성공하면 `{"status":"configured_without_inference",…}`가 나온다. 이어서 적용한다.
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-rule-action.sh
+```
+
+helper는 다음 순서로 진행한다.
+
+1. Compose 설정을 확인하고, 이전 교체가 미완료인지 확인한다.
+2. 새 MCP 이미지를 빌드한다. 기존 MCP는 계속 서비스한다.
+3. 유휴 확인 뒤 `jeju-mcp`를 재생성한다.
+4. 설치된 MCP로 오프라인 조립 검사를 한다.
+5. 다시 유휴를 확인하고 `prepare-gateway.py --rule-action-flow`를 실행한다.
+6. `agent-gateway`만 재생성한다.
+7. `--check-rule-action-flow`로 흐름 고정을 확인한다.
+8. 공개 인증 준비 검사와 큐 준비 검사를 한다.
+9. 미완료 표시를 해제한다.
+
+MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 때문이다. 유휴·중단·재개의 의미는 [모델 호출 예산 조정](#중단됐을-때)과 같다. 종료 코드 75는 진행 중 요청이 있다는 뜻이며 모두 끝난 뒤 다시 실행한다. 저장 흐름이 검토된 8회 Vertex 빌드와 다르면 `GATEWAY_EXISTING_FLOW_DIFFERS`로 거부한다. OpenAI 키가 없으면 `GATEWAY_CREDENTIAL_UNAVAILABLE`로 PATCH 전에 멈춘다.
+
+성공 출력:
+
+```json
+{"status":"passed","scope":"agent-rule-action-applied","model":"gpt-5.4-mini","modelCallLimit":8,"services":["jeju-mcp","agent-gateway"],"modelExecuted":false,"productionReady":false}
+```
+
+적용은 모델을 실행하지 않는다. 적용 뒤 로그인한 웹 사용자로 추천 1건을 확인하고, 실행이 쌓이면 위 [확인 SQL](#적용-전후-확인-sql)로 전환 전후를 비교한다. 이 전환도 흐름의 `updated_at`을 바꾸므로 기간 경계가 이 시각으로 옮겨진다. 수락 결과의 `action`은 서버가 조립한 값이다.
+
+### 확인과 되돌리기
+
+규칙 흐름 상태만 재시작 없이 확인한다. 적용 뒤에는 `apply-agent-call-budget.sh --verify-only`가 저장 흐름 불일치로 실패하므로 이 명령을 쓴다.
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-rule-action.sh --verify-only
+```
+
+8회 Vertex 흐름으로 되돌린다. `agent-gateway`만 재생성하고 MCP는 새 이미지를 유지한다. 새 MCP는 전체 형식 응답을 이전과 같게 검증한다. 되돌린 뒤에는 `apply-agent-call-budget.sh --verify-only`가 다시 통과해야 한다.
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-rule-action.sh --rollback
+```
+
+되돌리기를 검토할 기준은 위 예산 조정과 같다. 적용 후 20건 이상이 쌓인 뒤 비율로 판단한다.
+- `blocked_pct`가 줄지 않는다.
+- `agent_error_pct`가 늘어난다. OpenAI 인증·한도 오류(401·429)도 Agent 오류로 나타난다.
+- 지연이나 비용을 받아들일 수 없다.
+
+`productionReady:false`를 유지한다.
+
 ## 공식 참고 링크
 
 - [Named remotely managed Tunnel 생성·Published application route](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/)

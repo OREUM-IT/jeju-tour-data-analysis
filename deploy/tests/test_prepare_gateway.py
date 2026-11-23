@@ -306,6 +306,36 @@ class GatewaySettingsTest(unittest.TestCase):
             self.quiet_flow('check', stale)
         self.assertEqual(before, self.snapshot(self.root))
 
+    def test_rule_action_modes_stream_their_own_flags_and_pin_only_the_new_hash(self):
+        self.ready_root()
+        ready = setup.settings.read_env(self.root / 'gateway.env', private_mode=True)
+        apply = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.migration(flowSha256='e' * 64)).encode(), b''))
+        result = self.quiet_flow('rule-action', apply)
+        self.assertEqual(result, {'status': 'passed', 'scope': 'gateway-rule-action-applied', 'flowStatus': 'updated',
+                                  'modelCallLimit': 8, 'settingsChanged': True,
+                                  'modelExecuted': False, 'productionReady': False})
+        self.assertEqual(apply.call_args.args[0][-1], '--rule-action')
+        self.assertEqual(setup.settings.read_env(self.root / 'gateway.env', private_mode=True),
+                         {**ready, 'LANGFLOW_GATEWAY_FLOW_SHA256': 'e' * 64})
+        self.assertTrue(os.path.lexists(self.root / setup.PENDING))
+        before = self.snapshot(self.root)
+        check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked(flowSha256='e' * 64)).encode(), b''))
+        self.assertEqual(self.quiet_flow('check-rule-action', check)['scope'], 'gateway-rule-action-checked')
+        self.assertEqual(check.call_args.args[0][-1], '--check-rule-action')
+        self.assertEqual(before, self.snapshot(self.root))
+        stale = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked(flowSha256='f' * 64)).encode(), b''))
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_PIN_MISMATCH$'):
+            self.quiet_flow('check-rule-action', stale)
+        back = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.migration(flowSha256='c' * 64)).encode(), b''))
+        result = self.quiet_flow('rule-action-rollback', back)
+        self.assertEqual((result['scope'], result['modelCallLimit'], result['settingsChanged']),
+                         ('gateway-rule-action-rolled-back', 8, True))
+        self.assertEqual(back.call_args.args[0][-1], '--rule-action-rollback')
+        wrong = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.migration(modelCallLimit=4)).encode(), b''))
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
+            self.quiet_flow('rule-action', wrong)
+
     def test_flow_modes_require_ready_settings_and_never_run_before_provisioning(self):
         runner = Mock(side_effect=AssertionError('no flow change before provisioning'))
         with self.assertRaisesRegex(ValueError, '^GATEWAY_INIT_REQUIRED$'):
