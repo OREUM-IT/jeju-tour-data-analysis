@@ -109,7 +109,7 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 
 - 추천 Gateway와 같은 Vercel 서버 비밀(URL·HMAC 키·Access 서비스 토큰)을 쓰고 주체는 `service:overtourism-diagnosis`로 고정한다. **새 Vercel 설정은 필요 없다**. `JEJU_OVERTOURISM_GATEWAY=off`로 이 경로만 끌 수 있다.
 - 엔진 순서: AWS 진단 → 앱 안 OpenAI → Gemini → 규칙 진단. AWS 결과는 지표가 앱 계산과 똑같을 때만 받고 같은 규칙으로 다시 검증한다. AWS가 50초 넘게 걸린 뒤 실패하면 함수 시간(120초) 안에 끝내려고 앱 안 에이전트를 부르지 않고 규칙 진단을 쓴다.
-- 에이전트가 실패해 대신한 진단은 공용 DB 캐시에 넣지 않고 메모리 5분·CDN 2분만 쓴다. Gateway는 앱 연결이 끊겨도 실행을 끝내 결과를 남기므로, 다음 요청이 그 결과를 곧 받는다.
+- 부른 에이전트가 모두 실패해 규칙으로 대신한 진단은 5분(메모리·공용 DB의 시도 행·CDN 2분)만 쓰고 그 뒤 다시 부르며, 그 시도도 앱의 하루 한도(6회)에 센다. AWS가 늦어 대신했으면 Gateway가 앱 연결이 끊겨도 실행을 끝내 결과를 남기므로 다음 요청이 그 결과를 곧 받는다. AWS 대신 앱 안 에이전트가 쓴 진단은 그대로 저장한다.
 
 ## 7. 검증한 것과 하지 않은 것
 
