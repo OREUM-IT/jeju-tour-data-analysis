@@ -240,13 +240,14 @@ class GatewaySettingsTest(unittest.TestCase):
     @staticmethod
     def migration(**overrides):
         return {'status': 'passed', 'flowStatus': 'updated', 'flowId': FLOW_ID, 'flowSha256': 'c' * 64,
-                'modelCallLimit': 8, 'modelExecuted': False, 'productionReady': False, **overrides}
+                'modelCallLimit': 8, 'build': 'vertex-8-call', 'messageStore': False,
+                'modelExecuted': False, 'productionReady': False, **overrides}
 
     @staticmethod
     def checked(**overrides):
         return {'status': 'passed', 'flowMatches': True, 'nodeCount': 6, 'edgeCount': 7, 'toolCount': 3,
-                'modelCallLimit': 8, 'flowSha256': FLOW_HASH, 'modelExecuted': False, 'productionReady': False,
-                **overrides}
+                'modelCallLimit': 8, 'build': 'vertex-8-call', 'messageStore': False, 'flowSha256': FLOW_HASH,
+                'modelExecuted': False, 'productionReady': False, **overrides}
 
     def quiet_flow(self, mode, runner, root=None):
         output = io.StringIO()
@@ -271,8 +272,8 @@ class GatewaySettingsTest(unittest.TestCase):
         runner = Mock(side_effect=run)
         result = self.quiet_flow('update', runner)
         self.assertEqual(result, {'status': 'passed', 'scope': 'gateway-flow-updated', 'flowStatus': 'updated',
-                                  'modelCallLimit': 8, 'settingsChanged': True,
-                                  'modelExecuted': False, 'productionReady': False})
+                                  'modelCallLimit': 8, 'build': 'vertex-8-call', 'messageStore': False,
+                                  'settingsChanged': True, 'modelExecuted': False, 'productionReady': False})
         self.assertEqual(runner.call_count, 1)
         updated = setup.settings.read_env(self.root / 'gateway.env', private_mode=True)
         self.assertEqual(updated, {**ready, 'LANGFLOW_GATEWAY_FLOW_SHA256': 'c' * 64})
@@ -289,7 +290,7 @@ class GatewaySettingsTest(unittest.TestCase):
     def test_flow_rollback_and_check_use_their_own_limits_and_check_never_writes(self):
         self.ready_root()
         rollback = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
-            self.migration(modelCallLimit=4, flowSha256='d' * 64)).encode(), b''))
+            self.migration(modelCallLimit=4, build='legacy-4-call', flowSha256='d' * 64)).encode(), b''))
         result = self.quiet_flow('rollback', rollback)
         self.assertEqual((result['scope'], result['modelCallLimit'], result['settingsChanged']),
                          ('gateway-flow-rolled-back', 4, True))
@@ -299,6 +300,7 @@ class GatewaySettingsTest(unittest.TestCase):
         check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked(flowSha256='d' * 64)).encode(), b''))
         self.assertEqual(self.quiet_flow('check', check),
                          {'status': 'passed', 'scope': 'gateway-flow-checked', 'modelCallLimit': 8,
+                          'build': 'vertex-8-call', 'messageStore': False,
                           'settingsChanged': False, 'modelExecuted': False, 'productionReady': False})
         self.assertEqual(check.call_args.args[0][-1], '--check')
         stale = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked()).encode(), b''))
@@ -310,23 +312,30 @@ class GatewaySettingsTest(unittest.TestCase):
         self.ready_root()
         ready = setup.settings.read_env(self.root / 'gateway.env', private_mode=True)
         apply = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
-            self.migration(flowSha256='e' * 64)).encode(), b''))
+            self.migration(flowSha256='e' * 64, build='rule-action', messageStore=True)).encode(), b''))
         result = self.quiet_flow('rule-action', apply)
         self.assertEqual(result, {'status': 'passed', 'scope': 'gateway-rule-action-applied', 'flowStatus': 'updated',
-                                  'modelCallLimit': 8, 'settingsChanged': True,
-                                  'modelExecuted': False, 'productionReady': False})
+                                  'modelCallLimit': 8, 'build': 'rule-action', 'messageStore': True,
+                                  'settingsChanged': True, 'modelExecuted': False, 'productionReady': False})
         self.assertEqual(apply.call_args.args[0][-1], '--rule-action')
         self.assertEqual(setup.settings.read_env(self.root / 'gateway.env', private_mode=True),
                          {**ready, 'LANGFLOW_GATEWAY_FLOW_SHA256': 'e' * 64})
         self.assertTrue(os.path.lexists(self.root / setup.PENDING))
         before = self.snapshot(self.root)
-        check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked(flowSha256='e' * 64)).encode(), b''))
+        check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.checked(flowSha256='e' * 64, build='rule-action')).encode(), b''))
         self.assertEqual(self.quiet_flow('check-rule-action', check)['scope'], 'gateway-rule-action-checked')
         self.assertEqual(check.call_args.args[0][-1], '--check-rule-action')
         self.assertEqual(before, self.snapshot(self.root))
-        stale = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked(flowSha256='f' * 64)).encode(), b''))
+        stale = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.checked(flowSha256='f' * 64, build='rule-action')).encode(), b''))
         with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_PIN_MISMATCH$'):
             self.quiet_flow('check-rule-action', stale)
+        # A check of the wrong build is not a pin result at all.
+        for wrong in (self.checked(flowSha256='e' * 64), self.checked(flowSha256='e' * 64, build='legacy-4-call')):
+            with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
+                self.quiet_flow('check-rule-action', Mock(return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps(wrong).encode(), b'')))
         back = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.migration(flowSha256='c' * 64)).encode(), b''))
         result = self.quiet_flow('rule-action-rollback', back)
         self.assertEqual((result['scope'], result['modelCallLimit'], result['settingsChanged']),
@@ -335,6 +344,55 @@ class GatewaySettingsTest(unittest.TestCase):
         wrong = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.migration(modelCallLimit=4)).encode(), b''))
         with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
             self.quiet_flow('rule-action', wrong)
+
+    def test_message_store_modes_keep_the_build_validate_storage_and_pin_only_the_new_hash(self):
+        self.ready_root()
+        ready = setup.settings.read_env(self.root / 'gateway.env', private_mode=True)
+        off = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.migration(flowSha256='e' * 64, build='rule-action')).encode(), b''))
+        result = self.quiet_flow('message-store-off', off)
+        self.assertEqual(result, {'status': 'passed', 'scope': 'gateway-message-store-off-applied', 'flowStatus': 'updated',
+                                  'modelCallLimit': 8, 'build': 'rule-action', 'messageStore': False,
+                                  'settingsChanged': True, 'modelExecuted': False, 'productionReady': False})
+        self.assertEqual(off.call_args.args[0][-6:], ['exec', '-T', 'langflow', 'python', '-', '--message-store-off'])
+        self.assertEqual(off.call_args.kwargs['input'], setup.BOOTSTRAP.read_bytes())
+        # Only the pinned digest changes; the API key, flow ID and tokens stay byte-identical.
+        self.assertEqual(setup.settings.read_env(self.root / 'gateway.env', private_mode=True),
+                         {**ready, 'LANGFLOW_GATEWAY_FLOW_SHA256': 'e' * 64})
+        self.assertTrue(os.path.lexists(self.root / setup.PENDING))
+        before = self.snapshot(self.root)
+        for mode, value in (('check-message-store-off', self.checked(flowSha256='e' * 64, build='rule-action')),
+                            ('check-message-store-off', self.checked(flowSha256='e' * 64))):
+            check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b''))
+            checked = self.quiet_flow(mode, check)
+            self.assertEqual((checked['scope'], checked['messageStore'], checked['settingsChanged']),
+                             ('gateway-message-store-off-checked', False, False))
+            self.assertEqual(check.call_args.args[0][-1], '--check-message-store-off')
+        self.assertEqual(before, self.snapshot(self.root))
+        invalid = [('message-store-off', self.migration(messageStore=True)),
+                   ('message-store-off', self.migration(build='legacy-4-call', modelCallLimit=8)),
+                   ('message-store-off', self.migration(messageStore='false')),
+                   ('message-store-on', self.migration(messageStore=False)),
+                   ('check-message-store-off', self.checked(flowSha256='e' * 64, messageStore=True)),
+                   ('check-message-store-on', self.checked(flowSha256='e' * 64)),
+                   ('update', {key: value for key, value in self.migration().items() if key != 'messageStore'})]
+        for mode, value in invalid:
+            with self.subTest(mode=mode, value=value), self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
+                self.quiet_flow(mode, Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b'')))
+            self.assertEqual(before, self.snapshot(self.root))
+        stale = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.checked()).encode(), b''))
+        with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_PIN_MISMATCH$'):
+            self.quiet_flow('check-message-store-off', stale)
+        on = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.migration(flowSha256='c' * 64, build='rule-action', messageStore=True)).encode(), b''))
+        restored = self.quiet_flow('message-store-on', on)
+        self.assertEqual((restored['scope'], restored['messageStore'], restored['settingsChanged']),
+                         ('gateway-message-store-on-restored', True, True))
+        self.assertEqual(on.call_args.args[0][-1], '--message-store-on')
+        check = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(
+            self.checked(flowSha256='c' * 64, messageStore=True)).encode(), b''))
+        self.assertEqual(self.quiet_flow('check-message-store-on', check)['scope'], 'gateway-message-store-on-checked')
+        self.assertEqual(check.call_args.args[0][-1], '--check-message-store-on')
 
     def test_flow_modes_require_ready_settings_and_never_run_before_provisioning(self):
         runner = Mock(side_effect=AssertionError('no flow change before provisioning'))
@@ -493,6 +551,12 @@ class GatewaySettingsTest(unittest.TestCase):
         nothing = cli('--update-flow')
         self.assertEqual((nothing.returncode, json.loads(nothing.stdout)['code']), (1, 'GATEWAY_INIT_REQUIRED'))
         self.assertIn('did not change the Langflow flow', json.loads(nothing.stdout)['details'])
+        for flag, switching in (('--message-store-off-flow', True), ('--message-store-on-flow', True),
+                                ('--check-message-store-off-flow', False), ('--check-message-store-on-flow', False)):
+            refused = cli(flag)
+            details = json.loads(refused.stdout)['details']
+            self.assertEqual((refused.returncode, json.loads(refused.stdout)['code']), (1, 'GATEWAY_INIT_REQUIRED'), flag)
+            self.assertEqual('did not change the Langflow flow' in details, switching, flag)
         setup.write_private(root / setup.PENDING, 'started\n')
         unfinished = cli('--rollback-flow')
         self.assertIn('unfinished', json.loads(unfinished.stdout)['details'])

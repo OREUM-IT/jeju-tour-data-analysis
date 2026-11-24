@@ -19,6 +19,15 @@ Vertex build and the rule-action build: the same tools and call budget, but an
 OpenAI gpt-5.4-mini Agent that outputs only {"placeIds": [...]}. The MCP then
 composes action, verdicts and notices from catalog evidence. --check-rule-action
 checks the stored rule-action build. None of these runs a model.
+
+Every build exists in two variants. The historical builds keep Langflow's
+default should_store_message=true on Chat Input and Chat Output, so each run's
+request JSON (survey text) and final output stay in the message table. The
+variant from without_message_store() turns both off; nothing else changes.
+--message-store-off / --message-store-on switch the stored 8-call or rule-action
+flow between its two variants and --check-message-store-off/-on check them. The
+switches above keep whichever variant is stored, and --provision creates the
+store-off variant. Native tracing (trace/span) is not changed by any mode.
 """
 import argparse
 import ast
@@ -52,6 +61,12 @@ DESCRIPTION = ('별도 Gateway flow. 원본 요청 범위의 세 도구만 사�
 RULE_DESCRIPTION = ('별도 Gateway flow(규칙 동작). OpenAI gpt-5.4-mini가 원본 요청 범위의 도구로 장소 ID만 고르고 '
                     '동작·조건 판정·확인 안내는 서버가 카탈로그 근거로 만든다. 모델8회(마지막 호출은 도구 없는 최종 답변)'
                     '/90초·출력4096토큰과 최종 검증을 적용한다. 운영 준비 완료를 뜻하지 않는다.')
+NO_STORE_NOTE = ' 입력·최종 출력 메시지를 Langflow 대화 기록(message 표)에 저장하지 않는다.'
+STORE_NODES = ('ChatInput', 'ChatOutput')
+# Reviewed Gateway builds by name, with their model call limits.
+CALL_LIMITS = {'legacy-4-call': LEGACY_MODEL_CALLS, 'vertex-8-call': MODEL_CALLS, 'rule-action': MODEL_CALLS}
+MIGRATIONS = ('update', 'rollback', 'rule-action', 'rule-action-rollback', 'check-rule-action',
+              'message-store-off', 'message-store-on', 'check-message-store-off', 'check-message-store-on')
 OPENAI_TOKEN_NAME = 'JEJU_OPENAI_API_KEY'
 RULE_MODEL = 'gpt-5.4-mini'
 RULE_MAX_TOKENS = 4096
@@ -338,6 +353,35 @@ def rule_action_flow(budget):
     return flow
 
 
+def without_message_store(build):
+    """Return the same reviewed build with Chat Input/Output message storage off.
+
+    In Langflow 1.13.3 only these two nodes store a Gateway run's messages: the
+    Agent and the custom components are not wired to Chat Output, so lfx skips
+    their messages, except an error message when a component raises. The run
+    response, node IDs, edges and native tracing are unchanged.
+    """
+    flow = copy.deepcopy(build)
+    nodes = [node for node in flow['data']['nodes'] if node['data']['type'] in STORE_NODES]
+    require(sorted(node['data']['type'] for node in nodes) == sorted(STORE_NODES), 'GATEWAY_TEMPLATE_MISMATCH')
+    for node in nodes:
+        field = node['data']['node']['template'].get('should_store_message')
+        require(isinstance(field, dict) and field.get('type') == 'bool' and field.get('value') is True,
+                'GATEWAY_TEMPLATE_MISMATCH')
+        field['value'] = False
+    require(isinstance(flow.get('description'), str) and NO_STORE_NOTE not in flow['description'],
+            'GATEWAY_TEMPLATE_MISMATCH')
+    flow['description'] += NO_STORE_NOTE
+    return flow
+
+
+def graphs(legacy, budget, rule):
+    """Every reviewed stored graph: (build name, message storage, flow)."""
+    builds = {'legacy-4-call': legacy, 'vertex-8-call': budget, 'rule-action': rule}
+    return {(name, store): flow if store else without_message_store(flow)
+            for name, flow in builds.items() for store in (True, False)}
+
+
 def same_flow(stored, flow):
     return all(stored.get(key) == flow.get(key) for key in FLOW_KEYS)
 
@@ -377,37 +421,71 @@ def patch_flow(client, flow_id, stored, flow):
     return payload(client.get(f'/api/v1/flows/{flow_id}'))
 
 
-def migrate_flow(client, target, previous):
-    """Switch the existing flow from exactly `previous` to exactly `target`."""
+def both_variants(previous, target):
+    """A build switch keeps the stored message-storage variant."""
+    return tuple(((previous, store), (target, store)) for store in (True, False))
+
+
+# (previous graph, target graph) pairs per switch, as keys of graphs().
+SWITCHES = {
+    'update': both_variants('legacy-4-call', 'vertex-8-call'),
+    'rollback': both_variants('vertex-8-call', 'legacy-4-call'),
+    'rule-action': both_variants('vertex-8-call', 'rule-action'),
+    'rule-action-rollback': both_variants('rule-action', 'vertex-8-call'),
+    'message-store-off': tuple(((name, True), (name, False)) for name in ('vertex-8-call', 'rule-action')),
+    'message-store-on': tuple(((name, False), (name, True)) for name in ('vertex-8-call', 'rule-action')),
+}
+# Graphs a check accepts; --check (None) and --provision accept the 8-call build,
+# and --provision creates the first one, the store-off variant.
+CHECKS = {
+    None: (('vertex-8-call', False), ('vertex-8-call', True)),
+    'check-rule-action': (('rule-action', False), ('rule-action', True)),
+    'check-message-store-off': (('vertex-8-call', False), ('rule-action', False)),
+    'check-message-store-on': (('vertex-8-call', True), ('rule-action', True)),
+}
+
+
+def migrate_flow(client, pairs, known):
+    """Switch the existing flow from exactly one reviewed `previous` graph to its `target`."""
     flow_id = stored_flow_id(client, required=True)
     stored = payload(client.get(f'/api/v1/flows/{flow_id}'))
-    if same_flow(stored, target):
-        return flow_id, 'already-current'
-    require(same_flow(stored, previous), 'GATEWAY_EXISTING_FLOW_DIFFERS')
-    updated = patch_flow(client, flow_id, stored, target)
-    if not same_flow(updated, target):
+    for _previous, target in pairs:
+        if same_flow(stored, known[target]):
+            return flow_id, 'already-current', target
+    matches = [(previous, target) for previous, target in pairs if same_flow(stored, known[previous])]
+    require(len(matches) == 1, 'GATEWAY_EXISTING_FLOW_DIFFERS')
+    previous, target = matches[0]
+    updated = patch_flow(client, flow_id, stored, known[target])
+    if not same_flow(updated, known[target]):
         # Best effort: put back the exact previous graph so the operator can retry.
         try:
-            patch_flow(client, flow_id, updated, previous)
+            patch_flow(client, flow_id, updated, known[previous])
         except Exception:
             pass
         raise GatewayBootstrapError('GATEWAY_FLOW_UPDATE_UNVERIFIED')
-    return flow_id, 'updated'
+    return flow_id, 'updated', target
 
 
-def checked_flow(client, flow, *, provision):
+def checked_flow(client, known, candidates, *, provision):
+    """Return the flow ID and which candidate graph is stored; provision creates the first."""
     flow_id = stored_flow_id(client, required=not provision)
     if flow_id is None:
-        created = payload(client.post('/api/v1/flows/', json=flow), (201,))
+        created = payload(client.post('/api/v1/flows/', json=known[candidates[0]]), (201,))
         flow_id = parse_flow_id(created.get('id'))
     stored = payload(client.get(f'/api/v1/flows/{flow_id}'))
-    require(same_flow(stored, flow), 'GATEWAY_EXISTING_FLOW_DIFFERS')
-    return flow_id
+    matches = [key for key in candidates if same_flow(stored, known[key])]
+    require(len(matches) == 1, 'GATEWAY_EXISTING_FLOW_DIFFERS')
+    return flow_id, matches[0]
+
+
+def described(known, key):
+    build, store = key
+    return {'modelCallLimit': CALL_LIMITS[build], 'build': build, 'messageStore': store,
+            'flowSha256': flow_sha256(known[key]['data'])}
 
 
 def configure(client, mcp, environment, template, source, setup, *, provision=False, migrate=None, now=None):
-    require(migrate in (None, 'update', 'rollback', 'rule-action', 'rule-action-rollback', 'check-rule-action')
-            and not (provision and migrate), 'GATEWAY_MODE_INVALID')
+    require((migrate is None or migrate in MIGRATIONS) and not (provision and migrate), 'GATEWAY_MODE_INVALID')
     require(client.get('/api/v1/users/whoami').status_code in (401, 403), 'GATEWAY_ANONYMOUS_ACCESS_ALLOWED')
     require(client.get('/api/v1/auto_login').status_code == 403, 'GATEWAY_AUTO_LOGIN_ENABLED')
     username = environment['LANGFLOW_SUPERUSER']
@@ -436,33 +514,18 @@ def configure(client, mcp, environment, template, source, setup, *, provision=Fa
         require(len(entries) == 1 and entries[0].get('type') == 'Credential'
                 and entries[0].get('has_value') is True, 'GATEWAY_CREDENTIAL_UNAVAILABLE')
     legacy = build_flow(client, template, source, setup)
-    flow = budget_flow(legacy)
-    rule = rule_action_flow(flow)
-    for built in (legacy, flow, rule):
+    budget = budget_flow(legacy)
+    known = graphs(legacy, budget, rule_action_flow(budget))
+    for built in known.values():
         setup.without_secrets(built, [token, password, access_token])
-    if migrate == 'check-rule-action':
-        checked_flow(client, rule, provision=False)
-        return {'status': 'passed', 'flowMatches': True, 'nodeCount': 6, 'edgeCount': 7,
-                'toolCount': 3, 'modelCallLimit': MODEL_CALLS, 'flowSha256': flow_sha256(rule['data']),
+    if migrate in SWITCHES:
+        flow_id, status, key = migrate_flow(client, SWITCHES[migrate], known)
+        return {'status': 'passed', 'flowStatus': status, 'flowId': flow_id, **described(known, key),
                 'modelExecuted': False, 'productionReady': False}
-    if migrate in ('rule-action', 'rule-action-rollback'):
-        target, previous = (rule, flow) if migrate == 'rule-action' else (flow, rule)
-        flow_id, status = migrate_flow(client, target, previous)
-        return {'status': 'passed', 'flowStatus': status, 'flowId': flow_id,
-                'flowSha256': flow_sha256(target['data']), 'modelCallLimit': MODEL_CALLS,
-                'modelExecuted': False, 'productionReady': False}
-    if migrate is not None:
-        target, previous = (flow, legacy) if migrate == 'update' else (legacy, flow)
-        flow_id, status = migrate_flow(client, target, previous)
-        return {'status': 'passed', 'flowStatus': status, 'flowId': flow_id,
-                'flowSha256': flow_sha256(target['data']),
-                'modelCallLimit': MODEL_CALLS if migrate == 'update' else LEGACY_MODEL_CALLS,
-                'modelExecuted': False, 'productionReady': False}
-    flow_id = checked_flow(client, flow, provision=provision)
+    flow_id, key = checked_flow(client, known, CHECKS[migrate], provision=provision)
     if not provision:
-        return {'status': 'passed', 'flowMatches': True, 'nodeCount': 6, 'edgeCount': 7,
-                'toolCount': 3, 'modelCallLimit': MODEL_CALLS, 'flowSha256': flow_sha256(flow['data']),
-                'modelExecuted': False, 'productionReady': False}
+        return {'status': 'passed', 'flowMatches': True, 'nodeCount': 6, 'edgeCount': 7, 'toolCount': 3,
+                **described(known, key), 'modelExecuted': False, 'productionReady': False}
     current = dt.datetime.now(dt.timezone.utc) if now is None else now
     require(isinstance(current, dt.datetime) and current.tzinfo is not None, 'GATEWAY_KEY_EXPIRY_INVALID')
     # Langflow 1.13.3 ApiKeyBase serializes expires_at via _as_utc_iso(),
@@ -479,7 +542,7 @@ def configure(client, mcp, environment, template, source, setup, *, provision=Fa
                 and created.get('name') == name and created.get('is_active') is True
                 and dt.datetime.fromisoformat(created.get('expires_at').replace('Z', '+00:00')) == dt.datetime.fromisoformat(expiry),
                 'GATEWAY_API_KEY_INVALID')
-        return {'flowId': flow_id, 'apiKey': created['api_key'], 'flowSha256': flow_sha256(flow['data'])}
+        return {'flowId': flow_id, 'apiKey': created['api_key'], 'flowSha256': flow_sha256(known[key]['data'])}
     except Exception:
         if key_id is not None:
             # Best effort cleanup of only the key just created; never revoke an existing key.
@@ -503,11 +566,16 @@ def main(argv=None):
                       help='Switch the exact rule-action flow back to the 8-call Vertex flow; no key.')
     mode.add_argument('--check-rule-action', action='store_true',
                       help='Check the stored rule-action flow without creating a flow or API key.')
+    mode.add_argument('--message-store-off', action='store_true',
+                      help='Switch the stored 8-call or rule-action flow to its no-message-storage variant; no key.')
+    mode.add_argument('--message-store-on', action='store_true',
+                      help='Switch the stored no-message-storage 8-call or rule-action flow back; no key.')
+    mode.add_argument('--check-message-store-off', action='store_true',
+                      help='Check that the stored flow is an 8-call or rule-action build without message storage.')
+    mode.add_argument('--check-message-store-on', action='store_true',
+                      help='Check that the stored flow is an 8-call or rule-action build with message storage.')
     arguments = parser.parse_args(argv)
-    migrate = ('update' if arguments.update else 'rollback' if arguments.rollback
-               else 'rule-action' if arguments.rule_action
-               else 'rule-action-rollback' if arguments.rule_action_rollback
-               else 'check-rule-action' if arguments.check_rule_action else None)
+    migrate = next((name for name in MIGRATIONS if getattr(arguments, name.replace('-', '_'))), None)
     try:
         import httpx
         setup = load_setup()
