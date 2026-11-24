@@ -2,9 +2,9 @@ name: Private Agent Gateway integration
 on:
   push:
     branches: [main, 'codex/**']
-    paths: ['services/agent-gateway/**', 'services/langflow/gateway_components.py', 'services/jeju-mcp/**', 'deploy/**', '.github/workflows/agent-gateway-docker.yml']
+    paths: ['services/agent-gateway/**', 'services/langflow/gateway_components.py', 'services/langflow/overtourism_components.py', 'services/jeju-mcp/**', 'deploy/**', '.github/workflows/agent-gateway-docker.yml']
   pull_request:
-    paths: ['services/agent-gateway/**', 'services/langflow/gateway_components.py', 'services/jeju-mcp/**', 'deploy/**', '.github/workflows/agent-gateway-docker.yml']
+    paths: ['services/agent-gateway/**', 'services/langflow/gateway_components.py', 'services/langflow/overtourism_components.py', 'services/jeju-mcp/**', 'deploy/**', '.github/workflows/agent-gateway-docker.yml']
 permissions:
   contents: read
 concurrency:
@@ -25,7 +25,7 @@ jobs:
         run: npm --prefix services/jeju-mcp ci --ignore-scripts --no-audit --no-fund
       - name: Verify auth, replay, scope policy, response validation and secret preservation
         run: |
-          node --test services/agent-gateway/*.test.mjs services/jeju-mcp/tests/gateway-scopes.test.mjs
+          node --test services/agent-gateway/*.test.mjs services/jeju-mcp/tests/gateway-scopes.test.mjs services/jeju-mcp/tests/overtourism.test.mjs
           python3 -m unittest discover -s deploy/tests
           python3 -m unittest discover -s deploy/tunnel -p 'test_*.py'
       - name: Prepare private credentials and fictional catalog
@@ -109,6 +109,28 @@ jobs:
           $compose exec -T agent-gateway node /app/check.mjs --internal
           python3 deploy/prepare-gateway.py --check-flow
           python3 deploy/prepare-gateway.py --complete-flow-change
+      - name: Provision the overtourism diagnosis flow, pin it in the Gateway and run its real components without a model
+        run: |
+          compose="docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml"
+          $compose exec -T jeju-mcp node --input-type=module - < deploy/tests/check-overtourism.mjs
+          # Without a pin the route is unavailable and recommendations are unchanged.
+          $compose exec -T agent-gateway node /app/check.mjs --internal
+          missing=0
+          $compose exec -T agent-gateway node /app/check.mjs --internal --overtourism || missing=$?
+          test "$missing" = 1
+          # Langflow allows 5 logins per minute; each bootstrap run logs in once.
+          sleep 61
+          python3 deploy/prepare-overtourism.py --provision
+          python3 deploy/prepare-overtourism.py --provision
+          python3 deploy/prepare-overtourism.py --check
+          $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
+          $compose exec -T agent-gateway node /app/check.mjs --internal --overtourism
+          $compose exec -T agent-gateway node /app/check.mjs --internal
+          python3 deploy/prepare-gateway.py --check-flow
+          python3 deploy/tests/run-overtourism-runtime-check.py
+          python3 deploy/prepare-overtourism.py --disable
+          $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
+          $compose exec -T agent-gateway node /app/check.mjs --internal
       - name: Record verification boundary
         if: always()
         run: echo 'Fictional catalog, no Google inference, no Cloudflare account or tunnel changes. AWS and external Access/Tunnel acceptance require separate execution.' >> "$GITHUB_STEP_SUMMARY"

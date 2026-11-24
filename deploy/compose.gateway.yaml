@@ -22,7 +22,13 @@ services:
   agent-gateway:
     build:
       context: ../services/agent-gateway
-    env_file: .local/gateway.env
+    env_file:
+      - path: .local/gateway.env
+        required: true
+      # Non-secret overtourism flow pin written by prepare-overtourism.py. Absent:
+      # the Gateway starts as before and /v1/overtourism answers OVERTOURISM_UNAVAILABLE.
+      - path: .local/gateway-overtourism.env
+        required: false
     environment:
       GATEWAY_MAX_CONCURRENT: "${GATEWAY_MAX_CONCURRENT:-2}"
       GATEWAY_MAX_QUEUE: "${GATEWAY_MAX_QUEUE:-8}"
