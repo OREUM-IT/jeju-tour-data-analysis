@@ -9,6 +9,7 @@ import { loadCatalog } from './catalog.mjs';
 import { registerTools } from './tools.mjs';
 import { createRuntimeValidator, RecommendationValidationError } from './recommendation-validation.mjs';
 import { createGatewayScopes, GatewayScopeError } from './gateway-scopes.mjs';
+import { createOvertourismScopes, OvertourismError, OVERTOURISM_MAX_INPUT_BYTES } from './overtourism.mjs';
 
 const MAX_BODY = 128 * 1024;
 const DEFAULT_CATALOG = fileURLToPath(new URL('../fixtures/catalog.json', import.meta.url));
@@ -34,7 +35,7 @@ function tokenMatches(header, token) {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
-function readBody(req) {
+function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0;
     let settled = false;
@@ -49,7 +50,7 @@ function readBody(req) {
     req.on('data', chunk => {
       if (settled) return;
       size += chunk.length;
-      if (size > MAX_BODY) {
+      if (size > limit) {
         chunks.length = 0;
         finish(new HttpError(413, 'Request body too large.'));
       } else chunks.push(chunk);
@@ -87,6 +88,8 @@ export function createMcpHttpServer({ catalog, token, gatewayControlToken, gatew
   }
   const scopes = gatewayControlToken === undefined ? null
     : createGatewayScopes({ catalog, now, maxConcurrent: gatewayMaxConcurrent });
+  // Overtourism diagnosis scopes share the Gateway credentials; they never read the catalog.
+  const overtourism = scopes === null ? null : createOvertourismScopes({ now });
   const active = new Set();
   const server = http.createServer(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -99,6 +102,40 @@ export function createMcpHttpServer({ catalog, token, gatewayControlToken, gatew
     if (req.method === 'GET' && req.url === '/healthz') {
       req.resume();
       return json(res, 200, { ok: true, check: 'liveness_only' });
+    }
+    if (overtourism !== null && req.url.startsWith('/gateway/overtourism/')) {
+      const release = /^\/gateway\/overtourism\/scopes\/(ot-[a-f0-9]{32})$/u.exec(req.url);
+      const handlers = { '/gateway/overtourism/scopes': overtourism.register, '/gateway/overtourism/result': overtourism.result,
+        '/gateway/overtourism/prepare': overtourism.prepare, '/gateway/overtourism/tools/call': overtourism.call,
+        '/gateway/overtourism/validate': overtourism.validate };
+      // Gateway control: register/result/release/readiness. Langflow (MCP token): prepare/tools/validate.
+      const control = ['/gateway/overtourism/scopes', '/gateway/overtourism/result', '/gateway/overtourism/readyz'].includes(req.url)
+        || release !== null;
+      if (!control && !Object.hasOwn(handlers, req.url)) { req.resume(); return json(res, 404, { error: { code: 'GATEWAY_ROUTE_UNAVAILABLE' } }); }
+      if (!tokenMatches(req.headers.authorization, control ? gatewayControlToken : token)) {
+        req.resume(); return json(res, 401, { error: { code: 'GATEWAY_UNAUTHORIZED' } });
+      }
+      const method = release ? 'DELETE' : req.url === '/gateway/overtourism/readyz' ? 'GET' : 'POST';
+      if (req.method !== method) { req.resume(); return json(res, 405, { error: { code: 'GATEWAY_METHOD_REJECTED' } }, { Allow: method }); }
+      try {
+        if (release) { req.resume(); return json(res, 200, overtourism.release(release[1])); }
+        if (req.url === '/gateway/overtourism/readyz') { req.resume(); return json(res, 200, overtourism.ready()); }
+        if ((req.headers['content-type'] || '').split(';')[0].trim().toLowerCase() !== 'application/json') {
+          req.resume(); return json(res, 415, { error: { code: 'GATEWAY_CONTENT_TYPE_REJECTED' } });
+        }
+        // Only registration carries the app snapshot; every other body stays within the usual limit.
+        const limit = req.url === '/gateway/overtourism/scopes' ? OVERTOURISM_MAX_INPUT_BYTES : MAX_BODY;
+        if (Number(req.headers['content-length'] || 0) > limit) {
+          req.resume(); return json(res, 413, { error: { code: 'GATEWAY_REQUEST_TOO_LARGE' } });
+        }
+        const body = await readBody(req, limit);
+        if (res.destroyed) return;
+        return json(res, 200, handlers[req.url](body));
+      } catch (error) {
+        return json(res, error instanceof OvertourismError || error instanceof HttpError ? error.status : 500,
+          { error: { code: error instanceof OvertourismError ? error.code
+            : error instanceof HttpError ? 'INVALID_HTTP_REQUEST' : 'OVERTOURISM_SCOPE_FAILED' } });
+      }
     }
     if (scopes !== null && req.url.startsWith('/gateway/')) {
       const release = /^\/gateway\/scopes\/(gw-[a-f0-9]{32})$/u.exec(req.url);

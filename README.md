@@ -1,5 +1,7 @@
 # 제주도 맞춤 개인 관광 페르소나(테마) 추천 AI Agent
 
+2026-11-24 최신(KST): 웹앱 오버투어리즘 현황판의 **진단 에이전트를 AWS Docker 스택으로 옮기는 구현**을 더했다. 앱이 보낸 혼잡 예측·지역 자료로 MCP가 지표를 계산하고, Langflow 진단 흐름(gpt-5.4-mini)이 MCP 지표 도구로 읽어 14개 지역을 진단하며, MCP·앱이 차례로 검증한다. [구조·적용 절차·검증 범위](docs/34-overtourism-diagnosis-agent.md)를 따른다. 사용자 AWS 적용과 실제 모델 호출은 아직이라 `productionReady:false`를 유지한다.
+
 2026-11-21 최신(KST): 운영 웹의 잦은 “조건과 장소를 확인할 수 없어 AI 결과를 표시하지 않았어요”는 사용자 제공 집계(실패 13·수락 2, 모두 모델 4회)와 코드 경로로 볼 때 **모델 호출 4회를 모두 도구 호출에 써서 최종 JSON 없이 끝난 실행**일 가능성이 높다(한도 문장 자체는 미집계). Gateway 흐름만 모델 8회·마지막 호출 답변 전용으로 [바꿨고](docs/32-agent-gateway-tunnel.md#모델-호출-예산-조정), 2026-11-21 사용자가 AWS 적용 성공 출력을 제공했다(모델 미실행). 실제 웹 요청의 차단 감소는 아직 확인하지 않았다.
 
 2026-11-19 상태(KST): [PR #19](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/19)의 **동시 실행 2건·대기 8건 큐가 AWS에 적용**됐고, [앱 PR #37](https://github.com/OREUM-IT/jeju-tour/pull/37)은 Vercel Production에 배포됐다. 사용자 제공 출력에서 공개 인증·큐 준비 검사와 **실제 합성 추천 2건 모두 수락(14.71초·16.79초, 각 3곳)**을 확인했다. Gateway의 두 running 상태를 관측했으며 모델 공급자 내부 실행 구간의 겹침은 측정하지 않았다. 시간당 기본 한도는 전체 60건·사용자 12건이다. [PR #20](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/20)은 이미지에서 제외된 테스트 파일을 찾던 적용 검사 오류를 수정하고 재시작 없는 검사 재개를 제공한다. [실측 기록](docs/32-agent-gateway-tunnel.md#aws-실제-추천-2건-검사-결과)의 범위는 합성 2건이며 로그인 사용자의 웹 화면 최종 확인·지속 부하·비용 측정은 남아 있어 `productionReady:false`를 유지한다.

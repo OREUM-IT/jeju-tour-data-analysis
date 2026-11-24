@@ -5,11 +5,15 @@ import { verifyRequest, createAccessVerifier } from './auth.mjs';
 import { createGatewayState } from './state.mjs';
 import { createUpstream } from './upstream.mjs';
 import { createJobQueue } from './jobs.mjs';
+import { createOvertourismService, createOvertourismUpstream, OVERTOURISM_POLICY } from './overtourism.mjs';
 
 class RequestError extends Error {
   constructor(code, status) { super(code); this.code = code; this.status = status; }
 }
 const MAX_BODY = 32 * 1024;
+// Only the overtourism snapshot (14 regions + about 450 KTO spots) is larger.
+const OVERTOURISM_MAX_BODY = 256 * 1024;
+const OVERTOURISM_ROUTES = ['/v1/overtourism', '/v1/overtourism/readyz'];
 // Includes body and Access authentication. Scope revocation gets a separate 3s
 // cleanup window; even with the 5s header limit this fits the 120s caller budget.
 const DEADLINE_MS = 105_000;
@@ -18,10 +22,12 @@ const codes = new Set(['AUTH_FAILED', 'REPLAY_DETECTED', 'RATE_LIMITED', 'BUSY',
   'INVALID_RECOMMENDATION_REQUEST', 'BODY_TOO_LARGE', 'INVALID_JSON', 'INVALID_HEADERS', 'BODY_TIMEOUT',
   'METHOD_NOT_ALLOWED', 'NOT_FOUND', 'ORIGIN_REJECTED', 'UNSUPPORTED_MEDIA_TYPE', 'ACCESS_REQUIRED',
   'QUEUE_FULL', 'JOB_EXPIRED', 'JOB_CANCELLED', 'JOB_NOT_FOUND', 'JOB_ALREADY_RUNNING',
-  'FLOW_CHANGED', 'MCP_NOT_READY', 'RECOMMENDATION_BLOCKED', 'FINAL_VALIDATION_REJECTED', 'TOO_MANY_PLACES', 'SCOPE_CLEANUP_FAILED']);
+  'FLOW_CHANGED', 'MCP_NOT_READY', 'RECOMMENDATION_BLOCKED', 'FINAL_VALIDATION_REJECTED', 'TOO_MANY_PLACES', 'SCOPE_CLEANUP_FAILED',
+  'OVERTOURISM_UNAVAILABLE', 'INVALID_OVERTOURISM_REQUEST', 'OVERTOURISM_FLOW_CHANGED', 'OVERTOURISM_MCP_NOT_READY',
+  'DIAGNOSIS_BLOCKED', 'OVERTOURISM_RESULT_MISMATCH']);
 const jobRoute = url => /^\/v1\/jobs\/(gw-[a-f0-9]{32})$/u.exec(url ?? '');
-const protectedRoute = (method, url) => (method === 'GET' && url === '/readyz')
-  || (method === 'POST' && ['/v1/recommend', '/v1/jobs'].includes(url))
+const protectedRoute = (method, url) => (method === 'GET' && ['/readyz', '/v1/overtourism/readyz'].includes(url))
+  || (method === 'POST' && ['/v1/recommend', '/v1/jobs', '/v1/overtourism'].includes(url))
   || (['GET', 'DELETE'].includes(method) && jobRoute(url) !== null);
 function send(res, status, value, extra = {}) {
   if (res.destroyed || res.writableEnded) return;
@@ -29,7 +35,7 @@ function send(res, status, value, extra = {}) {
     'X-Content-Type-Options': 'nosniff', ...extra });
   res.end(JSON.stringify(value));
 }
-function readBody(req) {
+function readBody(req, limit = MAX_BODY) {
   return new Promise((resolve, reject) => {
     let size = 0, done = false; const chunks = [];
     const finish = (error, value) => {
@@ -40,7 +46,7 @@ function readBody(req) {
     req.on('data', chunk => {
       if (done) return;
       size += chunk.length;
-      if (size > MAX_BODY) { chunks.length = 0; finish(new RequestError('BODY_TOO_LARGE', 413)); }
+      if (size > limit) { chunks.length = 0; finish(new RequestError('BODY_TOO_LARGE', 413)); }
       else chunks.push(chunk);
     });
     req.on('end', () => finish(null, Buffer.concat(chunks)));
@@ -80,7 +86,7 @@ function headersValid(req, mode) {
 }
 
 export function createGatewayServer({ authKey, mode = 'private', publicHost, accessVerifier, state, upstream, now = Date.now,
-  maxQueue = state?.policy?.maxQueue ?? 8 }) {
+  maxQueue = state?.policy?.maxQueue ?? 8, overtourism = null }) {
   if (!['private', 'access'].includes(mode) || typeof authKey !== 'string' || !/^[a-f0-9]{64}$/.test(authKey)
     || (mode === 'access' && (typeof accessVerifier !== 'function' || !/^[a-z0-9.-]+$/.test(publicHost)))) throw new Error('GATEWAY_CONFIG_INVALID');
   const jobs = createJobQueue({ state, upstream, now, deadlineMs: DEADLINE_MS, maxQueue });
@@ -94,13 +100,14 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
       headersValid(req, mode);
       if (req.method === 'GET' && req.url === '/healthz') { req.resume(); return send(res, 200, { ok: true, check: 'liveness_only' }); }
       const job = jobRoute(req.url);
-      if (!['/readyz', '/v1/recommend', '/v1/jobs'].includes(req.url) && !job) throw new RequestError('NOT_FOUND', 404);
-      const methods = job ? ['GET', 'DELETE'] : req.url === '/readyz' ? ['GET'] : ['POST'];
+      if (!['/readyz', '/v1/recommend', '/v1/jobs', ...OVERTOURISM_ROUTES].includes(req.url) && !job) throw new RequestError('NOT_FOUND', 404);
+      const methods = job ? ['GET', 'DELETE'] : ['/readyz', '/v1/overtourism/readyz'].includes(req.url) ? ['GET'] : ['POST'];
       if (!methods.includes(req.method)) throw new RequestError('METHOD_NOT_ALLOWED', 405);
       const method = req.method;
-      if (Number(req.headers['content-length'] || 0) > MAX_BODY) throw new RequestError('BODY_TOO_LARGE', 413);
+      const limit = req.url === '/v1/overtourism' ? OVERTOURISM_MAX_BODY : MAX_BODY;
+      if (Number(req.headers['content-length'] || 0) > limit) throw new RequestError('BODY_TOO_LARGE', 413);
       if (method === 'POST' && (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase() !== 'application/json') throw new RequestError('UNSUPPORTED_MEDIA_TYPE', 415);
-      const body = await readBody(req);
+      const body = await readBody(req, limit);
       if (method !== 'POST' && body.length) throw new RequestError('INVALID_JSON', 400);
       const auth = verifyRequest({ headers: req.headers, method, path: req.url, body, key: authKey, now: now() });
       if (mode === 'access') {
@@ -109,6 +116,18 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
       }
       if (req.url === '/readyz') return send(res, 200, { ...await upstream.ready(signal), mode,
         asyncJobs: true, maxConcurrent: state.policy.maxConcurrent, jobs: jobs.ready() });
+      if (OVERTOURISM_ROUTES.includes(req.url)) {
+        if (!overtourism) throw new RequestError('OVERTOURISM_UNAVAILABLE', 503);
+        if (req.url === '/v1/overtourism/readyz') return send(res, 200, { ...await overtourism.ready(signal), mode });
+        let snapshot;
+        try { snapshot = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)); }
+        catch { throw new RequestError('INVALID_JSON', 400); }
+        // Synchronous, but unlike /v1/recommend a client disconnect does not abort
+        // the run: the result is public and shared, so the next call for the same
+        // snapshot reuses it. Only the fixed deadline bounds the run.
+        return send(res, 200, await overtourism.diagnose({ subject: auth.subject, nonce: auth.nonce,
+          input: snapshot, deadlineMs, signal: AbortSignal.timeout(Math.max(1, deadlineMs - now())) }));
+      }
       if (job) {
         const result = method === 'GET' ? jobs.get({ subject: auth.subject, requestId: job[1] })
           : jobs.cancel({ subject: auth.subject, requestId: job[1] });
@@ -178,6 +197,25 @@ export function gatewayPolicyFromEnv(env) {
   return policy;
 }
 
+/**
+ * Optional overtourism route from .local/gateway-overtourism.env. Missing or
+ * invalid settings disable only this route; recommendations keep starting.
+ */
+export function overtourismFromEnv(env, { state, fetchImpl } = {}) {
+  if (!env.LANGFLOW_OVERTOURISM_FLOW_ID && !env.LANGFLOW_OVERTOURISM_FLOW_SHA256) return { status: 'not_configured', service: null };
+  try {
+    const raw = env.GATEWAY_OVERTOURISM_DAILY_LIMIT;
+    if (raw !== undefined && raw !== '' && !/^\d{1,2}$/u.test(raw)) throw new Error('GATEWAY_CONFIG_INVALID');
+    const dailyLimit = raw === undefined || raw === '' ? OVERTOURISM_POLICY.dailyLimit : Number(raw);
+    const upstream = createOvertourismUpstream({ flowId: env.LANGFLOW_OVERTOURISM_FLOW_ID,
+      flowSha256: env.LANGFLOW_OVERTOURISM_FLOW_SHA256, langflowApiKey: env.LANGFLOW_GATEWAY_API_KEY,
+      mcpToken: env.MCP_SERVICE_TOKEN, controlToken: env.GATEWAY_CONTROL_TOKEN, ...(fetchImpl ? { fetchImpl } : {}) });
+    return { status: 'configured', service: createOvertourismService({ state, upstream, dailyLimit }) };
+  } catch {
+    return { status: 'disabled_invalid_config', service: null };
+  }
+}
+
 function main() {
   const env = process.env;
   const mode = env.GATEWAY_MODE || 'private';
@@ -186,10 +224,12 @@ function main() {
   const upstream = createUpstream({ flowId: env.LANGFLOW_GATEWAY_FLOW_ID, flowSha256: env.LANGFLOW_GATEWAY_FLOW_SHA256,
     langflowApiKey: env.LANGFLOW_GATEWAY_API_KEY, mcpToken: env.MCP_SERVICE_TOKEN, controlToken: env.GATEWAY_CONTROL_TOKEN,
     expectedMaxConcurrent: policy.maxConcurrent });
+  const overtourism = overtourismFromEnv(env, { state });
   const server = createGatewayServer({ authKey: env.GATEWAY_AUTH_KEY, mode, publicHost: env.GATEWAY_PUBLIC_HOST,
     accessVerifier: mode === 'access' ? createAccessVerifier({ issuer: env.GATEWAY_ACCESS_ISSUER, audience: env.GATEWAY_ACCESS_AUDIENCE }) : undefined,
-    state, upstream, maxQueue: policy.maxQueue });
-  server.listen(8790, '0.0.0.0', () => console.log(JSON.stringify({ status: 'listening', port: 8790, mode, productionReady: false })));
+    state, upstream, maxQueue: policy.maxQueue, overtourism: overtourism.service });
+  server.listen(8790, '0.0.0.0', () => console.log(JSON.stringify({ status: 'listening', port: 8790, mode,
+    overtourism: overtourism.status, productionReady: false })));
   const stop = () => {
     const workers = Promise.resolve().then(() => server.closeJobs());
     server.close(() => { void workers.catch(() => { process.exitCode = 1; }).finally(() => state.close()); });

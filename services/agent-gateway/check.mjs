@@ -3,11 +3,12 @@ import { randomBytes } from 'node:crypto';
 import { signRequest, createAccessVerifier } from './auth.mjs';
 import { createUpstream, boundedJson } from './upstream.mjs';
 import { gatewayPolicyFromEnv } from './server.mjs';
+import { createOvertourismUpstream } from './overtourism.mjs';
 
 const env = process.env;
 const require = condition => { if (!condition) throw new Error('CHECK_FAILED'); };
 try {
-  require(process.argv.slice(2).every(x => ['--internal', '--run-once'].includes(x)));
+  require(process.argv.slice(2).every(x => ['--internal', '--run-once', '--overtourism'].includes(x)));
   const mode = env.GATEWAY_MODE || 'private';
   require(['private', 'access'].includes(mode));
   if (mode === 'access') {
@@ -32,7 +33,19 @@ try {
     require(response.ok); return boundedJson(response);
   }
   if (mode === 'private') require((await request('GET', '/readyz')).ready === true);
-  if (process.argv.includes('--run-once')) {
+  if (process.argv.includes('--overtourism')) {
+    // Pinned diagnosis flow and MCP scopes only; no snapshot, scope or model run.
+    require(!process.argv.includes('--run-once'));
+    const overtourism = await createOvertourismUpstream({ flowId: env.LANGFLOW_OVERTOURISM_FLOW_ID,
+      flowSha256: env.LANGFLOW_OVERTOURISM_FLOW_SHA256, langflowApiKey: env.LANGFLOW_GATEWAY_API_KEY,
+      mcpToken: env.MCP_SERVICE_TOKEN, controlToken: env.GATEWAY_CONTROL_TOKEN }).ready();
+    if (mode === 'private') {
+      const route = await request('GET', '/v1/overtourism/readyz');
+      require(route.ready === true && route.flowVerified === true && route.productionReady === false);
+    }
+    console.log(JSON.stringify({ status: 'passed', scope: 'overtourism-ready', mode, ...overtourism,
+      routeChecked: mode === 'private', modelExecuted: false }));
+  } else if (process.argv.includes('--run-once')) {
     require(mode === 'private');
     const result = await request('POST', '/v1/recommend', { schemaVersion: '1.0', timezone: 'Asia/Seoul',
       query: '실내 방문 조건이 필요한 제주 장소 후보를 최대 3곳 찾아주세요. 미확인 조건은 확인 필요로 안내해 주세요.',
