@@ -160,10 +160,40 @@ jobs:
           pending=0
           python3 deploy/prepare-gateway.py --flow-change-pending || pending=$?
           test "$pending" = 3
-      - name: Run the read-only metrics SQL and the redaction dry run and execute on the disposable Langflow DB
+      - name: Run the read-only metrics and message-store check SQL and the redaction dry run and execute on the disposable Langflow DB
         run: |
           compose="docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml"
           $compose exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off -v ON_ERROR_STOP=1' < deploy/agent-run-metrics.sql
+          # The check's boundary is the last flow change: the final --message-store-off-flow above. Only the
+          # last message check ran after it, and the placeholder Vertex credential ends that run in one lfx error
+          # message; the store-on run before it stored its request message. No run reaches final validation, so
+          # [4] can judge nothing and, with nothing stored after the boundary, leaves passed empty: f and ''.
+          # Run counts are not asserted: lfx flushes an error run's trace in a background task. psql does not
+          # log into Langflow.
+          $compose exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off -v ON_ERROR_STOP=1' < deploy/agent-message-store-check.sql
+          $compose exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -q -A -t -v ON_ERROR_STOP=1' < deploy/agent-message-store-check.sql > "$RUNNER_TEMP/message-store-check.txt"
+          python3 - "$RUNNER_TEMP/message-store-check.txt" <<'PY'
+          import sys
+          sections, current = {}, None
+          for line in open(sys.argv[1], encoding='utf-8').read().splitlines():
+              if line.startswith('[') and '] ' in line:
+                  current = line.split(']', 1)[0] + ']'
+                  sections[current] = []
+              elif line:
+                  sections[current].append(line.split('|'))
+          (flows, changed_at), = sections['[1]']
+          # [2] rows: after_flow_change | runs | accepted | blocked | agent_error | no_final | redacted
+          periods = [row[0] for row in sections['[2]']]
+          # [3] rows: after_flow_change | messages | stored_messages | error_messages | sessions_with_stored_message
+          messages = {row[0]: [int(value) for value in row[1:]] for row in sections['[3]']}
+          assert sections['[0]'] == [['UTC']] and flows == '1' and changed_at and periods == ['t', 'f'], sections
+          assert [row[0] for row in sections['[3]']] == ['t', 'f'], sections
+          after, before = messages['t'], messages['f']
+          assert after[1] == 0 and after[3] == 0 and after[2] >= 1 and before[1] >= 1, sections
+          assert sections['[4]'] == [['f', '']], sections
+          print({'flows': 1, 'storedAfter': after[1], 'errorMessagesAfter': after[2], 'storedBefore': before[1],
+                 'canJudge': sections['[4]'][0][0], 'passed': sections['[4]'][0][1]})
+          PY
           # Every CI run is minutes old: nothing is older than one day, so the execute commits no change.
           python3 deploy/redact-agent-history.py --older-than-days 1
           python3 deploy/redact-agent-history.py --older-than-days 1 --execute | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["status"] == "redacted" and v["changed"] is False and v["gatewayTraces"]["keptNewer"] >= 3, v'

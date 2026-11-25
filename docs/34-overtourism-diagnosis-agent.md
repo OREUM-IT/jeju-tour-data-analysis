@@ -2,7 +2,7 @@
 
 기준일: 2026-11-24 한국 시간. 사용자가 웹앱의 오버투어리즘 현황판(규제 확인 → 지역 보고서 → 「오버투어리즘 진단」)에 대해 **"진단 에이전트를 AWS Docker로"**를 골랐다. 진단 에이전트를 기존 AWS Docker 스택(Gateway·MCP·Langflow)에서 돌리고, 지표 계산은 MCP 도구로 두고, 웹앱 현황판은 그 결과를 받아 보인다.
 
-이 문서는 **구현과 로컬·CI 검증**의 기록이다. 사용자 AWS에 접속하거나 적용하지 않았고, 실제 OpenAI 호출도 하지 않았다. AWS 적용은 아래 [적용 절차](#aws에-적용할-명령)를 사용자가 실행한다. `productionReady:false`를 유지한다.
+이 문서는 **구현과 로컬·CI 검증**의 기록이다. 사용자 AWS에 접속하거나 적용하지 않았고, 실제 OpenAI 호출도 하지 않았다. AWS 적용은 아래 [적용 절차](#5-aws에-적용할-명령)를 사용자가 실행한다. `productionReady:false`를 유지한다.
 
 ## 1. 구조
 
@@ -125,4 +125,4 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 
 ## 8. 함께 찾은 점 — 추천 규칙 동작 흐름의 도구 이름
 
-OpenAI 함수(도구) 이름은 영문·숫자·밑줄·하이픈만 허용한다. 추천 Gateway 흐름의 도구 이름 `places.search`·`places.get`·`constraints.check`에는 점이 있어, **규칙 동작(gpt-5.4-mini) 흐름을 AWS에 적용했다면 실제 OpenAI 호출이 400으로 거부될 가능성이 크다**(Gemini는 점을 허용해 Vertex 흐름은 영향이 없다). 실제 호출로 확인하지 않은 추정이다. 이번 진단 도구는 밑줄 이름을 쓴다. 추천 흐름의 도구 이름 변경은 흐름·MCP 계약을 바꾸므로 이 PR에 넣지 않았고, 사용자가 원하면 따로 고친다. 운영 흐름이 지금 어느 빌드인지는 [32 문서](32-agent-gateway-tunnel.md#지연토큰부하-측정-도구)의 SQL `model` 열로 확인한다.
+OpenAI 함수(도구) 이름은 영문·숫자·밑줄·하이픈만 허용한다. 추천 Gateway 흐름의 도구 이름 `places.search`·`places.get`·`constraints.check`에는 점이 있어, **규칙 동작(gpt-5.4-mini) 흐름을 AWS에 적용했다면 실제 OpenAI 호출이 400으로 거부될 가능성이 크다**(Gemini는 점을 허용해 Vertex 흐름은 영향이 없다). 실제 호출로 확인하지 않은 추정이다. 이번 진단 도구는 밑줄 이름을 쓴다. 추천 흐름의 도구 이름 변경은 흐름·MCP 계약을 바꾸므로 이 PR에 넣지 않았고, 사용자가 원하면 따로 고친다. 운영 흐름이 지금 어느 빌드인지는 [32 문서](32-agent-gateway-tunnel.md#지연토큰부하-측정-도구)의 SQL `model` 열로 확인한다. 2026-11-25 메시지 저장 끔 적용 출력(사용자 제공)으로는 그 직전 AWS에 저장된 추천 흐름이 8회 Vertex(Gemini) 빌드였다([32 문서](32-agent-gateway-tunnel.md#저장-끔-aws-적용-결과2026-11-25-사용자-제공-출력)). 그때 운영 추천은 규칙 동작 흐름이 아니었다. 같은 날 그 뒤 규칙 동작 흐름을 적용했다(PR #36). [PR #37](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/37)(병합됨) 기록으로는 이 절의 문제로 실제 호출 전에 되돌렸고, 그 PR이 규칙 동작 빌드에서 모델에 보이는 도구 이름을 밑줄로 고쳤다([32 문서](32-agent-gateway-tunnel.md#도구-이름-수정과-되돌림2026-11-25)).
