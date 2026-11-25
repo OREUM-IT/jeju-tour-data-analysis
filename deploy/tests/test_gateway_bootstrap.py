@@ -6,6 +6,7 @@ import datetime as dt
 import importlib.util
 import io
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -411,11 +412,26 @@ class GatewayBootstrapTests(unittest.TestCase):
         self.assertIn('{"placeIds":[]}', gateway.RULE_PROMPT)
         self.assertEqual((new['max_iterations']['value'], new['max_tokens']['value'], new['n_messages']['value']), (8, 4096, 0))
         self.assertEqual(rule['description'], gateway.RULE_DESCRIPTION)
+        # OpenAI function names allow only [a-zA-Z0-9_-]: only the names the model sees change.
+        def scoped_code(flow):
+            return next(node for node in flow['data']['nodes'] if node['data']['type'] == 'JejuScopedTools')['data']['node']['template']['code']
+        before, after = scoped_code(budget)['value'], scoped_code(rule)['value']
+        self.assertEqual(after, before.replace(gateway.SCOPED_TOOL_NAME_LINE, gateway.OPENAI_TOOL_NAME_LINE))
+        self.assertEqual(after.count('name=name.replace(".", "_")'), 1)
+        mcp_names = re.findall(r'_scoped_tool\("([^"]+)"', after)
+        self.assertEqual(mcp_names, ['places.search', 'places.get', 'constraints.check'])
+        for name in mcp_names:
+            self.assertRegex(name.replace('.', '_'), r'^[a-zA-Z0-9_-]{1,64}$')
+            self.assertNotRegex(name, r'^[a-zA-Z0-9_-]{1,64}$')  # why the rename is needed
+        self.assertIn('"name": name', after)  # the MCP still receives the dotted name
+        self.assertIn('places_search', gateway.RULE_PROMPT)
+        self.assertNotIn('places.search', gateway.RULE_PROMPT)
         def without_agent_client(flow):
             flow = copy.deepcopy(flow)
             fields = agent_fields(flow)
             for name in ('code', 'api_key', 'model', 'system_prompt', 'max_tokens'):
                 fields.pop(name)
+            scoped_code(flow).pop('value')
             flow.pop('description')
             return flow
         self.assertEqual(without_agent_client(budget), without_agent_client(rule))
