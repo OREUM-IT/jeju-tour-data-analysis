@@ -90,8 +90,9 @@ class RunMetricsSqlTests(unittest.TestCase):
     def test_document_command_holds_exactly_this_file(self):
         self.assertTrue(SQL.endswith('\n') and '\nSQL\n' not in SQL and not SQL.startswith('SQL\n'))
         self.assertEqual(DOCUMENT.count(COMMAND + SQL + 'SQL\n```'), 1)
-        # Same container, role and psql options as the confirmation SQL the user already ran on AWS.
-        self.assertEqual(DOCUMENT.count(COMMAND), 2)
+        # Same container, role and psql options as the confirmation SQL the user already ran on AWS
+        # (the third command holds deploy/agent-message-store-check.sql).
+        self.assertEqual(DOCUMENT.count(COMMAND), 3)
 
     def test_session_is_read_only_with_a_timeout_before_any_query(self):
         first = statements()
