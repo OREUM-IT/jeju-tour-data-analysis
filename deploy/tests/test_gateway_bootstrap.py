@@ -460,7 +460,7 @@ class GatewayBootstrapTests(unittest.TestCase):
         with patch.dict(sys.modules, {'langchain_openai': types.SimpleNamespace(ChatOpenAI=ChatOpenAI)}):
             namespace['_get_llm'](Agent())
             self.assertEqual(seen, [{'model': 'gpt-5.4-mini', 'api_key': 'sk-' + 'x' * 40, 'base_url': 'https://api.openai.com/v1',
-                                     'streaming': True, 'max_retries': 1, 'timeout': 60, 'reasoning_effort': 'low',
+                                     'streaming': True, 'max_retries': 1, 'timeout': 60, 'reasoning_effort': 'none',
                                      'max_completion_tokens': 4096}])
             for key in (None, '', 'x' * 40, 'sk-short', 'sk-' + 'x' * 30 + ' y', 'sk-' + 'ㄱ' * 30):
                 agent = Agent()
@@ -560,6 +560,30 @@ class GatewayBootstrapTests(unittest.TestCase):
         stored = client.state['flows'][flow_id]
         stored.update(data=copy.deepcopy(flow['data']), description=flow['description'],
                       version_token=str(uuid.uuid4()))
+
+    def test_refused_low_effort_build_switches_to_none_and_rolls_back(self):
+        """AWS kept the first rule-action build (reasoning_effort="low"), which OpenAI refused with tools."""
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        budget = gateway.budget_flow(legacy)
+        rule = gateway.rule_action_flow(budget)
+        low = gateway.rule_action_flow(budget, get_llm=gateway.OPENAI_GET_LLM_LOW)
+        code = lambda flow: agent_fields(flow)['code']['value']
+        self.assertIn('reasoning_effort="none"', code(rule))
+        self.assertNotIn('reasoning_effort="low"', code(rule))
+        self.assertEqual(code(low), code(rule).replace('reasoning_effort="none"', 'reasoning_effort="low"'))
+        for store in (True, False):
+            for mode, target, expected in (('rule-action', 'rule-action', rule), ('rule-action-rollback', 'vertex-8-call', budget)):
+                with self.subTest(store=store, mode=mode):
+                    client = Langflow()
+                    client.state['variables'].append({'name': 'JEJU_OPENAI_API_KEY', 'type': 'Credential', 'has_value': True})
+                    flow_id = run(client)['flowId']
+                    self.stored_as(client, flow_id, low if store else gateway.without_message_store(low))
+                    with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+                        migrate(Langflow(client.state), 'check-rule-action')
+                    result = migrate(Langflow(client.state), mode)
+                    want = expected if store else gateway.without_message_store(expected)
+                    self.assertEqual((result['flowStatus'], result['build'], result['messageStore']), ('updated', target, store))
+                    self.assertEqual(client.state['flows'][flow_id]['data'], want['data'])
 
     def test_store_on_aws_states_switch_to_store_off_and_back_keeping_build_id_and_key(self):
         client = Langflow()

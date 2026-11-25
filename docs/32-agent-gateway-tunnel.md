@@ -633,6 +633,13 @@ MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 �
 - 작업 환경에서 langchain-openai 1.8.5로 요청 본문의 도구 이름이 바뀐 것을 확인했다. 실제 OpenAI 호출은 하지 않았다.
 - 다시 적용할 때는 위 [AWS에 적용할 명령](#aws에-적용할-명령-2)을 그대로 쓴다. 저장 흐름이 Vertex 8회라서 예전 규칙 빌드를 거치지 않는다.
 
+### OpenAI 400 `reasoning_effort` 수정(2026-11-25)
+
+도구 이름 수정 뒤 다시 적용한 흐름(`main@fbd0a31`)으로 실제 호출이 처음 일어났다. 사용자 제공 확인 SQL에서 `gpt-5.4-mini` 실행 3건이 모두 모델 호출 1회·약 1초·토큰 0으로 실패했다. 오류 코드만 뽑은 읽기 전용 SQL 결과는 LLM span 3건·Chain span 6건 모두 HTTP 400, `param`은 `reasoning_effort`였다(키·네트워크 문제 아님). gpt-5.4 계열은 Chat Completions에서 함수 도구와 `none`이 아닌 `reasoning_effort`를 함께 받으면 거절한다(커뮤니티 보고, 공식 변경 기록은 찾지 못했다). 앱은 같은 모델을 도구 없이 Chat Completions로 쓰거나 Responses API로 써서 영향이 없었다.
+
+수정: 규칙 동작 빌드의 OpenAI 클라이언트를 `reasoning_effort="none"`으로 바꿨다. 판단은 서버가 하고 모델은 장소 ID만 고르므로 추론 토큰을 요청하지 않는다. Responses API 전환(추론 유지)은 Langflow Agent의 응답 형식 영향이 확인되지 않아 하지 않았다. 문제가 된 이전 빌드는 `rule-action-low`로 알려진 그래프에 남겨, AWS에 저장된 그 흐름에서 새 빌드로 바로 바꾸거나 Gemini 8회 흐름으로 되돌릴 수 있다(메시지 저장 끔 유지). 오버투어리즘 진단 흐름도 같은 클라이언트를 쓰므로 같은 값으로 바뀐다. 실제 OpenAI 호출 성공은 다시 적용한 뒤 확인한다.
+
+
 ### 확인과 되돌리기
 
 규칙 흐름 상태만 재시작 없이 확인한다. 적용 뒤에는 `apply-agent-call-budget.sh --verify-only`가 저장 흐름 불일치로 실패하므로 이 명령을 쓴다.
