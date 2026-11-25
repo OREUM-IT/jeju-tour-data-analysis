@@ -1,8 +1,8 @@
 """Static contracts of the read-only run-metrics SQL; no database, AWS, network or model calls.
 
 These tests read the SQL text only. They pin what the file may read and return and how each
-statistic is named, but they never execute it: that the numbers are right was compared once
-against a scratch PostgreSQL copy (docs/32) and is not re-run by this suite or by CI.
+statistic is named, but they never execute it: that the numbers are right was compared against
+scratch PostgreSQL 16 data written by Langflow 1.13.3 (docs/32) and is not re-run by this suite.
 """
 from pathlib import Path
 import re
@@ -17,7 +17,8 @@ COMMAND = ("cd ~/oreumit-agent && sudo docker compose -p oreumit-bootstrap -f de
            "'PGPASSWORD=\"$LANGFLOW_DB_PASSWORD\" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off "
            "-v ON_ERROR_STOP=1' <<'SQL'\n")
 OUTPUT_COLUMNS = {
-    'traces', 'sessions', 'first_start_utc', 'last_start_utc', 'unfinished', 'without_spans', 'sessions_without_trace',
+    'traces', 'sessions', 'first_start_utc', 'last_start_utc', 'unfinished', 'without_spans', 'redacted',
+    'sessions_without_trace',
     'kst_day', 'model', 'runs', 'accepted', 'blocked', 'agent_error', 'no_final', 'error_traces',
     'p50_ms', 'p95_ms', 'max_ms', 'model_calls', 'avg_model_calls', 'max_model_calls', 'failed_model_calls',
     'avg_tool_calls', 'input_tokens', 'output_tokens', 'avg_input_per_run', 'avg_output_per_run',
@@ -35,9 +36,20 @@ CALL_LABEL = ("CASE WHEN lower(sp.span_type::text) = 'tool' THEN 'tool'\n    ELS
 # Sessions that left messages but no trace row: a count, correlated to prefix-filtered messages only.
 UNTRACED = ("(SELECT count(DISTINCT m.session_id) FROM message m WHERE m.session_id LIKE 'gw-%'\n"
             "    AND NOT EXISTS (SELECT 1 FROM trace t2 WHERE t2.session_id = m.session_id)) AS sessions_without_trace")
+# Traces whose raw text deploy/redact-agent-history.py replaced: a fixed-prefix test, never a selected text.
+REDACTED = ("count(*) FILTER (WHERE EXISTS (SELECT 1 FROM span s WHERE s.trace_id = t.id "
+            "AND s.outputs::text LIKE '{\"redacted\":true%')) AS redacted")
+# The only reads of a span output: the final validation component's fixed status prefixes or redaction marker.
+FINAL = "CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce("
+OUTPUT_TESTS = (
+    """sp.outputs::text LIKE '{"redacted":true,"finalStatus":"%'""",
+    "sp.outputs -> 'message' ->> 'text' IS NOT NULL",
+    """sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}'""",
+    """sp.outputs -> 'message' ->> 'text' LIKE '{"status":"blocked"%'""",
+    """s.outputs::text LIKE '{"redacted":true%'""")
 # Every shape a returned column may have. Arguments are named so that an aggregate cannot carry an id or a text.
 RESULT_ITEMS = (
-    r'kst_day', r'model', re.escape(CALL_LABEL), re.escape(UNTRACED),
+    r'kst_day', r'model', re.escape(CALL_LABEL), re.escape(UNTRACED), re.escape(REDACTED),
     r"count\(\*\) AS (?:traces|runs|calls)",
     r"count\(DISTINCT t\.session_id\) AS sessions",
     r"count\(\*\) FILTER \(WHERE t\.end_time IS NULL\) AS unfinished",
@@ -52,16 +64,16 @@ RESULT_ITEMS = (
     r"round\(avg\((input|output)_tokens\)\) AS avg_\1_per_run",
     r"round\(percentile_cont\(0\.5\) WITHIN GROUP \(ORDER BY (?:ms|sp\.latency_ms)\)\) AS p50_ms",
     r"round\(percentile_cont\(0\.95\) WITHIN GROUP \(ORDER BY (?:ms|sp\.latency_ms)\)\) AS p95_ms")
-# Columns of the Langflow tables that the file may touch, by table alias. Inputs, outputs and names of
-# senders or flows are absent; message text is reached only by the fixed blocked-prefix test below.
+# Columns of the Langflow tables that the file may touch, by table alias. Span inputs, message texts and
+# names of senders or flows are absent; span outputs are reached only by the fixed tests in OUTPUT_TESTS.
 TABLE_COLUMNS = {
     't': {'id', 'session_id', 'start_time', 'end_time', 'status', 'total_latency_ms'}, 't2': {'session_id'},
-    'm': {'session_id', 'sender', 'properties', 'category', '"text"'},
-    'sp': {'trace_id', 'span_type', 'status', 'attributes', 'name', 'latency_ms'}, 's': {'trace_id'}}
+    'm': {'session_id'},
+    'sp': {'trace_id', 'span_type', 'status', 'attributes', 'name', 'latency_ms', 'outputs', 'parent_span_id'},
+    's': {'trace_id', 'outputs'}}
 SESSION_ID_USES = (
     "t.session_id LIKE 'gw-%'", "m.session_id LIKE 'gw-%'", 'count(DISTINCT t.session_id) AS sessions',
-    'count(DISTINCT m.session_id) FROM message m', 't2.session_id = m.session_id', 'f.session_id = t.session_id',
-    'SELECT m.session_id,\n    bool_or(')
+    'count(DISTINCT m.session_id) FROM message m', 't2.session_id = m.session_id')
 
 
 def code():
@@ -83,10 +95,12 @@ class RunMetricsSqlTests(unittest.TestCase):
 
     def test_session_is_read_only_with_a_timeout_before_any_query(self):
         first = statements()
-        self.assertEqual(first[:2], ['SET default_transaction_read_only = on', "SET statement_timeout = '15s'"])
-        self.assertEqual(first[2], 'SHOW TimeZone')
-        self.assertTrue(all(statement.startswith(('SELECT ', 'WITH ')) for statement in first[3:]))
-        self.assertEqual(len(first), 7)
+        self.assertEqual(first[:3], ['SET default_transaction_read_only = on', "SET statement_timeout = '15s'",
+                                     "SET TIME ZONE 'UTC'"])
+        # Langflow 1.13.3 stores trace times as timestamptz; kst_day and *_utc need a UTC session.
+        self.assertEqual(first[3], 'SHOW TimeZone')
+        self.assertTrue(all(statement.startswith(('SELECT ', 'WITH ')) for statement in first[4:]))
+        self.assertEqual(len(first), 8)
 
     def test_no_writing_or_session_changing_statement(self):
         words = set(re.findall(r'[A-Za-z_]+', re.sub(r"'[^']*'", "''", SQL).upper()))
@@ -94,7 +108,7 @@ class RunMetricsSqlTests(unittest.TestCase):
                           'REVOKE', 'CALL', 'DO', 'EXECUTE', 'PREPARE', 'RESET', 'BEGIN', 'COMMIT', 'LOCK', 'VACUUM',
                           'NOTIFY', 'LISTEN', 'INTO', 'PG_SLEEP', 'DBLINK', 'LO_IMPORT', 'PG_READ_FILE'):
             self.assertNotIn(forbidden, words)
-        self.assertEqual(SQL.count('SET '), 2)
+        self.assertEqual(SQL.count('SET '), 3)
         meta = [line.split()[0] for line in SQL.splitlines() if line.startswith('\\')]
         self.assertEqual(set(meta), {'\\echo'})  # no \copy, \o, \! or \set
 
@@ -103,7 +117,7 @@ class RunMetricsSqlTests(unittest.TestCase):
                          {'trace', 'span', 'message'})
         self.assertEqual(set(re.findall(r'\b(?:FROM|JOIN) ((?:trace|span|message) \w+)', SQL)),
                          {'trace t', 'trace t2', 'message m', 'span sp', 'span s'})
-        for statement in statements()[3:]:
+        for statement in statements()[4:]:
             # Every trace and message read carries the prefix filter; spans are reached only through such a trace.
             self.assertEqual(len(re.findall(r'\b(?:FROM|JOIN) (?:trace t|message m)\b', statement)),
                              len(re.findall(r"\b(?:t|m)\.session_id LIKE 'gw-%'", statement)))
@@ -120,15 +134,15 @@ class RunMetricsSqlTests(unittest.TestCase):
             self.assertIn(use, rest, use)
             rest = rest.replace(use, '')
         self.assertNotIn('session_id', rest)
-        # The one place that selects a session id is the per-session outcome CTE: it is grouped by that id,
-        # every other column is a boolean, and the id is used only to join it to the trace.
-        outcome = re.findall(r"f AS \(\n  SELECT m\.session_id,\n(.*?)\n  FROM message m WHERE m\.session_id LIKE 'gw-%' GROUP BY 1\)",
-                             code(), re.S)
+        # The per-run outcome CTE is grouped by trace id, every other column is a boolean over the run's
+        # top-level (component) spans, and the trace id is used only to join it to the trace.
+        outcome = re.findall(r"f AS \(\n  SELECT sp\.trace_id,\n(.*?)\n  FROM span sp JOIN trace t ON t\.id = sp\.trace_id\n"
+                             r"  WHERE t\.session_id LIKE 'gw-%' AND sp\.parent_span_id IS NULL GROUP BY 1\)", code(), re.S)
         self.assertEqual(len(outcome), 1)
         self.assertEqual(re.findall(r' AS (\w+)', outcome[0]), ['has_final', 'blocked', 'agent_error'])
         self.assertEqual(len(re.findall(r'^    bool_or\(', outcome[0], re.M)), 3)
-        self.assertEqual(code().count('f.session_id'), 1)
-        self.assertEqual(code().count('SELECT m.session_id'), 1)
+        self.assertEqual(code().count('f.trace_id'), 1)
+        self.assertNotIn('message m WHERE m.session_id LIKE \'gw-%\' GROUP BY', code())
 
     def test_only_listed_table_columns_are_read_and_message_text_only_for_the_blocked_prefix(self):
         seen = {}
@@ -136,19 +150,28 @@ class RunMetricsSqlTests(unittest.TestCase):
             seen.setdefault(alias, set()).add(column)
         self.assertEqual(seen, TABLE_COLUMNS)
         self.assertNotIn('*', code().replace('count(*)', ''))  # no SELECT * or alias.*
-        blocked = """coalesce(m."text" LIKE '{"status":"blocked"%', false)"""
-        self.assertEqual((SQL.count(blocked), SQL.count('"text"')), (1, 1))
-        # Outside casts and that one test, the word text does not occur: no text column reaches a result.
-        self.assertEqual(re.findall(r'\btext\b', code().replace('::text', '').replace(blocked, '')), [])
-        self.assertEqual(SQL.count("m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2'"), SQL.count('properties'))
-        # Span attributes are read through three fixed keys only.
+        # No message text, sender or properties: messages are read only to count untraced sessions.
+        for absent in ('"text"', 'm.text', 'properties', 'sender', 'category', 'inputs', 'content_blocks'):
+            self.assertNotIn(absent, SQL)
+        # Span outputs occur only in five fixed tests: two status prefixes of the final validation output,
+        # its presence, and the redaction marker. None of them is a selected column.
+        for test in OUTPUT_TESTS:
+            self.assertEqual(SQL.count(test), 1, test)
+        self.assertEqual(SQL.count('outputs'), len(OUTPUT_TESTS))
+        self.assertEqual(SQL.count(FINAL), 2)
+        # Outside casts and those tests, the word text does not occur: no text column reaches a result.
+        rest = code().replace('::text', '')
+        for test in OUTPUT_TESTS:
+            rest = rest.replace(test.replace('::text', ''), '')
+        self.assertEqual(re.findall(r'\btext\b', rest), [])
+        # Span attributes are read through three fixed keys only; 'text' is the final output's key above.
         keys = re.findall(r"->> '([^']+)'", code())
-        self.assertEqual(set(keys), {'gen_ai.response.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'id'})
+        self.assertEqual(set(keys), {'gen_ai.response.model', 'gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens', 'text'})
         self.assertEqual(len(re.findall(r'\battributes\b', code())), len(re.findall(r'\battributes::jsonb\b', code())))
 
     def test_result_columns_are_aggregates_and_model_names_only(self):
         columns = set()
-        for statement in statements()[3:]:
+        for statement in statements()[4:]:
             outer = final_select(statement)[len('SELECT '):]
             items, depth, current = [], 0, ''
             for character in outer:
@@ -193,10 +216,13 @@ class RunMetricsSqlTests(unittest.TestCase):
         self.assertEqual(SQL.count('percentile_cont('), 4)
         self.assertEqual(SQL.count("CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'\n"
                                    "      WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome"), 1)
-        final = "m.sender = 'Machine' AND m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2'"
-        self.assertEqual(SQL.count(f'bool_or({final}) AS has_final'), 1)
-        self.assertEqual(SQL.count(f"""bool_or({final}\n      AND coalesce(m."text" LIKE '{{"status":"blocked"%', false)) AS blocked"""), 1)
-        self.assertEqual(SQL.count("bool_or(m.category = 'error') AS agent_error"), 1)
+        self.assertEqual(SQL.count(f"""bool_or({FINAL}sp.outputs::text LIKE '{{"redacted":true,"finalStatus":"%'
+      OR sp.outputs -> 'message' ->> 'text' IS NOT NULL, false) END) AS has_final"""), 1)
+        self.assertEqual(SQL.count(f"""bool_or({FINAL}sp.outputs::text = '{{"redacted":true,"finalStatus":"blocked"}}'
+      OR sp.outputs -> 'message' ->> 'text' LIKE '{{"status":"blocked"%', false) END) AS blocked"""), 1)
+        # A component span that ended with an error: lfx stores the same failure as an error message.
+        self.assertEqual(SQL.count("bool_or(lower(sp.status::text) = 'error') AS agent_error"), 1)
+        self.assertEqual(SQL.count("WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL GROUP BY 1)"), 1)
         self.assertEqual(SQL.count("t.total_latency_ms AS ms"), 1)
         for line in ("count(*) FILTER (WHERE kind = 'llm') AS model_calls,",
                      "count(*) FILTER (WHERE kind = 'llm' AND failed) AS failed_model_calls,",
@@ -210,6 +236,7 @@ class RunMetricsSqlTests(unittest.TestCase):
         self.assertEqual(SQL.count("lower(sp.span_type::text) IN ('llm', 'tool')"), 2)
         self.assertEqual(SQL.count("lower(sp.span_type::text) = 'llm'"), 1)
         self.assertEqual((SQL.count('span_type'), SQL.count('lower(sp.span_type::text)')), (6, 6))
+        self.assertEqual(SQL.count('parent_span_id'), 1)
 
     def test_token_casts_are_guarded_and_enum_labels_are_case_insensitive(self):
         self.assertEqual(len(re.findall(r"~ '\^\[0-9\]\{1,15\}\$'\s+THEN \(a ->> 'gen_ai\.usage\.(?:input|output)_tokens'\)::bigint", SQL)), 2)

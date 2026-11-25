@@ -1,15 +1,19 @@
 -- Read-only aggregates of Gateway runs (session ids starting with gw-) from the Langflow tracing tables.
 -- Output is counts, latency percentiles and token sums only: no session ids, texts or member data.
+-- Outcomes come from the component spans (fixed prefixes of the final validation output or the
+-- redaction marker), so they also cover runs that store no message and runs whose text was redacted.
 -- docs/32-agent-gateway-tunnel.md holds the same text inside the AWS command; a deploy test keeps them equal.
 SET default_transaction_read_only = on;
 SET statement_timeout = '15s';
-\echo '[0] database time zone (kst_day assumes trace times are stored in UTC)'
+SET TIME ZONE 'UTC';
+\echo '[0] session time zone (UTC: Langflow 1.13.3 stores trace times with a time zone; kst_day adds 9 hours)'
 SHOW TimeZone;
-\echo '[1] Gateway traces covered (times in UTC); sessions_without_trace are runs missing from every table below'
+\echo '[1] Gateway traces covered (times in UTC); redacted = raw text removed; sessions_without_trace counts only runs that left a message'
 SELECT count(*) AS traces, count(DISTINCT t.session_id) AS sessions,
   min(t.start_time) AS first_start_utc, max(t.start_time) AS last_start_utc,
   count(*) FILTER (WHERE t.end_time IS NULL) AS unfinished,
   count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM span s WHERE s.trace_id = t.id)) AS without_spans,
+  count(*) FILTER (WHERE EXISTS (SELECT 1 FROM span s WHERE s.trace_id = t.id AND s.outputs::text LIKE '{"redacted":true%')) AS redacted,
   (SELECT count(DISTINCT m.session_id) FROM message m WHERE m.session_id LIKE 'gw-%'
     AND NOT EXISTS (SELECT 1 FROM trace t2 WHERE t2.session_id = m.session_id)) AS sessions_without_trace
 FROM trace t WHERE t.session_id LIKE 'gw-%';
@@ -23,18 +27,20 @@ c AS (
     ORDER BY coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')')) AS model
   FROM s GROUP BY 1),
 f AS (
-  SELECT m.session_id,
-    bool_or(m.sender = 'Machine' AND m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2') AS has_final,
-    bool_or(m.sender = 'Machine' AND m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2'
-      AND coalesce(m."text" LIKE '{"status":"blocked"%', false)) AS blocked,
-    bool_or(m.category = 'error') AS agent_error
-  FROM message m WHERE m.session_id LIKE 'gw-%' GROUP BY 1),
+  SELECT sp.trace_id,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text LIKE '{"redacted":true,"finalStatus":"%'
+      OR sp.outputs -> 'message' ->> 'text' IS NOT NULL, false) END) AS has_final,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}'
+      OR sp.outputs -> 'message' ->> 'text' LIKE '{"status":"blocked"%', false) END) AS blocked,
+    bool_or(lower(sp.status::text) = 'error') AS agent_error
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL GROUP BY 1),
 run AS (
   SELECT (t.start_time + interval '9 hours')::date AS kst_day, coalesce(c.model, '-') AS model,
     lower(t.status::text) AS trace_status, t.total_latency_ms AS ms,
     CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'
       WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome
-  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.session_id = t.session_id
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.trace_id = t.id
   WHERE t.session_id LIKE 'gw-%')
 SELECT kst_day, model, count(*) AS runs,
   count(*) FILTER (WHERE outcome = 'accepted') AS accepted,

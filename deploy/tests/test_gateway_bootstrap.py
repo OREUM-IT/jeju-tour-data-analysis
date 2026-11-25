@@ -172,7 +172,10 @@ class GatewayBootstrapTests(unittest.TestCase):
         self.assertEqual(code.count(gateway.GUARDED_LIMIT_LINES), 1)
         self.assertIn('GUARDED_AGENT_MODEL_CALL_LIMIT = 8\n', code)
         self.assertTrue(code.endswith('\n\n' + gateway.FINAL_ANSWER_GUARD))
-        self.assertEqual(flow['description'], gateway.DESCRIPTION)
+        # A new provision stores neither the request nor the final output in Langflow's message table.
+        self.assertEqual(flow['description'], gateway.DESCRIPTION + gateway.NO_STORE_NOTE)
+        for kind in gateway.STORE_NODES:
+            self.assertIs(nodes[kind]['data']['node']['template']['should_store_message']['value'], False)
         ast.parse(code)
         self.assertEqual(nodes['ChatOutput']['id'], 'ChatOutput-jejuV2')
         self.assertEqual(nodes['JejuFinalValidation']['id'], 'JejuFinalValidation-v2')
@@ -193,7 +196,7 @@ class GatewayBootstrapTests(unittest.TestCase):
         checker = Langflow(first.state)
         result = run(checker, provision=False)
         self.assertEqual(result, {'status': 'passed', 'flowMatches': True, 'nodeCount': 6, 'edgeCount': 7,
-                                 'toolCount': 3, 'modelCallLimit': 8,
+                                 'toolCount': 3, 'modelCallLimit': 8, 'build': 'vertex-8-call', 'messageStore': False,
                                  'flowSha256': gateway.flow_sha256(next(iter(first.state['flows'].values()))['data']),
                                  'modelExecuted': False, 'productionReady': False})
         self.assertEqual(before, checker.state)
@@ -357,10 +360,12 @@ class GatewayBootstrapTests(unittest.TestCase):
         stored = client.state['flows'][flow_id]
         self.assertEqual(rolled, {'status': 'passed', 'flowStatus': 'updated', 'flowId': flow_id,
                                   'flowSha256': gateway.flow_sha256(stored['data']), 'modelCallLimit': 4,
+                                  'build': 'legacy-4-call', 'messageStore': False,
                                   'modelExecuted': False, 'productionReady': False})
         self.assertEqual(agent_fields(stored)['max_iterations']['value'], 4)
         self.assertNotIn('_GatewayFinalAnswerMiddleware', agent_fields(stored)['code']['value'])
-        self.assertEqual(stored['description'], gateway.LEGACY_DESCRIPTION)
+        # The switch keeps the stored message-storage variant (here: off, as provisioned).
+        self.assertEqual(stored['description'], gateway.LEGACY_DESCRIPTION + gateway.NO_STORE_NOTE)
         for key in set(current) - {'data', 'description', 'version_token'}:
             self.assertEqual(stored[key], current[key])
         patches = [kwargs for method, _, kwargs in roller.calls if method == 'PATCH']
@@ -471,9 +476,10 @@ class GatewayBootstrapTests(unittest.TestCase):
         stored = client.state['flows'][flow_id]
         self.assertEqual(switched, {'status': 'passed', 'flowStatus': 'updated', 'flowId': flow_id,
                                     'flowSha256': gateway.flow_sha256(stored['data']), 'modelCallLimit': 8,
+                                    'build': 'rule-action', 'messageStore': False,
                                     'modelExecuted': False, 'productionReady': False})
         self.assertNotEqual(switched['flowSha256'], provisioned['flowSha256'])
-        self.assertEqual(stored['description'], gateway.RULE_DESCRIPTION)
+        self.assertEqual(stored['description'], gateway.RULE_DESCRIPTION + gateway.NO_STORE_NOTE)
         self.assertEqual([method for method, _ in mutations(switcher)], ['PATCH'])
         checked = migrate(Langflow(client.state), 'check-rule-action')
         self.assertEqual((checked['flowMatches'], checked['flowSha256'], checked['modelCallLimit']), (True, switched['flowSha256'], 8))
@@ -495,6 +501,157 @@ class GatewayBootstrapTests(unittest.TestCase):
         client.state['variables'].append({'name': 'JEJU_OPENAI_API_KEY', 'type': 'Credential', 'has_value': True})
         with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
             migrate(Langflow(client.state), 'rule-action')
+
+    def test_message_store_variant_changes_only_chat_storage_and_description(self):
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        budget = gateway.budget_flow(legacy)
+        rule = gateway.rule_action_flow(budget)
+        for name, build, description in (('legacy', legacy, gateway.LEGACY_DESCRIPTION),
+                                          ('budget', budget, gateway.DESCRIPTION), ('rule', rule, gateway.RULE_DESCRIPTION)):
+            with self.subTest(build=name):
+                pristine = copy.deepcopy(build)
+                off = gateway.without_message_store(build)
+                self.assertEqual(build, pristine)
+                self.assertEqual(off['description'], description + gateway.NO_STORE_NOTE)
+                restored = copy.deepcopy(off)
+                for node in restored['data']['nodes']:
+                    template = node['data']['node']['template']
+                    if node['data']['type'] in gateway.STORE_NODES:
+                        self.assertIs(template['should_store_message']['value'], False)
+                        template['should_store_message']['value'] = True
+                    else:
+                        self.assertNotIn('should_store_message', template)
+                restored['description'] = description
+                # Nothing but the two storage switches and the description note differs.
+                self.assertEqual(restored, build)
+                self.assertNotEqual(gateway.flow_sha256(off['data']), gateway.flow_sha256(build['data']))
+                with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_TEMPLATE_MISMATCH$'):
+                    gateway.without_message_store(off)
+        missing = copy.deepcopy(budget)
+        missing['data']['nodes'] = [node for node in missing['data']['nodes'] if node['data']['type'] != 'ChatInput']
+        altered = copy.deepcopy(budget)
+        next(node for node in altered['data']['nodes'] if node['data']['type'] == 'ChatOutput')['data']['node'][
+            'template']['should_store_message']['value'] = 'true'
+        for flow in (missing, altered):
+            with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_TEMPLATE_MISMATCH$'):
+                gateway.without_message_store(flow)
+        # The overtourism flow derives from the unchanged store-on builders.
+        self.assertTrue(all(node['data']['node']['template']['should_store_message']['value'] is True
+                            for node in rule['data']['nodes'] if node['data']['type'] in gateway.STORE_NODES))
+
+    def stored_as(self, client, flow_id, flow):
+        """Put an exact historical graph in the fake Langflow, as on AWS before this change."""
+        stored = client.state['flows'][flow_id]
+        stored.update(data=copy.deepcopy(flow['data']), description=flow['description'],
+                      version_token=str(uuid.uuid4()))
+
+    def test_store_on_aws_states_switch_to_store_off_and_back_keeping_build_id_and_key(self):
+        client = Langflow()
+        client.state['variables'].append({'name': 'JEJU_OPENAI_API_KEY', 'type': 'Credential', 'has_value': True})
+        flow_id = run(client)['flowId']
+        keys = copy.deepcopy(client.state['keys'])
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        budget = gateway.budget_flow(legacy)
+        rule = gateway.rule_action_flow(budget)
+        for name, historical in (('vertex-8-call', budget), ('rule-action', rule)):
+            with self.subTest(build=name):
+                self.stored_as(client, flow_id, historical)
+                before = copy.deepcopy(client.state['flows'][flow_id])
+                on = migrate(Langflow(client.state), 'check-message-store-on')
+                self.assertEqual((on['build'], on['messageStore'], on['flowSha256']),
+                                 (name, True, gateway.flow_sha256(historical['data'])))
+                with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+                    migrate(Langflow(client.state), 'check-message-store-off')
+                switcher = Langflow(client.state)
+                off = migrate(switcher, 'message-store-off')
+                stored = client.state['flows'][flow_id]
+                expected = gateway.without_message_store(historical)
+                self.assertEqual(off, {'status': 'passed', 'flowStatus': 'updated', 'flowId': flow_id,
+                                       'flowSha256': gateway.flow_sha256(expected['data']), 'modelCallLimit': 8,
+                                       'build': name, 'messageStore': False,
+                                       'modelExecuted': False, 'productionReady': False})
+                self.assertEqual((stored['data'], stored['description']), (expected['data'], expected['description']))
+                for key in set(before) - {'data', 'description', 'version_token'}:
+                    self.assertEqual(stored[key], before[key])
+                patches = [kwargs for method, _, kwargs in switcher.calls if method == 'PATCH']
+                self.assertEqual([patch['headers'] for patch in patches], [{'If-Match': before['version_token']}])
+                again = Langflow(client.state)
+                self.assertEqual(migrate(again, 'message-store-off')['flowStatus'], 'already-current')
+                self.assertEqual(mutations(again), [])
+                checked = migrate(Langflow(client.state), 'check-message-store-off')
+                self.assertEqual((checked['build'], checked['messageStore'], checked['flowSha256']),
+                                 (name, False, off['flowSha256']))
+                # Restoring storage returns the exact historical graph and its pinned digest.
+                back = migrate(Langflow(client.state), 'message-store-on')
+                self.assertEqual((back['flowStatus'], back['messageStore'], back['flowSha256']),
+                                 ('updated', True, gateway.flow_sha256(historical['data'])))
+                self.assertEqual({key: value for key, value in client.state['flows'][flow_id].items() if key != 'version_token'},
+                                 {key: value for key, value in before.items() if key != 'version_token'})
+                self.assertEqual(migrate(Langflow(client.state), 'message-store-on')['flowStatus'], 'already-current')
+        self.assertEqual(client.state['keys'], keys)
+        self.assertEqual(len(client.state['flows']), 1)
+
+    def test_build_switches_and_checks_keep_the_stored_message_storage_variant(self):
+        client = Langflow()
+        client.state['variables'].append({'name': 'JEJU_OPENAI_API_KEY', 'type': 'Credential', 'has_value': True})
+        flow_id = run(client)['flowId']
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        budget = gateway.budget_flow(legacy)
+        rule = gateway.rule_action_flow(budget)
+        for store in (True, False):
+            variant = (lambda flow: flow) if store else gateway.without_message_store
+            with self.subTest(messageStore=store):
+                self.stored_as(client, flow_id, variant(budget))
+                for mode, build, flow in (('rule-action', 'rule-action', rule), ('check-rule-action', 'rule-action', rule),
+                                          ('rule-action-rollback', 'vertex-8-call', budget),
+                                          ('rollback', 'legacy-4-call', legacy), ('update', 'vertex-8-call', budget)):
+                    result = migrate(Langflow(client.state), mode)
+                    stored = client.state['flows'][flow_id]
+                    self.assertEqual((result['build'], result['messageStore'], result['flowSha256']),
+                                     (build, store, gateway.flow_sha256(variant(flow)['data'])), mode)
+                    self.assertEqual((stored['data'], stored['description']),
+                                     (variant(flow)['data'], variant(flow)['description']), mode)
+                checked = run(Langflow(client.state), provision=False)
+                self.assertEqual((checked['build'], checked['messageStore']), ('vertex-8-call', store))
+
+    def test_message_store_switch_refuses_legacy_edited_or_missing_flows_and_needs_no_openai_key(self):
+        client = Langflow()
+        flow_id = run(client)['flowId']
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        budget = gateway.budget_flow(legacy)
+        rule = gateway.rule_action_flow(budget)
+        # The storage switch never needs the OpenAI credential, even for a stored rule-action graph.
+        self.assertFalse(any(item['name'] == 'JEJU_OPENAI_API_KEY' for item in client.state['variables']))
+        self.stored_as(client, flow_id, rule)
+        self.assertEqual(migrate(Langflow(client.state), 'message-store-off')['build'], 'rule-action')
+        edited = copy.deepcopy(budget)
+        edited['data']['edges'].pop()
+        for flow in (legacy, gateway.without_message_store(legacy), edited):
+            self.stored_as(client, flow_id, flow)
+            before = copy.deepcopy(client.state)
+            for mode in ('message-store-off', 'message-store-on', 'check-message-store-off', 'check-message-store-on'):
+                refused = Langflow(client.state)
+                with self.subTest(mode=mode), \
+                     self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+                    migrate(refused, mode)
+                self.assertEqual(mutations(refused), [])
+                self.assertEqual(before, client.state)
+        for mode in ('message-store-off', 'check-message-store-off'):
+            with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_FLOW_NOT_PROVISIONED$'):
+                migrate(Langflow(), mode)
+
+    def test_reprovision_keeps_a_stored_store_on_build_and_pins_its_own_digest(self):
+        client = Langflow()
+        client.state['flows']['5b7b49f4-4ac6-4a55-9a9d-3b7c09bb2c11'] = {
+            'id': '5b7b49f4-4ac6-4a55-9a9d-3b7c09bb2c11', 'version_token': str(uuid.uuid4())}
+        budget = gateway.budget_flow(gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP))
+        stored = client.state['flows']['5b7b49f4-4ac6-4a55-9a9d-3b7c09bb2c11']
+        stored.update(copy.deepcopy({key: budget[key] for key in gateway.FLOW_KEYS if key in budget}))
+        result = run(client)
+        self.assertEqual(result['flowId'], '5b7b49f4-4ac6-4a55-9a9d-3b7c09bb2c11')
+        self.assertEqual(result['flowSha256'], gateway.flow_sha256(budget['data']))
+        self.assertEqual([method for method, route, _ in client.calls
+                          if method == 'PATCH' or (method == 'POST' and route == '/api/v1/flows/')], [])
 
     def test_migration_refuses_unknown_graphs_missing_flow_and_concurrent_edits(self):
         client = Langflow()
@@ -586,7 +743,11 @@ class GatewayBootstrapTests(unittest.TestCase):
                                (['--update'], (False, 'update')), (['--rollback'], (False, 'rollback')),
                                (['--rule-action'], (False, 'rule-action')),
                                (['--rule-action-rollback'], (False, 'rule-action-rollback')),
-                               (['--check-rule-action'], (False, 'check-rule-action'))):
+                               (['--check-rule-action'], (False, 'check-rule-action')),
+                               (['--message-store-off'], (False, 'message-store-off')),
+                               (['--message-store-on'], (False, 'message-store-on')),
+                               (['--check-message-store-off'], (False, 'check-message-store-off')),
+                               (['--check-message-store-on'], (False, 'check-message-store-on'))):
             seen = {}
             def configure(*_args, provision, migrate):
                 seen.update(provision=provision, migrate=migrate)

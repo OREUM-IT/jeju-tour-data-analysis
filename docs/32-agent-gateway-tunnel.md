@@ -439,6 +439,8 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 
 ### 적용 전후 확인 SQL
 
+**이전 기록용이다.** 이 SQL은 결과를 Langflow `message` 표의 최종 검증 메시지로 나눈다. [메시지 저장을 끈](#langflow-메시지-저장-끄기와-오래된-원문-정리) 뒤의 실행과, 원문을 정리한 실행은 [2]·[4]에 나오지 않고 [3]에는 오류 실행만 남는다. `limit_notice`도 정리한 실행에서는 셀 수 없다. 그 뒤의 수락·차단·Agent 오류는 아래 [지연·토큰 집계 SQL](#지연토큰-집계-sql)의 `accepted`·`blocked`·`agent_error`로 본다. 차단 코드별 내역(`VALIDATION_FAILED` 등)은 메시지를 저장하던 실행에만 있다.
+
 Langflow DB를 읽기만 하는 명령이다. 모델이나 서비스를 호출하지 않고 응답 원문·비밀값을 출력하지 않는다. 시각과 기간 경계는 DB 기준인 UTC(+00)다. KST는 9시간을 더한다.
 
 - 기간은 [1]에 나오는 **가장 최근 흐름 변경**(적용·되돌리기·재적용 모두 포함) 전후로 나뉜다.
@@ -629,16 +631,20 @@ Langflow DB를 읽기만 한다. 세션을 읽기 전용으로 두고 문장마�
 cd ~/oreumit-agent && sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off -v ON_ERROR_STOP=1' <<'SQL'
 -- Read-only aggregates of Gateway runs (session ids starting with gw-) from the Langflow tracing tables.
 -- Output is counts, latency percentiles and token sums only: no session ids, texts or member data.
+-- Outcomes come from the component spans (fixed prefixes of the final validation output or the
+-- redaction marker), so they also cover runs that store no message and runs whose text was redacted.
 -- docs/32-agent-gateway-tunnel.md holds the same text inside the AWS command; a deploy test keeps them equal.
 SET default_transaction_read_only = on;
 SET statement_timeout = '15s';
-\echo '[0] database time zone (kst_day assumes trace times are stored in UTC)'
+SET TIME ZONE 'UTC';
+\echo '[0] session time zone (UTC: Langflow 1.13.3 stores trace times with a time zone; kst_day adds 9 hours)'
 SHOW TimeZone;
-\echo '[1] Gateway traces covered (times in UTC); sessions_without_trace are runs missing from every table below'
+\echo '[1] Gateway traces covered (times in UTC); redacted = raw text removed; sessions_without_trace counts only runs that left a message'
 SELECT count(*) AS traces, count(DISTINCT t.session_id) AS sessions,
   min(t.start_time) AS first_start_utc, max(t.start_time) AS last_start_utc,
   count(*) FILTER (WHERE t.end_time IS NULL) AS unfinished,
   count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM span s WHERE s.trace_id = t.id)) AS without_spans,
+  count(*) FILTER (WHERE EXISTS (SELECT 1 FROM span s WHERE s.trace_id = t.id AND s.outputs::text LIKE '{"redacted":true%')) AS redacted,
   (SELECT count(DISTINCT m.session_id) FROM message m WHERE m.session_id LIKE 'gw-%'
     AND NOT EXISTS (SELECT 1 FROM trace t2 WHERE t2.session_id = m.session_id)) AS sessions_without_trace
 FROM trace t WHERE t.session_id LIKE 'gw-%';
@@ -652,18 +658,20 @@ c AS (
     ORDER BY coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')')) AS model
   FROM s GROUP BY 1),
 f AS (
-  SELECT m.session_id,
-    bool_or(m.sender = 'Machine' AND m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2') AS has_final,
-    bool_or(m.sender = 'Machine' AND m.properties::jsonb -> 'source' ->> 'id' = 'JejuFinalValidation-v2'
-      AND coalesce(m."text" LIKE '{"status":"blocked"%', false)) AS blocked,
-    bool_or(m.category = 'error') AS agent_error
-  FROM message m WHERE m.session_id LIKE 'gw-%' GROUP BY 1),
+  SELECT sp.trace_id,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text LIKE '{"redacted":true,"finalStatus":"%'
+      OR sp.outputs -> 'message' ->> 'text' IS NOT NULL, false) END) AS has_final,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}'
+      OR sp.outputs -> 'message' ->> 'text' LIKE '{"status":"blocked"%', false) END) AS blocked,
+    bool_or(lower(sp.status::text) = 'error') AS agent_error
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL GROUP BY 1),
 run AS (
   SELECT (t.start_time + interval '9 hours')::date AS kst_day, coalesce(c.model, '-') AS model,
     lower(t.status::text) AS trace_status, t.total_latency_ms AS ms,
     CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'
       WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome
-  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.session_id = t.session_id
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.trace_id = t.id
   WHERE t.session_id LIKE 'gw-%')
 SELECT kst_day, model, count(*) AS runs,
   count(*) FILTER (WHERE outcome = 'accepted') AS accepted,
@@ -730,8 +738,8 @@ SQL
 
 | 표 | 내용 |
 |---|---|
-| [0] | 이 조회 세션의 시간대. 참고 값이다 |
-| [1] | 집계에 들어간 Gateway 실행 수, 첫 실행과 마지막 실행 시각(UTC), **집계에서 빠진 실행 수** |
+| [0] | 이 조회 세션의 시간대. SQL이 `UTC`로 고정한다 |
+| [1] | 집계에 들어간 Gateway 실행 수, 첫 실행과 마지막 실행 시각(UTC), 원문을 정리한 실행 수, **집계에서 빠진 실행 수** |
 | [2] | KST 날짜·모델별 실행 수, 결과, Langflow 실행 지연 |
 | [3] | KST 날짜·모델별 모델 호출 수, 도구 호출 수, 토큰 |
 | [4] | 호출 1회의 지연. 모델 호출은 모델별, 도구 호출은 합쳐서 |
@@ -739,22 +747,26 @@ SQL
 읽는 법이다.
 
 - [1]의 `traces`·`sessions`: 추적이 기록된 Gateway 실행 수와 세션 수다. [2]~[4]는 **추적이 기록된 실행만** 센다.
+- [1]의 `redacted`: [정리 도구](#오래된-원문-정리선택)로 원문을 지운 실행 수다. 이 실행의 결과는 정리 때 남긴 고정 표지(`finalStatus`)로 센다. 시간·상태·모델 이름·토큰은 그대로라 [2]~[4]에 똑같이 들어 있다.
 - [1]의 `sessions_without_trace`: 메시지는 남았는데 추적이 없는 `gw-` 세션 수다. 이 실행은 [2]~[4]의 실행 수와 지연에 들어 있지 않다.
+  - [메시지 저장을 끈](#langflow-메시지-저장-끄기와-오래된-원문-정리) 뒤에는 구성 요소 오류로 끝난 실행만 메시지를 남긴다. 그래서 그 뒤의 추적 없는 실행은 오류 실행만 이 수에 나온다. 정리 도구가 지운 오래된 세션도 더는 세지 않는다.
   - Langflow 1.13.3은 추적과 호출 기록을 실행이 끝날 때 한 번에 쓴다(코드 확인). 중간에 취소된 실행, Langflow가 재시작된 실행, 기록 쓰기에 실패한 실행은 추적이 없다.
   - 시간 초과로 끊긴 실행이라면 가장 느린 실행이다. 이 값이 0이 아니면 `p95_ms`·`max_ms`는 실제보다 작게 나온 값으로 읽는다. 결과 건수도 그만큼 빠져 있다.
 - [1]의 `unfinished`: 종료 시각이 없는 추적 수다. Langflow 1.13.3은 추적을 종료 시각과 함께 쓰므로 0이 정상이다. 끊긴 실행은 이 열에 나오지 않는다. 0이 아니면 알려 준다.
 - [1]의 `without_spans`: 호출 기록이 하나도 없는 추적 수다. 이런 실행은 [2]·[3]에서 `model`이 `-`다.
-- `kst_day`: 실행 시작 시각에 9시간을 더한 날짜다. Langflow는 이 시각을 시간대 없이 저장한다.
-  - Langflow 1.13.3은 PostgreSQL 연결마다 `timezone=utc`를 지정한다. 그래서 저장값은 UTC로 본다. 코드로 확인했고 PostgreSQL에 연결한 실행으로는 확인하지 않았다.
-  - [0]은 이 `psql` 세션의 시간대다. 보통 `UTC`나 `Etc/UTC`가 나온다. 이 값이 `kst_day`가 맞는지를 정하지는 않는다.
+- `kst_day`: 실행 시작 시각(UTC)에 9시간을 더한 날짜다.
+  - Langflow 1.13.3은 모든 마이그레이션(`f2a7c9e4b681` 포함)을 거친 PostgreSQL에서 이 시각을 **시간대가 있는 값**(`timestamptz`)으로 저장한다. 2026-11-24 실제 Langflow 1.13.3을 PostgreSQL 16에 연결해 확인했다. 이전 판의 "시간대 없이 저장한다"는 설명은 마이그레이션 하나만 옮긴 임시 표에 근거한 것이라 틀렸다.
+  - 이런 값을 날짜로 바꾸면 조회 세션의 시간대를 따른다. 그래서 SQL 첫머리에서 세션 시간대를 `UTC`로 고정한다. [0]에 `UTC`가 나와야 한다.
   - 직접 확인하려면 [1]의 `last_start_utc`가 마지막 요청 시각(UTC, KST에서 9시간을 뺀 값)과 맞는지 본다.
 - `model`: 모델 호출 기록에 남은 모델 이름이다. 운영 흐름이 지금 `gemini-3.8-flash`인지 `gpt-5.4-mini`인지 이 열로 확인한다. 저장소 기록만으로는 알 수 없다(위 [규칙 동작 흐름](#규칙-동작-흐름과-gpt-54-mini-전환)은 AWS 적용 전 기록이다).
   - `(ChatOpenAI)`처럼 괄호 안 이름은 모델 이름이 기록되지 않아 호출 종류 이름으로 대신한 것이다.
   - `-`는 모델 호출 기록이 없는 실행이다. `a+b`는 한 실행에 두 이름이 있었다는 뜻이다.
-- `accepted`·`blocked`·`agent_error`·`no_final`: Langflow 흐름 안의 최종 검증 메시지로 나눈다. 합은 `runs`와 같다.
+- `accepted`·`blocked`·`agent_error`·`no_final`: 실행 추적 안의 최종 검증 구성 요소(`Jeju Final Validation`) 기록으로 나눈다. 합은 `runs`와 같다.
+  - 최종 검증 출력이 `{"status":"blocked"`로 시작하면 `blocked`, 다른 출력이면 `accepted`다. 출력 원문은 이 고정 앞부분 비교에만 쓰고 결과로 내보내지 않는다. 원문을 정리한 실행은 정리 때 남긴 `finalStatus` 표지로 나눈다.
+  - 메시지 표를 읽지 않으므로 메시지를 저장하지 않는 실행도 센다. 이전 판은 메시지 표로 나눴다. 그래서 저장을 끈 실행이 모두 `no_final`로 나왔다(2026-11-24 임시 DB에서 6건 확인).
   - `accepted`는 흐름 안 검증을 통과한 실행이다. Gateway는 그 뒤에 MCP로 한 번 더 검증하므로 웹의 최종 수락 수와 다를 수 있다.
-  - `blocked`의 코드별 내역은 위 [확인 SQL](#적용-전후-확인-sql)의 [2]에서 본다.
-  - `agent_error`는 최종 검증 메시지 없이 Agent 오류만 남은 실행이다. `no_final`은 둘 다 없는 실행이다.
+  - `blocked`의 코드별 내역은 메시지를 저장하던 실행에만 있다. 위 [확인 SQL](#적용-전후-확인-sql)의 [2]에서 본다(이전 기록용).
+  - `agent_error`는 최종 검증 출력이 없고 구성 요소(Agent 등) 하나가 오류로 끝난 실행이다. `no_final`은 둘 다 없는 실행이다.
 - `error_traces`: Langflow가 오류로 표시한 실행 수다.
 - `p50_ms`·`p95_ms`·`max_ms`: Langflow가 기록한 흐름 1회의 실행 시간이다. 단위는 밀리초다. 추적이 기록된 실행만 들어 있다. 실행 수가 적으면 `p95_ms`는 약한 값이다. 20건 이상 쌓인 날짜를 본다.
 - `model_calls`·`avg_model_calls`·`max_model_calls`: 모델 호출 수의 합, 실행당 평균, 최대다. 8회 흐름의 상한은 8이다.
@@ -770,33 +782,41 @@ SQL
 - `gw-` 실행에는 실제 웹 요청과 합성 검사 요청(2건 검사, 아래 부하 검사, 단건 검사)이 섞여 있다. 이 SQL은 둘을 구분하지 못한다.
 - Gateway는 Langflow 호출을 100초에 끊는다. 끊긴 실행이 Langflow 기록에 어떻게 남는지는 **실행으로 확인하지 않았다.** 코드로 읽으면 다음과 같다.
   - Langflow 1.13.3에는 호출자가 끊기면 실행을 취소하는 미들웨어가 정의만 돼 있고 등록돼 있지 않다. 그러면 실행은 끝까지 가고, `max_ms`가 100000을 넘는 추적으로 남는다. 사용자는 그 결과를 받지 못했다.
-  - 실행이 취소되거나 Langflow가 재시작되면 추적이 없다. 이 수는 [1]의 `sessions_without_trace`로 나온다.
+  - 실행이 취소되거나 Langflow가 재시작되면 추적이 없다. 이 수는 그 실행이 메시지를 남겼을 때만 [1]의 `sessions_without_trace`로 나온다.
   - 메시지도 남기지 못한 실행은 어느 수에도 없다.
 
 붙여 줄 것은 [0]부터 [4]까지의 표 전체다. 오류가 나면 `ERROR:`로 시작하는 줄만 붙인다. 환경 파일이나 다른 조회 결과는 필요 없다.
 
 ### 집계 SQL의 확인 범위
 
-2026-11-23 이 작업 환경에서 확인한 것이다. 모델 공급자와 AWS에는 요청하지 않았다.
+2026-11-24 결과 분류를 구성 요소 기록으로 옮기고 세션 시간대를 고정한 판을 다시 확인했다. 모델 공급자와 AWS에는 요청하지 않았다.
+
+- 이번에는 실제 Langflow 1.13.3(작업 환경 venv)을 PostgreSQL 16.15에 직접 연결했다. 드라이버(psycopg 3.3.9·psycopg2-binary 2.9.13)는 임시 폴더에만 설치했다. Langflow가 모든 마이그레이션을 실행해 만든 표에서 추적 시각이 `timestamptz`임을 확인했다.
+- 행은 [메시지 저장 끄기](#langflow-메시지-저장-끄기와-오래된-원문-정리)의 임시 실행으로 만들었다. 이 저장소의 Gateway 상류 코드가 규칙 동작 빌드를 저장 켬·끔 두 변형으로 실행했다. 모델은 가짜 OpenAI 서버였다. 8회 Vertex 빌드는 가짜 자격증명 때문에 Agent 오류로 끝났다.
+- 새 SQL의 결과 칸은 Gateway가 받은 결과와 같았다. 실행 15건에서 수락 8·차단 3·Agent 오류 4였다. 이전 SQL은 저장을 끈 수락 4건·차단 2건을 `no_final`로 셌다. 메시지를 저장한 세션 9개에서는 이전 SQL과 새 SQL의 결과가 세션마다 같았다.
+- 원문 정리 전후로 [2]~[4]의 출력이 글자 하나까지 같았다. [1]에서는 `redacted`만 0에서 8로 바뀌었다. 정리 대상은 시각을 40일 앞당긴 사본의 실행 8건이다. 이 시각은 편집한 값이다.
+- CI(`agent-gateway-docker.yml`)가 이제 이 SQL을 일회용 Langflow DB(PostgreSQL 17 이미지)에 실행한다. 오류 없이 끝나는지만 보고 숫자는 대조하지 않는다. 이 작업 환경에는 Docker 데몬이 없어 그 단계를 돌려 보지 못했다.
+
+아래는 2026-11-23 이전 판의 확인 기록이다.
 
 - PostgreSQL 16.15 임시 인스턴스에 Langflow 1.13.3의 추적 테이블 마이그레이션(`3478f0bd6ccb`)을 PostgreSQL용 DDL로 만들어 적용했다. `flow`·`message`는 같은 버전의 모델 정의로 만들었다.
 - 실제 Langflow 1.13.3을 로컬 Ollama 평가 흐름과 가짜 모델로 31회 실행해 추적 31행·호출 563행·메시지 62행을 만들었다. 이 행을 값 그대로 옮겼다. 수락 23·차단 4·Agent 오류 4, 모델 호출 70(실패 4, 토큰 기록 없음 14), 도구 호출 39다.
 - 접두사만 로컬 값으로 바꿔 실행한 결과가 SQL을 쓰지 않은 독립 재계산과 모든 칸에서 같았다.
 - 세션 ID를 `gw-` 형식으로 바꾸고 날짜 경계, 두 모델 이름, 호출 없는 실행, 메시지 없는 실행, 깨진 토큰 값을 넣은 사본에서 **위 SQL을 고치지 않고** 실행했다. 7개 그룹과 호출 4행이 독립 재계산과 같았다. 이 사본의 값은 편집한 것이며 측정값이 아니다.
-- 예전 Langflow가 만들던 대문자 enum 라벨로 바꾼 사본에서도 결과가 같았다. 세션 시간대를 `Asia/Seoul`로 바꿔도 [1]~[4]가 같았다.
+- 예전 Langflow가 만들던 대문자 enum 라벨로 바꾼 사본에서도 결과가 같았다. 세션 시간대를 `Asia/Seoul`로 바꿔도 [1]~[4]가 같았다. 이 사본의 시각 열은 시간대가 없는 형식이었다. 실제 Langflow 1.13.3 표(`timestamptz`)에서는 세션 시간대에 따라 `kst_day`가 달라져, 2026-11-24 판에서 세션 시간대를 `UTC`로 고정했다.
 - 쓰기 문장은 `read-only transaction` 오류로 거부됐고, 16초 걸리는 문장은 시간 제한으로 끊겼다.
 - `sessions_without_trace`를 넣은 뒤 다시 확인했다. 편집 사본에 추적 없는 `gw-` 세션 2개(하나는 사용자 메시지만 남김)와 접두사가 다른 추적 없는 세션 1개를 넣었다. 고치지 않은 파일과 위 명령의 SQL이 같은 출력을 냈다. `sessions_without_trace`는 2였고, [1]~[4]의 199칸이 독립 재계산과 같았다. 넣기 전 사본에서는 0이었다.
 
 이 숫자 대조는 임시 DB에서 한 번 한 확인이다. 계속 지켜지는 보장이 아니다.
 
-- 저장소 테스트와 CI는 이 SQL을 DB에 실행하지 않는다.
+- 저장소 테스트는 이 SQL을 DB에 실행하지 않는다. CI는 2026-11-24부터 일회용 DB에 실행만 한다(위).
 - `deploy/tests/test_agent_run_metrics_sql.py`는 SQL 글자만 읽는 정적 검사다. 문서의 명령과 파일이 같은지, 읽기 전용 설정, 읽는 테이블과 열, 세션 ID와 메시지 원문의 쓰임, 반환 열의 모양, 통계 정의의 표기를 고정한다.
 - 정적 검사는 숫자가 맞는지를 확인하지 못한다. SQL을 고치면 숫자 대조를 다시 한다.
 
 확인하지 않은 것이다.
 
 - **AWS DB에서 실행하지 않았다.** 첫 실행이 실제 확인이다.
-- Langflow를 PostgreSQL에 직접 연결해 실행하지 않았다. 작업 환경의 Langflow에 PostgreSQL 드라이버가 없었고 외부에서 내려받지 않았다. 행은 SQLite에서 옮겼다. 열 이름·형식은 마이그레이션에서, 값은 실제 실행에서 왔다.
+- (2026-11-23 판) Langflow를 PostgreSQL에 직접 연결해 실행하지 않았다. 작업 환경의 Langflow에 PostgreSQL 드라이버가 없었고 외부에서 내려받지 않았다. 행은 SQLite에서 옮겼다. 열 이름·형식은 마이그레이션에서, 값은 실제 실행에서 왔다. 2026-11-24 판은 직접 연결해 확인했다(위).
 - AWS는 PostgreSQL 17이다. 로컬은 16이다.
 - 운영 세션 ID 접두사 `gw-`와 Compose 서비스 이름은 위 [확인 SQL](#적용-전후-확인-sql)과 같은 값을 썼다. 그 명령은 사용자가 AWS에서 실행한 적이 있다. 이번에 다시 확인하지는 않았다.
 - 운영 모델의 기록 이름은 로컬에서 만들지 못했다. 가짜 모델(Ollama 클라이언트)은 모델 이름을 남기지 않아 `(ChatOllama)`로 나왔다. 이전 로컬 Gemini 평가([실행 감사](../reports/agent-v2-runtime-audit-20261119.json))에서는 255회 모두 `gemini-3.8-flash`로 기록됐다. OpenAI 클라이언트는 호출 인자에 `gpt-5.4-mini`를 넣는 것까지만 네트워크 없이 확인했다. 실제 OpenAI·Vertex 호출의 토큰 기록 여부는 AWS 출력으로 확인한다.
@@ -869,6 +889,203 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I
 - 가짜 Gateway를 쓰는 오프라인 테스트 39개가 통과했다. 이 중 6개는 `main()`을 임시 폴더에서 실제로 돌린다. 첫 제출 직전에만 시각이 기록되는지, 한 시간 안의 두 번째 실행이 요청 없이 거부되는지, 메모리 표본기가 연결돼 있는지를 본다.
 - 실행 루프를 이 저장소의 실제 Gateway 코드(가짜 Langflow·MCP, `127.0.0.1`)에 붙여 10건(6+4)과 20건(10+10)을 돌렸다. 실행 2·대기 8을 넘지 않았다. `requestCounts`는 따로 기록한 HTTP 메서드 수와 같았다(GET 30·POST 10, GET 50·POST 20).
 - Cloudflare Access, 실제 Langflow·모델, Docker 메모리 표본은 이 확인에 없다. **실제 AWS 실행은 하지 않았다.**
+
+## Langflow 메시지 저장 끄기와 오래된 원문 정리
+
+2026-11-24 구현·작업 환경 검증 기록이다. **AWS·Supabase·모델 공급자에는 아무것도 실행하지 않았다.** 적용과 정리는 사용자가 아래 명령으로 한다.
+
+### 왜 바꾸는가
+
+Langflow 1.13.3의 Chat Input·Chat Output은 기본값이 `should_store_message=true`다. 지금까지의 Gateway 흐름 빌드(4회·8회 Vertex·규칙 동작)는 이 기본값을 그대로 썼다. 그래서 추천 실행마다 요청 JSON과 최종 출력이 AWS Langflow DB의 `message` 표에 보존 기한 없이 쌓였다. 요청 JSON의 `query`에는 회원의 설문 답변 원문(자유 응답 포함)이 들어 있다. 2026-11-21 사용자의 읽기 전용 집계에서도 `gw-` 세션의 메시지가 세어졌다.
+
+앱은 회원에게 추천 기록을 "최신 20개, 직접 삭제 가능, 탈퇴 시 삭제"로 안내한다(앱 저장소 `docs/agent-recommendation-history.md`, Supabase 기록). AWS Langflow DB의 사본은 이 안내 밖에 있다.
+
+### 어디에 무엇이 남는가
+
+작업 환경에서 실제 Langflow 1.13.3을 PostgreSQL 16에 연결해 실행하고, 설문 문장에 넣은 표지어가 어느 표에 남는지 셌다(아래 [확인 범위](#확인한-것과-하지-않은-것)). 규칙 동작 빌드에서 수락으로 끝난 실행 1건 기준이다.
+
+| 표 | 들어 있는 것 | 저장 켬(이전 빌드) | 저장 끔(새 빌드) | 보존 |
+|---|---|---|---|---|
+| `message` | 요청 JSON(설문 원문), 최종 출력 | 2행, 그중 1행에 표지어 | **0행** | 기한 없음. 정리 도구가 N일 지난 `gw-` 행을 지운다 |
+| `message`(오류) | 구성 요소가 오류로 끝났을 때 lfx가 남기는 오류 메시지 | 1행 | 1행. 표지어 없음(고정 코드 `AGENT_EXECUTION_FAILED`와 추적 정보) | 저장 설정과 관계없이 남는다. 정리 대상 |
+| `trace`·`span` | 실행·구성 요소·모델·도구별 시간, 상태, 모델 이름, 토큰, **입력·출력 원문** | 추적 1·span 17, 입력 14·출력 4에 표지어 | 같음 | **기한 없음.** 지연·토큰 SQL이 쓰므로 그대로 켜 둔다. 정리 도구를 실행할 때만 N일 지난 span 원문이 지워진다(시간·모델·토큰과 `trace` 행은 남는다) |
+| `transaction` | 구성 요소 입력·출력 원문 | 6행, 3곳에 표지어 | 같음 | **흐름마다** 최신 3000행. 이 Gateway 흐름은 실행당 약 6행이라 최근 약 500회 실행분이다. Langflow가 1분마다 건수로만 지운다(코드 기본값, 실행으로는 확인하지 않음). 정리 대상 |
+| `vertex_build` | 구성 요소 매개변수·출력 | 6행, 6곳에 표지어 | 같음 | 구성 요소마다 최신 50회(이 흐름은 최근 약 50회 실행분), 전체 3000행. 1분마다 건수로만 지운다(코드 기본값). 추적이 남은 실행의 행만 정리 대상 |
+| `job` | 실행 상태·시각 | 표지어 없음 | 같음 | 정리하지 않는다 |
+| Gateway SQLite | nonce·주체 해시·요청 ID·시각 | 원문 없음 | 같음 | 이 변경과 무관 |
+
+### 변경 범위
+
+- **메시지 저장 끔 변형**: 검토된 Gateway 빌드마다 Chat Input·Chat Output의 `should_store_message`만 `false`로 바꾼 변형을 둔다(`without_message_store`). 흐름 설명 끝에 "입력·최종 출력 메시지를 Langflow 대화 기록(message 표)에 저장하지 않는다." 한 문장이 붙는다. 노드 ID·간선·Agent 코드·모델·도구·최종 검증은 그대로다.
+  - Agent와 사용자 구성 요소는 Chat Output과 바로 연결돼 있지 않아 lfx가 메시지 저장을 건너뛴다(`Component._should_skip_message`). 예외는 구성 요소가 오류로 끝날 때의 오류 메시지다. 이것은 흐름 설정으로 끌 수 없어 정리 도구로 지운다.
+  - Gateway가 받는 실행 응답은 같다. Chat Output이 저장하지 않아도 최종 메시지의 `sender`·`properties.source`를 그대로 돌려주므로 Gateway의 최종 출력 선택과 MCP 재검증이 그대로 통과한다(작업 환경 실행으로 확인).
+- **새 helper `deploy/apply-agent-message-store-off.sh`**: AWS에 저장된 빌드가 8회 Vertex인지 규칙 동작인지 몰라도 된다. 저장된 흐름이 두 빌드 중 하나(저장 켬)와 정확히 같으면 같은 빌드의 저장 끔 변형으로 바꾼다. 이미 저장 끔이면 바꾸지 않는다(`already-current`). 4회 빌드나 편집된 흐름은 PATCH 전에 `GATEWAY_EXISTING_FLOW_DIFFERS`로 거부한다.
+  - 기존 helper와 같은 방식이다. 유휴 확인, 미완료 표시 파일과 `FLOW_CHANGED` 재개, 같은 흐름 ID·API 키 유지, `If-Match` PATCH, `gateway.env`의 고정 SHA 한 값만 교체, `agent-gateway`만 재생성, 진행 줄, 마지막 JSON 한 줄.
+  - Langflow·MCP·DB·cloudflared는 재시작하지 않는다. 모델을 호출하지 않는다.
+- **기존 helper는 저장 설정을 유지한다**: `apply-agent-call-budget.sh`와 `apply-agent-rule-action.sh`는 빌드만 바꾸고 저장 켬·끔은 그대로 둔다. 그 `--verify-only`도 두 변형을 모두 받아들인다. 진행 줄에 `build`·`messageStore`가 나온다. 새로 provision하면 저장 끔 변형이 만들어진다.
+- **오버투어리즘 진단 흐름은 바꾸지 않는다.** 이 흐름의 Langflow 입력은 `{"diagnosisId":"ot-…"}`뿐이다. 최종 검증 출력도 상태와 해시뿐이다. 회원 설문 원문이나 회원 식별자가 Langflow에 들어가지 않는다. 지표는 MCP가 앱의 공개 관광 자료 스냅숏으로 계산한다. 이 흐름은 규칙 동작 빌드에서 파생되므로, 빌더를 바꾸면 이미 만들어졌을 수 있는 진단 흐름이 다음 `apply-overtourism-agent.sh` 실행에서 `OVERTOURISM_EXISTING_FLOW_DIFFERS`로 멈춘다. 그래서 저장 끔은 별도 변형으로만 두고 진단 흐름은 그대로 뒀다. 정리 도구도 `gw-` 세션만 다룬다.
+- **native tracing은 켠 채 둔다.** 지연·토큰 SQL이 추적에 의존한다. 대신 오래된 원문을 지우는 정리 도구를 따로 둔다.
+- **지연·토큰 SQL**: 결과(`accepted`·`blocked`·`agent_error`)를 메시지 표 대신 최종 검증 구성 요소의 추적 기록으로 나눈다. 세션 시간대를 `UTC`로 고정한다. 자세한 내용은 위 [읽는 법](#지연토큰-집계-sql)에 있다. 이전 [확인 SQL](#적용-전후-확인-sql)은 이전 기록용으로 표시했다.
+
+### 확인한 것과 하지 않은 것
+
+- 단위 테스트: 저장 끔 변형이 두 저장 값과 설명 한 문장만 바꾸는지, AWS의 이전 상태(저장 켬 8회·규칙 동작)에서 저장 끔으로 갔다가 정확히 이전 그래프로 돌아오는지(흐름 ID·키 유지, PATCH 1회, 재실행은 `already-current`), 빌드 교체가 저장 설정을 유지하는지, 4회·편집된 흐름 거부, OpenAI 키 없이도 저장 설정만 바꿀 수 있는지, 다시 provision할 때 저장된 이전 빌드의 SHA를 고정하는지. helper 순서·재개·거부(6개), prepare-gateway 결과 검증, 정리 도구(9개)도 있다.
+- **작업 환경 실제 실행**(모델 공급자 호출 없음):
+  - 실제 Langflow 1.13.3(venv)을 PostgreSQL 16.15에 연결했다. 이 저장소의 MCP는 CI용 허구 981곳 카탈로그로 띄웠다. 가짜 OpenAI 호환 서버(TLS, `api.openai.com` 이름)도 함께 띄웠다.
+  - 모두 바깥 네트워크가 없는 별도 네트워크 이름공간(loopback만)에서 실행했다. Langflow가 시작할 때 외부 주소로 나가려던 시도(LiteLLM 비용표 내려받기)는 이 격리로 실패했다.
+  - 흐름은 이 저장소의 `gateway-bootstrap.py`가 만든 검토 빌드를 그대로 썼다. 이전 AWS 상태(저장 켬 8회 Vertex)에서 시작해 규칙 동작(저장 켬)으로 바꾸고, 저장 끔으로 바꿨다가 되돌린 뒤 다시 바꿨다. 되돌리면 처음 SHA로 정확히 돌아왔다.
+  - 실행은 이 저장소의 Gateway 상류 코드(`createUpstream`)가 MCP 범위 등록 → Langflow 실행 → 최종 출력 선택 → MCP 재검증 → 범위 해제 순서로 했다. 모델 호출은 실제 `ChatOpenAI` 클라이언트가 가짜 서버로 보냈다.
+  - 결과: 저장 켬 실행은 매번 메시지 2행(오류 실행은 요청 1행 + 오류 1행)을 남겼다. 저장 끔 실행은 수락·차단 모두 **메시지 0행**이었다. Gateway는 그대로 수락(3곳)과 `RECOMMENDATION_BLOCKED`를 받았다. 오류 실행은 표지어 없는 오류 메시지 1행만 남겼다.
+  - 8회 Vertex 빌드는 가짜 자격증명이라 Agent가 클라이언트를 만들다 멈춘다. 그래서 요청 쪽만 확인했다. 저장 끔은 오류 1행만 남겼고, 저장 켬은 요청 1행과 오류 1행을 남겼다. 이 빌드의 Chat Output 경로는 가짜 Vertex 서버가 없어 실행하지 않았다. Chat Output 노드는 두 빌드에서 같다(단위 테스트로 확인).
+- **CI**(`agent-gateway-docker.yml`, 이 작업 환경에서는 Docker 데몬이 없어 실행하지 못함): 공식 Langflow 1.13.3 컨테이너에서 저장 켬→끔을 바꾸며 Gateway 고정 검사를 하는 단계를 더했다. 저장된 흐름을 Gateway 키로 한 번씩 실행해 요청 문장이 든 메시지 수를 센다. 저장 끔이면 0이고 남은 메시지는 오류뿐이어야 하며, 저장 켬이면 요청 메시지가 있어야 한다. CI의 Vertex 자격증명은 가짜라 실행은 오류 메시지로 끝나므로 "메시지 0행"이 아니라 "요청 문장이 든 메시지 0행"을 본다. 같은 검사를 작업 환경 런타임에서 돌려 통과·실패가 맞게 나오는 것을 확인했다. 지연·토큰 SQL과 정리 도구(1일 기준, 바뀔 행 없음)의 실행 단계도 더했다. Langflow 로그인 한도(같은 주소에서 분당 5회)에 닿지 않도록 로그인하는 명령을 61초 대기로 나눈 세 묶음(각 3회)에 넣었다.
+- **하지 않은 것**: AWS 적용, 실제 OpenAI·Vertex 호출, PostgreSQL 17, AWS에 지금 저장된 빌드가 무엇인지(적용하면 진행 줄의 `build`로 나온다).
+
+### AWS에 적용할 명령
+
+PR이 main에 병합된 뒤, 웹에서 새 추천을 제출하지 않는 때 AWS SSH에서 **한 줄씩** 실행한다. 모델을 호출하지 않고 API 키·흐름 ID·토큰을 바꾸지 않는다.
+
+**먼저 이전 기록을 보관한다.** 적용하기 전에 위 [적용 전후 확인 SQL](#적용-전후-확인-sql)을 한 번 실행하고 [1]~[4] 표를 붙여 준다(또는 보관한다). 적용 뒤에는 같은 표를 다시 낼 수 없다.
+
+- 저장 끔 적용도 흐름 변경이다. 그 SQL은 가장 최근 흐름 변경 시각([1])으로 기간을 나누므로, 적용하면 경계가 적용 시각으로 옮겨진다. 8회 적용(2026-11-21)이나 규칙 동작 적용의 전후 비교를 그 SQL로 다시 낼 수 없다.
+- 저장을 끈 뒤의 실행은 메시지를 남기지 않아 그 SQL에 나오지 않는다. 그 뒤로는 [지연·토큰 집계 SQL](#지연토큰-집계-sql)로 수락·차단·Agent 오류 수만 본다. `with_places`, 차단 코드별 내역(`VALIDATION_FAILED` 등), `limit_notice`는 지금 SQL로 볼 수 없다.
+- 나중에 [정리 도구](#오래된-원문-정리선택)를 실행하면 N일 지난 메시지가 지워져 그 이전 실행도 그 SQL에서 사라진다.
+- 그래서 [예산 조정](#적용-전후-확인-sql)이나 [규칙 동작](#규칙-동작-흐름과-gpt-54-mini-전환)의 되돌리기 판단(적용 후 20건 이상, 비율 비교)에 쓸 실행이 아직 적다면, 저장 끔 적용을 미룰지 지금 적용하고 그 뒤 비율만으로 판단할지 사용자가 정한다.
+
+```bash
+cd ~/oreumit-agent && git diff --quiet && git diff --cached --quiet && git fetch origin refs/heads/main:refs/remotes/origin/main && git merge --ff-only origin/main
+```
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-message-store-off.sh
+```
+
+helper는 Compose 설정 확인 → 이전 교체 미완료 여부 확인 → 유휴 확인 → `prepare-gateway.py --message-store-off-flow` → `agent-gateway`만 재생성 → `--check-message-store-off-flow` → 공개 인증 준비 검사 → 큐 준비 검사 → 미완료 표시 해제 순서로 진행한다. 종료 코드 75는 진행 중 요청이 있다는 뜻이다. 아무것도 바꾸지 않았으니 모두 끝난 뒤 다시 실행한다. 중간에 끊기면 같은 명령을 다시 실행해 마무리한다(재개 방식은 [모델 호출 예산 조정](#중단됐을-때)과 같다).
+
+흐름 교체 줄의 `build`가 AWS에 저장돼 있던 빌드다. `vertex-8-call`이면 Gemini 8회, `rule-action`이면 gpt-5.4-mini다. 성공하면 마지막 줄은 다음과 같다.
+
+```json
+{"status":"passed","scope":"agent-message-store-off-applied","messageStore":false,"nativeTracing":"unchanged","services":["agent-gateway"],"modelExecuted":false,"productionReady":false}
+```
+
+재시작 없이 확인만 하는 명령과 저장을 다시 켜는 되돌리기 명령이다. 되돌리기는 같은 빌드의 이전 그래프(저장 켬)로 정확히 돌아간다.
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-message-store-off.sh --verify-only
+```
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-message-store-off.sh --rollback
+```
+
+적용 뒤에도 `apply-agent-call-budget.sh --verify-only`(8회 Vertex일 때)와 `apply-agent-rule-action.sh --verify-only`(규칙 동작일 때)는 그대로 통과한다. 두 helper로 빌드를 바꿔도 저장 끔은 유지된다.
+
+이 helper는 8회 Vertex와 규칙 동작 빌드만 다룬다. 4회 빌드가 저장돼 있으면 적용·확인·되돌리기가 모두 `GATEWAY_EXISTING_FLOW_DIFFERS`로 멈춘다. 저장을 끈 뒤 `apply-agent-call-budget.sh --rollback`으로 4회 빌드로 돌아간 경우도 그렇다. 그 상태에서도 저장 끔은 유지된다. 저장 설정을 다시 바꾸려면 먼저 `apply-agent-call-budget.sh`(인자 없음)로 8회 빌드를 적용한 뒤 이 helper를 실행한다.
+
+### 오래된 원문 정리(선택)
+
+메시지 저장을 꺼도 이미 쌓인 `message` 행과 추적 원문은 남는다. `deploy/redact-agent-history.py`는 **사용자가 명시적으로 실행할 때만** 지운다. 모델이나 서비스를 호출하지 않고 재시작하지 않는다.
+
+- 대상은 `gw-` 세션의 행 중 N일(기본 30일, 최소 1일)이 지난 것뿐이다. 그보다 새 행과 `gw-`가 아닌 세션(오버투어리즘 `ot-` 등)은 건드리지 않는다. 표마다 고르는 기준이 다르다.
+  - `span`: 시작한 지 N일이 지난 `gw-` 추적의 span이다. 입력 원문을 지운다. 출력은 고정 표지 `{"redacted":true}`로 바꾼다. 최종 검증 구성 요소만 `finalStatus`(accepted·blocked)를 남긴다. 오류 문장은 `redacted`로 바꾼다. 속성은 모델 이름·제공자·호출 종류·입력/출력 토큰만 남긴다. 이름·종류·상태·시각·지연과 `trace` 행은 그대로다.
+  - `message`(오류 메시지 포함)·`transaction`: **각 행의 시각**으로 N일이 지난 `gw-` 세션 행을 지운다. 추적의 시각과 따로 판단한다. 그래서 추적 없이 메시지만 남은 오래된 실행도 지워지고, 기준 시각 근처의 실행은 일부 행만 지워질 수 있다.
+  - `vertex_build`: 위에서 고른 추적의 행(`job_id`가 그 추적 ID)만 지운다. 추적이 남지 않은 실행의 행은 찾지 못한다(아래 [남은 것](#남은-것)).
+- 한 트랜잭션으로 실행한다. 문장마다 60초·잠금 대기 5초 제한이 있다. 같은 트랜잭션 안에서 대상 원문이 남지 않았는지 다시 확인하고, 남았으면 되돌린다(`REDACTION_VERIFY_FAILED`). 실패하면 아무것도 바뀌지 않는다. 결과를 알 수 없는 경우는 아래 [실패했을 때](#정리가-실패했을-때) 표의 `changed:"unknown"`뿐이다.
+- 출력은 건수와 기준 시각뿐이다. 행 내용·세션 ID·비밀값은 출력하지 않는다. 오류도 PostgreSQL 오류 코드(SQLSTATE)만 보여 준다.
+- **되돌릴 수 없다.** Lightsail 스냅숏이나 DB 백업에 남은 사본은 이 도구로 지워지지 않는다.
+- **웹에서 새 추천을 제출하지 않는 때 실행한다.** Langflow도 1분마다 `transaction`·`vertex_build`의 오래된 행을 건수 기준으로 지운다(코드로 확인, 실행으로는 확인하지 않음). 같은 행을 잡으면 정리 도구가 잠금 오류로 멈추고 아무것도 바꾸지 않거나, Langflow의 건수 정리가 정리 도구가 끝날 때까지 기다린다.
+- 처음 `--execute`를 하기 전에, 위 적용 명령 앞의 **이전 기록 보관**([이전 확인 SQL](#적용-전후-확인-sql) 표)을 했는지 확인한다. 정리하면 N일 지난 실행은 그 SQL에서 사라진다.
+
+먼저 건수만 본다(바꾸지 않음).
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I deploy/redact-agent-history.py
+```
+
+건수를 확인했으면 실행 **직전에** 위 [지연·토큰 집계 SQL](#지연토큰-집계-sql)을 한 번 실행해 [0]~[4] 표를 남긴다. 그다음 실행한다. 기간을 바꾸려면 건수 보기와 실행에 같은 `--older-than-days N`을 붙인다.
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I deploy/redact-agent-history.py --execute
+```
+
+| 항목 | 뜻 |
+|---|---|
+| `status` | `dry-run`은 건수만 셌다는 뜻, `redacted`는 커밋했다는 뜻이다 |
+| `cutoffUtc` | 이 시각보다 먼저 시작한 실행이 대상이다(UTC) |
+| `gatewayTraces.older`·`keptNewer` | 대상 실행 수와 기간 안이라 남긴 실행 수다 |
+| `toRedact`·`redacted` | 원문이 남은 span 수와 지울(지운) `message`·`transaction`·`vertex_build` 행 수다 |
+| `changed` | 실제로 바뀐 행이 있었는지다. 같은 명령을 다시 실행하면 0건·`false`가 정상이다 |
+
+실행 **직후에** 지연·토큰 SQL을 다시 실행해 직전 표와 비교한다.
+
+- [2]~[4]: 두 조회 사이에 새 추천이 없었다면 글자 하나까지 같아야 한다. 작업 환경 사본에서는 같았다. 새 실행이 있었다면 그 실행이 든 날짜(보통 오늘, KST)의 [2]·[3] 행과 [4]만 그만큼 달라진다. [4]는 날짜로 나누지 않은 전체 집계다.
+- [1]: `redacted`가 정리한 실행 수만큼 는다. 추적 없이 메시지만 남았던 오래된 세션이 지워지면 `sessions_without_trace`가 준다. `traces`·`sessions`·`last_start_utc`는 새 실행이 있을 때만 바뀐다.
+
+#### 정리가 실패했을 때
+
+| 출력 | 뜻과 다음 할 일 |
+|---|---|
+| `REDACTION_SQL_FAILED`, `sqlstate` `55P03`(잠금 대기 5초 초과) 또는 `40P01`(교착) | 다른 작업(대개 Langflow의 1분 주기 건수 정리)이 같은 행을 잡고 있었다. 아무것도 바뀌지 않았다. 웹 요청이 없는 때 같은 명령을 다시 실행한다 |
+| `REDACTION_SQL_FAILED`, `sqlstate` `57014`(문장 60초 초과) | 한 번에 고칠 행이 너무 많다. 아무것도 바뀌지 않았다. `--older-than-days 365`처럼 큰 값으로 먼저 실행하고 180, 90, 30처럼 줄여 가며 다시 실행한다 |
+| `REDACTION_SQL_FAILED`, 다른 코드 또는 `null` | 아무것도 바뀌지 않았다. JSON 줄을 그대로 붙여 준다 |
+| `REDACTION_VERIFY_FAILED` | 마지막 확인에서 원문이 남아 모두 되돌렸다. 아무것도 바뀌지 않았다. JSON 줄을 그대로 붙여 준다 |
+| `changed:"unknown"`(`REDACTION_TIMEOUT`, Ctrl+C로 멈춘 `REDACTION_INTERRUPTED`, `REDACTION_OUTPUT_UNEXPECTED`) | 컨테이너 안의 `psql`이 커밋했는지 모른다. 1~2분 뒤 건수 보기를 다시 실행해 남은 수를 본다. 남아 있으면 같은 `--execute`를 다시 실행한다. 이미 정리한 행은 다시 세지 않는다 |
+
+건수 보기(`--execute` 없음)는 읽기 전용이라 실패해도 언제나 `changed:false`다.
+
+#### 정기 실행(선택)
+
+정리는 자동으로 돌지 않는다. **아무것도 하지 않으면 span 원문은 기한 없이 남는다.** 보존 기간을 실제로 지키려면 정기 실행을 설치한다. 손으로 한 번 실행해 위 비교까지 확인한 뒤에만 설치한다. 설치 여부와 N은 사용자가 정한다.
+
+아래 명령은 매일 19:17(서버 시간대가 UTC면 KST 04:17)에 30일 기준 `--execute`를 실행하는 cron 파일을 만든다. 서버 시간대는 `timedatectl`의 `Time zone`으로 확인한다. N을 바꾸려면 `30`을 고친다. 출력은 실행마다 건수 JSON 한 줄이며 `/var/log/oreumit-agent-redaction.log`에 쌓인다.
+
+```bash
+cd ~/oreumit-agent && printf "17 19 * * * root cd '%s' && COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I deploy/redact-agent-history.py --older-than-days 30 --execute >> /var/log/oreumit-agent-redaction.log 2>&1\n" "$PWD" | sudo tee /etc/cron.d/oreumit-agent-redaction > /dev/null
+```
+
+설치 확인(파일 한 줄, `active`, 최근 결과)과 해제 명령이다.
+
+```bash
+cat /etc/cron.d/oreumit-agent-redaction && systemctl is-active cron && sudo tail -n 3 /var/log/oreumit-agent-redaction.log
+```
+
+```bash
+sudo rm -f /etc/cron.d/oreumit-agent-redaction
+```
+
+- 정기 실행은 유휴 확인을 하지 않는다. 그래서 웹 요청이 적은 새벽 시각을 골랐다. 잠금 오류로 실패한 날은 아무것도 바뀌지 않고, 다음 날 실행이 남은 행을 함께 정리한다.
+- 이 작업 환경에는 cron이 없어 실행해 보지 않았다. 설치한 다음 날 로그 마지막 줄의 `status`가 `redacted`인지 확인한다.
+
+#### 정리 도구를 확인한 범위
+
+작업 환경의 PostgreSQL 16 사본에서 실행했다. 이 사본은 위 실제 실행 행에서 세션 9개(`gw-` 8, `ot-` 1)의 시각을 40일 앞당긴 것이다. 시각은 편집한 값이다.
+
+- 건수만 보기는 span 114·메시지 11·transaction 44·vertex_build 42를 셌다. 실행은 같은 수를 지웠고, 다시 실행하면 모두 0이었다.
+- 정리 뒤 대상 실행의 원문 잔여는 모두 0이었고 표지어는 어디에도 남지 않았다.
+- `gw-`가 아닌 세션과 기간 안 실행의 모든 행은 해시가 정리 전과 같았다. 40일 지난 `ot-` 세션도 포함이다. 대상 실행의 `trace` 행과 span의 측정 열도 같았다.
+- 실제 래퍼를 썼다. `docker` 자리에 명령 모양을 검사한 뒤 같은 `psql` 명령을 임시 DB로 넘기는 대역을 두었다. 없는 표로 일부러 실패시키면 `{"code":"REDACTION_SQL_FAILED","sqlstate":"42P01"}`만 나왔다.
+- 2026-11-24 검토 반영분(DB 없이 확인): Ctrl+C(`REDACTION_INTERRUPTED`)는 단위 테스트와, 멈춰 있는 가짜 `docker`에 실제 SIGINT를 보낸 실행으로 확인했다. JSON 한 줄과 종료 코드 130만 나왔고 하위 프로세스는 남지 않았다. `psql`이 끝까지 돈 뒤 출력을 읽지 못한 경우의 `changed:"unknown"`은 단위 테스트로만 확인했다. 정기 실행 줄은 문서의 `printf` 명령으로 만든 줄을 `/bin/sh`와 최소 환경, 가짜 `docker`로 실행해 로그에 JSON 한 줄씩 쌓이는 것까지만 봤다. cron 자체는 실행하지 않았다.
+
+AWS(PostgreSQL 17)에서는 실행하지 않았다.
+
+### 붙여 줄 것
+
+- 적용 전: [적용 전후 확인 SQL](#적용-전후-확인-sql)의 [1]~[4] 표(이전 기록 보관용).
+- 적용 helper: `--message-store-off-flow` 진행 줄(`build`·`messageStore`·`flowStatus`)과 마지막 JSON 한 줄. 실패하면 `AGENT_MESSAGE_STORE_APPLY_FAILED: phase=…` 줄과 그 위의 JSON 한 줄.
+- 정리 도구: 건수 보기의 JSON 한 줄. 실행했다면 실행 **직전**의 지연·토큰 SQL [0]~[4] 표, 실행의 JSON 한 줄, 실행 **직후**의 지연·토큰 SQL [0]~[4] 표.
+- 정기 실행을 설치했다면: 설치 확인 명령의 출력(파일 한 줄, `active`, 로그 마지막 줄).
+
+### 남은 것
+
+- 추적(`span`) 원문은 정리 도구를 실행하기 전까지 **기한 없이** 남는다. 정리는 자동으로 돌지 않으므로, 아무것도 하지 않으면 설문 원문이 계속 쌓인다. 며칠 보존할지(N)와 [정기 실행](#정기-실행선택) 여부는 사용자가 정한다.
+- `transaction`·`vertex_build`는 Langflow가 건수로만 오래된 행을 지운다. 이 Gateway 흐름은 `transaction`에 최근 약 500회 실행분(흐름마다 3000행), `vertex_build`에 최근 약 50회 실행분(구성 요소마다 50회)의 원문이 남는다. 실행이 드물면 몇 달 치일 수 있다. 두 기록을 아예 끄는 설정(`LANGFLOW_TRANSACTIONS_STORAGE_ENABLED=false`, `LANGFLOW_VERTEX_BUILDS_STORAGE_ENABLED=false`)도 있다. 하지만 Langflow 재시작이 필요하고 Langflow 화면의 실행 기록에도 영향을 준다. 그래서 이번에는 적용하지 않았다.
+- 추적이 남지 않은 실행(취소, Langflow 재시작)의 `vertex_build` 행은 정리 도구가 찾지 못한다. 이 표에는 세션 ID가 없어 추적으로만 이어지기 때문이다. Langflow가 구성 요소마다 최신 50회만 남기므로 그 안에 있는 동안은 남는다.
+- 지운 행과 바꾼 값은 PostgreSQL 데이터 파일에서 바로 덮어써지지 않는다. vacuum이 그 공간을 다시 쓸 때까지 데이터 파일과 WAL에 남을 수 있고, 그사이 만든 Lightsail 스냅숏·DB 백업에도 남는다.
+- 구성 요소 오류 메시지는 저장 설정과 관계없이 남는다. 작업 환경 실행에서는 고정 코드와 추적 정보뿐이었다. 다만 lfx 코드를 보면 Agent가 응답을 내던 중 실패하면 그 추적 정보에 모델이 중간까지 쓴 응답이 들어갈 수 있다(실행으로는 만들지 못함). 이 행도 정리 도구가 N일 뒤 지운다.
+- **회원과 이어진다.** 앱이 기록하는 수락 결과는 Supabase `app_private.agent_recommendations`의 `request_id`가 Langflow `gw-` 세션 ID와 같다. Gateway가 그 요청 ID를 Langflow `session_id`로 그대로 넘기기 때문이다(`services/agent-gateway/upstream.mjs`). 그래서 그 기록이 Supabase에 있는 동안 AWS의 원문(정리 전 span·`transaction`·`vertex_build`, 저장 끔 이전의 `message`)을 그 회원과 연결할 수 있다. 회원이 기록을 지우거나 탈퇴해도 AWS 사본은 정리 도구가 기간 기준으로 지울 때까지 남는다. `trace` 행(세션 ID·시각·모델·토큰, 원문 없음)은 정리 뒤에도 남는다.
+- 기록 단위 삭제는 지금은 없지만 만들 수 있다. 앱이 기록 삭제·탈퇴 때 그 `gw-` ID를 넘기면, 세션 ID를 지정해 같은 방식으로 지우는 모드를 둘 수 있다. 차단·오류 실행과 기록되지 않은 실행은 앱에 ID가 없어 기간으로만 지울 수 있다.
+- 앱 안내(회원별 최신 20개·삭제·탈퇴 시 삭제)는 Supabase 기록만 다룬다. AWS 처리 기록(정리 전 원문, 건수 기준으로 남는 기록, 스냅숏·백업)은 그 안내에 들어 있지 않다. 안내에 AWS 처리 기록의 보존 기간을 적을지, 정리를 정기 실행해 그 기간을 실제로 지킬지, 기록 단위 삭제를 만들지는 앱·운영 쪽에서 정한다.
+
+`productionReady:false`를 유지한다.
 
 ## 공식 참고 링크
 

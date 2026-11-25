@@ -13,7 +13,7 @@ concurrency:
 jobs:
   private-gateway:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       COMPOSE_PROJECT_NAME: oreumit-gateway-ci
     steps:
@@ -131,6 +131,42 @@ jobs:
           python3 deploy/prepare-overtourism.py --disable
           $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
           $compose exec -T agent-gateway node /app/check.mjs --internal
+      - name: Switch Langflow message storage on and off in place, run the stored flow without a model and count kept messages
+        run: |
+          compose="docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml -f deploy/compose.gateway.yaml"
+          # Langflow allows 5 logins per minute from one address. Each prepare-gateway flow mode and each
+          # message check below logs in once (check.mjs and the marker modes do not), so each of the three
+          # blocks between the waits logs in three times, below the limit with room to spare.
+          sleep 61
+          # A new provision stores the 8-call build without Chat Input/Output message storage. The CI Vertex
+          # credential is a placeholder, so each run ends in Langflow's error message before any provider call.
+          python3 deploy/prepare-gateway.py --check-message-store-off-flow
+          python3 deploy/tests/run-gateway-message-store-check.py --expect-not-stored
+          python3 deploy/prepare-gateway.py --message-store-on-flow
+          $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
+          $compose exec -T agent-gateway node /app/check.mjs --internal
+          sleep 61
+          python3 deploy/prepare-gateway.py --check-message-store-on-flow
+          python3 deploy/tests/run-gateway-message-store-check.py --expect-stored
+          python3 deploy/prepare-gateway.py --message-store-off-flow
+          $compose up -d --no-deps --force-recreate --wait --wait-timeout 90 agent-gateway
+          $compose exec -T agent-gateway node /app/check.mjs --internal
+          sleep 61
+          python3 deploy/prepare-gateway.py --check-message-store-off-flow
+          # The build switches keep the storage setting: the stored 8-call flow still passes its own check.
+          python3 deploy/prepare-gateway.py --check-flow
+          python3 deploy/tests/run-gateway-message-store-check.py --expect-not-stored
+          python3 deploy/prepare-gateway.py --complete-flow-change
+          pending=0
+          python3 deploy/prepare-gateway.py --flow-change-pending || pending=$?
+          test "$pending" = 3
+      - name: Run the read-only metrics SQL and the redaction dry run and execute on the disposable Langflow DB
+        run: |
+          compose="docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml"
+          $compose exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off -v ON_ERROR_STOP=1' < deploy/agent-run-metrics.sql
+          # Every CI run is minutes old: nothing is older than one day, so the execute commits no change.
+          python3 deploy/redact-agent-history.py --older-than-days 1
+          python3 deploy/redact-agent-history.py --older-than-days 1 --execute | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["status"] == "redacted" and v["changed"] is False and v["gatewayTraces"]["keptNewer"] >= 3, v'
       - name: Record verification boundary
         if: always()
         run: echo 'Fictional catalog, no Google inference, no Cloudflare account or tunnel changes. AWS and external Access/Tunnel acceptance require separate execution.' >> "$GITHUB_STEP_SUMMARY"

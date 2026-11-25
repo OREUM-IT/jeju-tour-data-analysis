@@ -23,13 +23,30 @@ HEX = re.compile(r'[a-f0-9]{64}')
 # git update is invisible there. Stream the reviewed host script over stdin.
 BOOTSTRAP = ROOT / 'langflow' / 'gateway-bootstrap.py'
 FLOW_LIMITS = {'update': 8, 'rollback': 4, 'check': 8,
-               'rule-action': 8, 'rule-action-rollback': 8, 'check-rule-action': 8}
-CHECK_MODES = ('check', 'check-rule-action')
+               'rule-action': 8, 'rule-action-rollback': 8, 'check-rule-action': 8,
+               'message-store-off': 8, 'message-store-on': 8, 'check-message-store-off': 8, 'check-message-store-on': 8}
+CHECK_MODES = ('check', 'check-rule-action', 'check-message-store-off', 'check-message-store-on')
 SCOPES = {'update': 'gateway-flow-updated', 'rollback': 'gateway-flow-rolled-back',
-          'rule-action': 'gateway-rule-action-applied', 'rule-action-rollback': 'gateway-rule-action-rolled-back'}
-MIGRATION_KEYS = {'status', 'flowStatus', 'flowId', 'flowSha256', 'modelCallLimit', 'modelExecuted', 'productionReady'}
-CHECK_KEYS = {'status', 'flowMatches', 'nodeCount', 'edgeCount', 'toolCount', 'modelCallLimit', 'flowSha256',
-              'modelExecuted', 'productionReady'}
+          'rule-action': 'gateway-rule-action-applied', 'rule-action-rollback': 'gateway-rule-action-rolled-back',
+          'message-store-off': 'gateway-message-store-off-applied',
+          'message-store-on': 'gateway-message-store-on-restored',
+          'check': 'gateway-flow-checked', 'check-rule-action': 'gateway-rule-action-checked',
+          'check-message-store-off': 'gateway-message-store-off-checked',
+          'check-message-store-on': 'gateway-message-store-on-checked'}
+# The reviewed build each mode must report. Build switches keep the stored
+# message-storage variant; the storage modes keep the build.
+CURRENT_BUILDS = ('vertex-8-call', 'rule-action')
+FLOW_BUILDS = {'update': ('vertex-8-call',), 'rollback': ('legacy-4-call',), 'check': ('vertex-8-call',),
+               'rule-action': ('rule-action',), 'rule-action-rollback': ('vertex-8-call',),
+               'check-rule-action': ('rule-action',), 'message-store-off': CURRENT_BUILDS,
+               'message-store-on': CURRENT_BUILDS, 'check-message-store-off': CURRENT_BUILDS,
+               'check-message-store-on': CURRENT_BUILDS}
+MESSAGE_STORE = {'message-store-off': (False,), 'message-store-on': (True,),
+                 'check-message-store-off': (False,), 'check-message-store-on': (True,)}
+MIGRATION_KEYS = {'status', 'flowStatus', 'flowId', 'flowSha256', 'modelCallLimit', 'build', 'messageStore',
+                  'modelExecuted', 'productionReady'}
+CHECK_KEYS = {'status', 'flowMatches', 'nodeCount', 'edgeCount', 'toolCount', 'modelCallLimit', 'build',
+              'messageStore', 'flowSha256', 'modelExecuted', 'productionReady'}
 # Present from the start of a flow switch until the apply helper has re-pinned
 # the Gateway and passed every readiness check. While it exists, the Gateway may
 # refuse work with FLOW_CHANGED, so a rerun must resume instead of aborting.
@@ -190,7 +207,10 @@ def flow(root, mode, *, runner=subprocess.run):
             value = json.loads(result.stdout)
             common = (value['status'] == 'passed' and value['modelExecuted'] is False
                       and value['productionReady'] is False and value['modelCallLimit'] == FLOW_LIMITS[mode]
-                      and isinstance(value['flowSha256'], str) and HEX.fullmatch(value['flowSha256']))
+                      and isinstance(value['flowSha256'], str) and HEX.fullmatch(value['flowSha256'])
+                      and value['build'] in FLOW_BUILDS[mode]
+                      and value['messageStore'] in MESSAGE_STORE.get(mode, (True, False))
+                      and isinstance(value['messageStore'], bool))
             if mode in CHECK_MODES:
                 valid = set(value) == CHECK_KEYS and value['flowMatches'] is True
             else:
@@ -200,14 +220,13 @@ def flow(root, mode, *, runner=subprocess.run):
                 raise ValueError()
         except (ValueError, KeyError, TypeError, AttributeError):
             raise ValueError('GATEWAY_FLOW_RESULT_INVALID') from None
-        summary = {'status': 'passed', 'modelCallLimit': value['modelCallLimit'],
-                   'modelExecuted': False, 'productionReady': False}
+        summary = {'status': 'passed', 'modelCallLimit': value['modelCallLimit'], 'build': value['build'],
+                   'messageStore': value['messageStore'], 'modelExecuted': False, 'productionReady': False}
         if mode in CHECK_MODES:
             # The running Gateway pins this SHA; a mismatch means it fails closed.
             if value['flowSha256'] != gateway['LANGFLOW_GATEWAY_FLOW_SHA256']:
                 raise ValueError('GATEWAY_FLOW_PIN_MISMATCH')
-            return {**summary, 'scope': 'gateway-flow-checked' if mode == 'check' else 'gateway-rule-action-checked',
-                    'settingsChanged': False}
+            return {**summary, 'scope': SCOPES[mode], 'settingsChanged': False}
         changed = value['flowSha256'] != gateway['LANGFLOW_GATEWAY_FLOW_SHA256']
         if changed:
             # Only the pinned SHA changes; the API key, flow ID and tokens stay byte-identical.
@@ -274,18 +293,25 @@ if __name__ == '__main__':
                        help='Pin the 8-call Vertex flow again (from the exact rule-action flow); no key or flow creation.')
     modes.add_argument('--check-rule-action-flow', action='store_true',
                        help='Read-only: stored flow is the rule-action build and is pinned.')
+    modes.add_argument('--message-store-off-flow', action='store_true',
+                       help='Pin the stored 8-call or rule-action build without Langflow message storage; same build.')
+    modes.add_argument('--message-store-on-flow', action='store_true',
+                       help='Pin the same build with Langflow message storage again (rollback); same build.')
+    modes.add_argument('--check-message-store-off-flow', action='store_true',
+                       help='Read-only: stored flow is an 8-call or rule-action build without message storage and is pinned.')
+    modes.add_argument('--check-message-store-on-flow', action='store_true',
+                       help='Read-only: stored flow is an 8-call or rule-action build with message storage and is pinned.')
     modes.add_argument('--flow-change-pending', action='store_true',
                        help=f'Read-only: exit 0 if a flow switch is unfinished, {NOT_PENDING_EXIT} if not.')
     modes.add_argument('--complete-flow-change', action='store_true',
                        help='Clear the unfinished-switch marker after the Gateway is re-pinned and ready.')
     args = parser.parse_args()
-    switching = args.update_flow or args.rollback_flow or args.rule_action_flow or args.rule_action_rollback_flow
+    # The CLI flag of each flow mode is --<mode>-flow; 'check' is --check-flow and 'update' --update-flow.
+    selected = [mode for mode in FLOW_LIMITS if getattr(args, mode.replace('-', '_') + '_flow')]
+    switching = bool(selected) and selected[0] not in CHECK_MODES
     try:
-        if switching or args.check_flow or args.check_rule_action_flow:
-            mode = ('update' if args.update_flow else 'rollback' if args.rollback_flow
-                    else 'rule-action' if args.rule_action_flow else 'rule-action-rollback' if args.rule_action_rollback_flow
-                    else 'check-rule-action' if args.check_rule_action_flow else 'check')
-            print(json.dumps(flow(ROOT / '.local', mode)))
+        if selected:
+            print(json.dumps(flow(ROOT / '.local', selected[0])))
         elif args.flow_change_pending or args.complete_flow_change:
             result = flow_change(ROOT / '.local', 'pending' if args.flow_change_pending else 'complete')
             print(json.dumps(result))
