@@ -1,5 +1,7 @@
 # Claude Code 시작 안내
 
+2026-11-25 최신(KST): 사용자가 Gemini와 GPT 비교를 "96문항 평가로 공정 비교"로 골랐다. 운영 Gateway 경로로 같은 새 96문항(gold `8c2d8299…bd9b`)을 Gemini(`vertex-8-call`)와 GPT(`rule-action`)에 차례로 보내 기존 채점기로 재는 도구를 만들었다([35 문서](docs/35-gateway-model-comparison.md): `gateway-eval.mjs`·`collect-gateway-eval.py`·`run-gateway-eval.sh`, 평가 틀에 `gateway` 시스템 추가). 모델 없이 서버 규칙만으로 동작 정답 0.906이 나와(되묻기 8문항은 운영 조립기가 만들지 않음) 모델 몫은 ID·P@5·R@5·페르소나 지표로 본다. 모델·흐름 구조가 함께 다른 구성 비교이며 모델 우열로 확대하지 않는다. AWS 수집·실제 호출은 사용자가 실행하며 아직 미실행이다. 도구 이름 수정(PR #37) 병합 뒤 사용자가 `main@fbd0a31`로 다시 적용해 `model:gpt-5.4-mini`·모든 단계 passed 출력을 제공했다. 같은 날 확인 SQL에는 GPT 실행 기록이 아직 0건이었다(마지막 기록 2026-11-22 Gemini).
+
 2026-11-25 최신(KST): 규칙 동작 흐름 적용 직후, 도구 이름(`places.search` 등)의 점 때문에 실제 gpt-5.4-mini 호출이 OpenAI 함수 이름 규칙(영문·숫자·`_`·`-`)에 거부될 문제를 확인했다. 사용자가 `--rollback`으로 Gemini 8회 흐름(`messageStore:false` 유지)으로 되돌렸고, 그 사이 웹 요청은 없었다. 규칙 동작 빌드에서만 모델에 보이는 도구 이름을 밑줄로 바꾸고(MCP 이름·Vertex 빌드 불변), CI가 OpenAI 요청 본문의 이름 규칙을 검사하게 했다. 병합 뒤 `apply-agent-rule-action.sh`로 다시 적용한다. 실제 OpenAI 호출은 아직 미확인이다.
 
 2026-11-25 최신(KST): 사용자가 AWS에서 `main@6898212`로 규칙 동작 흐름 적용 성공 출력을 제공했다. 적용 전 흐름은 `vertex-8-call`·`messageStore:false`였고, MCP 갱신·설치된 981곳 오프라인 조립 검사·흐름 교체(`build:rule-action`, `messageStore:false` 유지)·`agent-gateway`만 재생성·흐름 고정·공개 인증·큐 준비를 거쳐 `agent-rule-action-applied`·`model:gpt-5.4-mini`로 끝났다. 모델은 실행하지 않았다. 성공한 적용을 재확인하려고 helper를 반복하지 않는다. 다음은 로그인 웹 추천 1건과 실행이 쌓인 뒤 [32 문서](docs/32-agent-gateway-tunnel.md#aws-적용-결과사용자-제공-출력-2026-11-25) 확인 SQL 비교이며, 실제 gpt-5.4-mini 호출·품질·비용은 미확인이고 `productionReady:false`를 유지한다.

@@ -14,3 +14,6 @@ __pycache__/
 # Original-source CSV redistribution terms have not all been verified.
 # Build locally from the pinned reference checkout; publish metadata only.
 /reports/jeju-data-snapshot-bundle.zip
+
+# Gateway evaluation aggregates on the AWS host (copied into reports/ by hand).
+/deploy/gateway-eval-reports/

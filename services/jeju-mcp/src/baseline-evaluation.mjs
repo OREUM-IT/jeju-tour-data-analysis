@@ -8,8 +8,8 @@ export const BASELINE_SCHEMA_VERSION = '1.0';
 export const BASELINE_PLAN_KIND = 'jeju-baseline-plan';
 export const BASELINE_RUN_KIND = 'jeju-baseline-run';
 export const BASELINE_SUMMARY_KIND = 'jeju-baseline-summary';
-export const BASELINE_SYSTEMS = Object.freeze(['gemini', 'langflow', 'local_llm', 'oracle_self_check']);
-const SYSTEM_ADAPTERS = Object.freeze({ gemini: 'gemini-assistant', langflow: 'langflow', local_llm: 'local-llm' });
+export const BASELINE_SYSTEMS = Object.freeze(['gemini', 'langflow', 'local_llm', 'gateway', 'oracle_self_check']);
+const SYSTEM_ADAPTERS = Object.freeze({ gemini: 'gemini-assistant', langflow: 'langflow', local_llm: 'local-llm', gateway: 'gateway' });
 export const BASELINE_VARIANTS = Object.freeze(['template', 'written']);
 export const BASELINE_ERROR_CODES = Object.freeze(['timeout', 'transport_error', 'invalid_output', 'not_executed']);
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -103,8 +103,8 @@ function validateRun(run, plan) {
         ensure(system.id !== 'gemini' || (audit.sourceEngine === 'gemini' && audit.reportedModel === system.modelId && ['human_reviewed', 'model_reviewed'].includes(audit.mode)),
           'Gemini normalization must name the actual declared model, not a keyword fallback');
         ensure(audit.mode !== 'structured' || audit.review === null, 'structured normalization cannot carry a review override');
-        ensure(system.id !== 'local_llm' || (audit.mode === 'structured' && audit.reportedModel === system.modelId),
-          'local LLM normalization must be structured output from the declared model');
+        ensure(!['local_llm', 'gateway'].includes(system.id) || (audit.mode === 'structured' && audit.reportedModel === system.modelId),
+          'local LLM and Gateway normalization must be structured output from the declared model');
         ensure(!['human_reviewed', 'model_reviewed'].includes(audit.mode) || (isRecord(audit.review)
           && audit.review.method === (audit.mode === 'model_reviewed' ? 'in_session_llm' : 'human')
           && audit.review.rawOutputHash === audit.rawOutputHash && text(audit.review.reviewerId) && text(audit.review.rubricVersion)
