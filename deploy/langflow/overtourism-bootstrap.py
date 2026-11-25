@@ -42,8 +42,8 @@ REPLACES = {'JejuPrepareRequest': 'JejuOvertourismPrepare', 'JejuScopedTools': '
 OUTPUT_ID = 'ChatOutput-jejuOvertourism'
 MAX_TOKENS = 8192
 MODEL_CALLS = 8
-TIMEOUT_OLD = 'streaming=True, max_retries=1, timeout=60, reasoning_effort="low",'
-TIMEOUT_NEW = 'streaming=True, max_retries=1, timeout=80, reasoning_effort="low",'
+TIMEOUT_OLD = 'streaming=True, max_retries=1, timeout=60, reasoning_effort="none",'
+TIMEOUT_NEW = 'streaming=True, max_retries=1, timeout=80, reasoning_effort="none",'
 NOTICE_OLD = '"도구 결과에 없는 장소 ID는 쓰지 않는다."'
 NOTICE_NEW = '"도구 결과에 없는 지역 ID는 쓰지 않고 숫자와 날짜도 쓰지 않는다."'
 PROMPT = (

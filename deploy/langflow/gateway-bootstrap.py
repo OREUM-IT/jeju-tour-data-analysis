@@ -92,8 +92,10 @@ OPENAI_GET_LLM = '''def _get_llm(self):
 
     The key comes only from the Credential global JEJU_OPENAI_API_KEY. Request
     or prompt content cannot choose the endpoint, organization or model.
-    Streaming stays on for the Agent event contract; reasoning tokens share the
-    output budget, so effort stays low.
+    Streaming stays on for the Agent event contract. gpt-5.4 models reject function
+    tools on Chat Completions unless reasoning_effort is "none" (HTTP 400, param
+    reasoning_effort, seen on AWS 2026-11-25); the server makes every decision and
+    the model only picks place IDs, so no reasoning tokens are requested.
     """
     from langchain_openai import ChatOpenAI
     selected = self.model
@@ -110,10 +112,14 @@ OPENAI_GET_LLM = '''def _get_llm(self):
     maximum = self._get_max_tokens_value()
     return ChatOpenAI(
         model="gpt-5.4-mini", api_key=key, base_url="https://api.openai.com/v1",
-        streaming=True, max_retries=1, timeout=60, reasoning_effort="low",
+        streaming=True, max_retries=1, timeout=60, reasoning_effort="none",
         **({"max_completion_tokens": maximum} if maximum is not None else {}),
     )
 '''
+# The first rule-action build (main@fbd0a31) asked for reasoning_effort="low" and every
+# OpenAI call was refused. It stays a known stored graph so the switch and the rollback
+# can still move a server that has it to the fixed build or back to the 8-call build.
+OPENAI_GET_LLM_LOW = OPENAI_GET_LLM.replace('reasoning_effort="none"', 'reasoning_effort="low"')
 LIMIT_LINE = '            middleware.append(ModelCallLimitMiddleware(run_limit=run_limit))\n'
 GUARDED_LIMIT_LINES = ('            middleware.append(_GatewayFinalAnswerMiddleware(run_limit=run_limit))\n'
                        + LIMIT_LINE)
@@ -315,7 +321,7 @@ def budget_flow(legacy):
     return flow
 
 
-def replace_get_llm(code):
+def replace_get_llm(code, get_llm=None):
     """Swap only the reviewed direct-Vertex _get_llm method for the OpenAI one."""
     methods = [node for node in ast.walk(ast.parse(code))
                if isinstance(node, ast.FunctionDef) and node.name == '_get_llm']
@@ -326,7 +332,7 @@ def replace_get_llm(code):
             'GATEWAY_AGENT_GUARD_MISSING')
     lines = code.splitlines(keepends=True)
     replacement = ''.join((' ' * method.col_offset + line) if line.strip() else line
-                          for line in OPENAI_GET_LLM.splitlines(keepends=True))
+                          for line in (get_llm or OPENAI_GET_LLM).splitlines(keepends=True))
     result = ''.join(lines[:method.lineno - 1]) + replacement + ''.join(lines[method.end_lineno:])
     ast.parse(result)
     return result
@@ -340,7 +346,7 @@ OPENAI_TOOL_NAME_LINE = 'coroutine=call, name=name.replace(".", "_"), descriptio
 OPENAI_TOOL_NAME = re.compile(r'[a-zA-Z0-9_-]{1,64}')
 
 
-def rule_action_flow(budget):
+def rule_action_flow(budget, *, get_llm=None):
     """Return the rule-action OpenAI flow derived from the exact 8-call build."""
     flow = copy.deepcopy(budget)
     agents = [node for node in flow['data']['nodes'] if node['data']['type'] == 'Agent']
@@ -351,7 +357,7 @@ def rule_action_flow(budget):
             and code.count(LIMIT_MARKER.format(MODEL_CALLS)) == 1, 'GATEWAY_AGENT_GUARD_MISSING')
     require(fields['api_key'].get('load_from_db') is True and fields['api_key'].get('value') != OPENAI_TOKEN_NAME,
             'GATEWAY_AGENT_CREDENTIAL_MISMATCH')
-    fields['code']['value'] = replace_get_llm(code)
+    fields['code']['value'] = replace_get_llm(code, get_llm)
     fields['api_key'].update(value=OPENAI_TOKEN_NAME, load_from_db=True)
     fields['model']['value'] = copy.deepcopy(RULE_MODEL_VALUE)
     fields['model']['options'] = copy.deepcopy(RULE_MODEL_VALUE)
@@ -389,9 +395,11 @@ def without_message_store(build):
     return flow
 
 
-def graphs(legacy, budget, rule):
+def graphs(legacy, budget, rule, rule_low=None):
     """Every reviewed stored graph: (build name, message storage, flow)."""
     builds = {'legacy-4-call': legacy, 'vertex-8-call': budget, 'rule-action': rule}
+    if rule_low is not None:
+        builds['rule-action-low'] = rule_low
     return {(name, store): flow if store else without_message_store(flow)
             for name, flow in builds.items() for store in (True, False)}
 
@@ -444,8 +452,8 @@ def both_variants(previous, target):
 SWITCHES = {
     'update': both_variants('legacy-4-call', 'vertex-8-call'),
     'rollback': both_variants('vertex-8-call', 'legacy-4-call'),
-    'rule-action': both_variants('vertex-8-call', 'rule-action'),
-    'rule-action-rollback': both_variants('rule-action', 'vertex-8-call'),
+    'rule-action': both_variants('vertex-8-call', 'rule-action') + both_variants('rule-action-low', 'rule-action'),
+    'rule-action-rollback': both_variants('rule-action', 'vertex-8-call') + both_variants('rule-action-low', 'vertex-8-call'),
     'message-store-off': tuple(((name, True), (name, False)) for name in ('vertex-8-call', 'rule-action')),
     'message-store-on': tuple(((name, False), (name, True)) for name in ('vertex-8-call', 'rule-action')),
 }
@@ -529,7 +537,7 @@ def configure(client, mcp, environment, template, source, setup, *, provision=Fa
                 and entries[0].get('has_value') is True, 'GATEWAY_CREDENTIAL_UNAVAILABLE')
     legacy = build_flow(client, template, source, setup)
     budget = budget_flow(legacy)
-    known = graphs(legacy, budget, rule_action_flow(budget))
+    known = graphs(legacy, budget, rule_action_flow(budget), rule_action_flow(budget, get_llm=OPENAI_GET_LLM_LOW))
     for built in known.values():
         setup.without_secrets(built, [token, password, access_token])
     if migrate in SWITCHES:

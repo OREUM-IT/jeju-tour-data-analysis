@@ -79,10 +79,10 @@ def main():
             model = namespace['_get_llm'](fake)
             assert type(model).__name__ == 'ChatOpenAI'
             assert model.model_name == 'gpt-5.4-mini' and model.streaming is True and model.max_retries == 1
-            assert model.openai_api_base == 'https://api.openai.com/v1' and model.reasoning_effort == 'low'
+            assert model.openai_api_base == 'https://api.openai.com/v1' and model.reasoning_effort == 'none'
             payload = model._get_request_payload([HumanMessage(content='ci')])
             assert payload['model'] == 'gpt-5.4-mini' and payload['stream'] is True
-            assert payload.get('reasoning_effort') == 'low'
+            assert payload.get('reasoning_effort') == 'none'
             assert payload.get('max_completion_tokens') == 4096 and 'max_tokens' not in payload
             assert 'temperature' not in payload
             # The exact tool declarations OpenAI would receive: names must match ^[a-zA-Z0-9_-]{1,64}$.
@@ -99,7 +99,7 @@ def main():
         return 1
     print(json.dumps({'status': 'passed', 'openaiClientInitialized': True, 'model': 'gpt-5.4-mini',
                       'openaiToolNames': ['places_search', 'places_get', 'constraints_check'],
-                      'maxCompletionTokens': 4096, 'reasoningEffort': 'low', 'networkCalls': 0,
+                      'maxCompletionTokens': 4096, 'reasoningEffort': 'none', 'networkCalls': 0,
                       'modelExecuted': False}))
     return 0
 
