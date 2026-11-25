@@ -617,6 +617,18 @@ MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 �
   - 차단·장소 포함 비율, 지연, 비용
 - 다음은 로그인한 웹 사용자 추천 1건과, 실행이 쌓인 뒤의 확인 SQL 비교다.
 - `productionReady:false`를 유지한다.
+### 도구 이름 수정과 되돌림(2026-11-25)
+
+- 적용 직후 실제 호출 전에 문제를 찾았다. 규칙 동작 흐름의 도구 이름 `places.search`·`places.get`·`constraints.check`에는 점이 있는데, OpenAI 함수 이름은 영문·숫자·`_`·`-`만 허용한다. 그래서 실제 gpt-5.4-mini 호출이 거부될 가능성이 컸다(34 문서 8절에서 먼저 지적).
+- 기존 테스트·CI는 가짜 모델만 써서 이 규칙을 검사하지 않았다.
+- 사용자가 같은 날 `--rollback`을 실행했다. 출력은 `gateway-rule-action-rolled-back`, `build:vertex-8-call`, `messageStore:false`였고 `agent-gateway`만 재생성했다. 운영은 Gemini 8회 흐름으로 돌아갔다. 되돌리기 전후로 웹 추천 요청은 없었다(집계 SQL에 11-22 이후 실행 없음).
+- 수정 내용:
+  - 규칙 동작 빌드에서만 `JejuScopedTools` 노드가 모델에 보이는 이름을 `places_search`·`places_get`·`constraints_check`로 바꾼다. MCP 호출 이름과 Vertex 빌드는 그대로다.
+  - 시스템 지침의 도구 이름도 맞췄다.
+  - CI(`deploy/tests/check-openai-client.py`)가 저장된 흐름의 도구를 Langflow 로더로 만들고, langchain-openai로 OpenAI 요청 본문을 만들어 이름 규칙을 검사한다.
+- 작업 환경에서 langchain-openai 1.8.5로 요청 본문의 도구 이름이 바뀐 것을 확인했다. 실제 OpenAI 호출은 하지 않았다.
+- 다시 적용할 때는 위 [AWS에 적용할 명령](#aws에-적용할-명령-2)을 그대로 쓴다. 저장 흐름이 Vertex 8회라서 예전 규칙 빌드를 거치지 않는다.
+
 ### 확인과 되돌리기
 
 규칙 흐름 상태만 재시작 없이 확인한다. 적용 뒤에는 `apply-agent-call-budget.sh --verify-only`가 저장 흐름 불일치로 실패하므로 이 명령을 쓴다.
