@@ -11,6 +11,7 @@ MCP tool or Gateway request is called, and only fixed aggregate fields print.
 import ast
 import json
 import os
+import re
 import types
 from unittest.mock import patch
 
@@ -32,15 +33,31 @@ def stored_agent(environment):
         assert len(matches) == 1
         stored = client.get(f'/api/v1/flows/{matches[0]}')
         assert stored.status_code == 200
-    agents = [node for node in stored.json()['data']['nodes'] if node['data']['type'] == 'Agent']
-    assert len(agents) == 1
-    return agents[0]['data']['node']['template']
+    nodes = stored.json()['data']['nodes']
+    agents = [node for node in nodes if node['data']['type'] == 'Agent']
+    scoped = [node for node in nodes if node['data']['type'] == 'JejuScopedTools']
+    assert len(agents) == 1 and len(scoped) == 1
+    return agents[0]['data']['node']['template'], scoped[0]['data']['node']['template']['code']['value']
+
+
+def scoped_tools(code):
+    """Build the stored scoped tools with Langflow's own loader; no MCP call happens until a tool runs."""
+    from lfx.custom.custom_component.component import Component
+    from lfx.custom.utils import build_custom_component_template
+    from lfx.schema.message import Message
+    _frontend, instance = build_custom_component_template(Component(_code=code), class_name='JejuScopedTools')
+    prepared = {'schemaVersion': '1.0', 'status': 'prepared', 'request': {'requestId': 'gw-' + '0' * 32},
+                'requestSha256': '0' * 64, 'catalogSha256': '0' * 64, 'catalogVersion': 'sha256:' + '0' * 64,
+                'policyVersion': 'recommendation-validation-v1', 'evaluatedAt': '2026-11-25T00:00:00.000Z', 'candidateCount': 1}
+    instance.set(service_token='ci-placeholder-token-' + 'x' * 32,
+                 prepared_request=Message(text=json.dumps(prepared), session_id='gw-' + '0' * 32))
+    return instance.build_tools()
 
 
 def main():
     try:
         assert os.environ.get('CI') == 'true', 'DISPOSABLE_CI_ONLY'
-        fields = stored_agent(os.environ)
+        fields, scoped_code = stored_agent(os.environ)
         assert fields['api_key']['value'] == 'JEJU_OPENAI_API_KEY' and fields['api_key']['load_from_db'] is True
         methods = [node for node in ast.walk(ast.parse(fields['code']['value']))
                    if isinstance(node, ast.FunctionDef) and node.name == '_get_llm']
@@ -68,12 +85,20 @@ def main():
             assert payload.get('reasoning_effort') == 'low'
             assert payload.get('max_completion_tokens') == 4096 and 'max_tokens' not in payload
             assert 'temperature' not in payload
+            # The exact tool declarations OpenAI would receive: names must match ^[a-zA-Z0-9_-]{1,64}$.
+            tools = scoped_tools(scoped_code)
+            bound = model.bind_tools(tools)
+            with_tools = model._get_request_payload([HumanMessage(content='ci')], **bound.kwargs)
+            names = [tool['function']['name'] for tool in with_tools['tools']]
+            assert names == ['places_search', 'places_get', 'constraints_check']
+            assert all(re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', name) for name in names)
             assert connect.call_count == 0
     except Exception as error:
         print(json.dumps({'status': 'failed', 'code': 'OPENAI_CLIENT_CHECK_FAILED',
                           'errorType': type(error).__name__, 'modelExecuted': False}))
         return 1
     print(json.dumps({'status': 'passed', 'openaiClientInitialized': True, 'model': 'gpt-5.4-mini',
+                      'openaiToolNames': ['places_search', 'places_get', 'constraints_check'],
                       'maxCompletionTokens': 4096, 'reasoningEffort': 'low', 'networkCalls': 0,
                       'modelExecuted': False}))
     return 0
