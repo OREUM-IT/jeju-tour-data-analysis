@@ -79,15 +79,18 @@ def read_requests(path):
     return entries
 
 
-def read_done(path):
-    """Cases that already have a recorded outcome; a refused submission is never written, so it is not done."""
+def read_done(path, *, retry_unknown=False):
+    """Cases that already have a recorded outcome; a refused submission is never written, so it is not done.
+
+    With retry_unknown, cases whose last line is 'unknown' are sent again (one more paid call each).
+    """
     done = {}
     if path.exists():
         for line in path.read_text('utf-8').splitlines():
             if line.strip():
                 value = json.loads(line)
                 done[value['caseId']] = value['final']
-    return done
+    return {case: final for case, final in done.items() if not (retry_unknown and final == 'unknown')}
 
 
 def accepted_result(value, request_id):
@@ -116,6 +119,43 @@ class Budget:
 
     def record(self):
         self.times.append(self.monotonic())
+
+
+KEY = re.compile(r'[A-Za-z][A-Za-z0-9_]{0,39}')
+CODE = re.compile(r'[A-Z][A-Z0-9_]{0,63}')
+STATES = frozenset(('queued', 'running', 'accepted', 'cancelled'))
+
+
+def describe(http, body, now, expiry):
+    """Why a Gateway reply did not fit: field names, small integers and fixed vocabularies only.
+
+    No place IDs, query text or free-form values. Written to the .local results line, never to stdout.
+    """
+    keys = lambda value: sorted(k for k in value if isinstance(k, str) and KEY.fullmatch(k))[:16] if isinstance(value, dict) else None
+    detail = {'http': http if type(http) is int else None, 'bodyType': type(body).__name__, 'bodyKeys': keys(body)}
+    if isinstance(body, dict):
+        if body.get('status') in STATES:
+            detail['status'] = body['status']
+        error = body.get('error')
+        if isinstance(error, dict) and isinstance(error.get('code'), str) and CODE.fullmatch(error['code']):
+            detail['errorCode'] = error['code']
+        for name in ('position', 'pollAfterSeconds'):
+            if type(body.get(name)) is int and -1000 <= body[name] <= 1000:
+                detail[name] = body[name]
+        if isinstance(body.get('expiresAt'), str):
+            detail['expiresAtSameAsSubmit'] = body['expiresAt'] == expiry
+            try:
+                detail['expiresInSeconds'] = round(datetime.fromisoformat(body['expiresAt'].replace('Z', '+00:00')).timestamp() - now)
+            except ValueError:
+                detail['expiresInSeconds'] = None
+        response = body.get('response')
+        if isinstance(response, dict):
+            detail['responseKeys'] = keys(response)
+            if response.get('action') in ACTIONS:
+                detail['action'] = response['action']
+            if isinstance(response.get('placeIds'), list):
+                detail['placeCount'] = len(response['placeIds'])
+    return detail
 
 
 def collect_case(client, entry, subject, *, monotonic, wall, sleep):
@@ -159,19 +199,23 @@ def collect_case(client, entry, subject, *, monotonic, wall, sleep):
                 code = load.error_code(body)
                 require(code is not None)
                 return {**record, 'final': 'failed', 'code': code, 'gatewayHttp': code_http, **timing, 'finishedAt': iso(wall())}, 0
-            except Exception:
-                return {**record, 'final': 'unknown', 'code': 'RESULT_RESPONSE_INVALID', **timing, 'finishedAt': iso(wall())}, 0
+            except Exception as error:
+                reason = error.args[0] if isinstance(error, ProbeError) and error.args and isinstance(error.args[0], str) else type(error).__name__
+                detail = {**describe(code_http, body, wall(), expiry), 'reason': reason,
+                          'requestIdMatches': isinstance(body, dict) and body.get('requestId') == job_id}
+                return {**record, 'final': 'unknown', 'code': 'RESULT_RESPONSE_INVALID', 'diagnostic': detail, **timing,
+                        'finishedAt': iso(wall())}, 0
         sleep(POLL_SECONDS)
     return {**record, 'final': 'unknown', 'code': 'POLL_DEADLINE_REACHED', 'totalSeconds': round(monotonic() - sent, 2),
             'finishedAt': iso(wall())}, 0
 
 
-def run(client, entries, results_path, *, budget, limit=None, monotonic=time.monotonic, wall=time.time, sleep=time.sleep,
-        out=sys.stdout):
+def run(client, entries, results_path, *, budget, limit=None, retry_unknown=False, monotonic=time.monotonic, wall=time.time,
+        sleep=time.sleep, out=sys.stdout):
     run_id = secrets.token_hex(16)
     probe = 'gateway-eval-%s-p' % run_id
     require(load.idle_state(client, probe) != 'not_ready', 'GATEWAY_NOT_READY')
-    done = read_done(results_path)
+    done = read_done(results_path, retry_unknown=retry_unknown)
     todo = [(index, entry) for index, entry in enumerate(entries) if entry['caseId'] not in done]
     if limit is not None:
         todo = todo[:limit]
@@ -201,7 +245,8 @@ def run(client, entries, results_path, *, budget, limit=None, monotonic=time.mon
             name = record['final'] if record['final'] == 'accepted' else record['final'] + ':' + record['code']
             counts[name] = counts.get(name, 0) + 1
             print(json.dumps({'n': len(done) + sum(counts.values()), 'of': len(entries), 'outcome': name,
-                              'action': record.get('response', {}).get('action'), 'seconds': record.get('totalSeconds')},
+                              'action': record.get('response', {}).get('action'), 'seconds': record.get('totalSeconds'),
+                              **({'diagnostic': record['diagnostic']} if 'diagnostic' in record else {})},
                              separators=(',', ':')), file=out, flush=True)
             # A blocked answer is a model outcome; anything else unexpected is infrastructure.
             infra = 0 if record['final'] == 'accepted' or record.get('code') in load.MODEL_OUTCOME_CODES else infra + 1
@@ -221,6 +266,8 @@ def main():
     parser.add_argument('--hourly-budget', type=int, default=DEFAULT_BUDGET,
                         help=f'Own submissions per rolling hour, 1 to {MAX_BUDGET} (default {DEFAULT_BUDGET}).')
     parser.add_argument('--limit', type=int, help='Collect at most this many remaining cases (a short trial).')
+    parser.add_argument('--retry-unknown', action='store_true',
+                        help='Send cases recorded as unknown again (each may already have run once).')
     args = parser.parse_args()
     refusal = None if args.execute_model else 'EXPLICIT_MODEL_FLAG_REQUIRED'
     if refusal is None and not (LABEL.fullmatch(args.label) and 1 <= args.hourly_budget <= MAX_BUDGET
@@ -236,7 +283,7 @@ def main():
         with os.fdopen(descriptor, 'r+b') as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = run(base.PublicClient(key, service), entries, EVAL_DIR / (args.label + '-results.jsonl'),
-                         budget=args.hourly_budget, limit=args.limit)
+                         budget=args.hourly_budget, limit=args.limit, retry_unknown=args.retry_unknown)
         print(json.dumps(result, separators=(',', ':')))
         return 0 if result['status'] in ('completed', 'partial') else 1
     except (Exception, KeyboardInterrupt) as error:

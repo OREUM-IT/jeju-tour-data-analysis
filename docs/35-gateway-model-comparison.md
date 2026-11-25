@@ -47,7 +47,7 @@ Langflow 로그인을 쓰는 적용·되돌리기 명령 사이에는 1분쯤 �
 cd ~/oreumit-agent && git fetch origin refs/heads/main:refs/remotes/origin/main && git merge --ff-only origin/main
 ```
 
-1. 문항·계획 만들기(모델·네트워크 없음). `sameAsLocalHeldOut:true`와 `planSha256: cfc257de…`가 나와야 한다.
+1. 문항·계획 만들기(모델·네트워크 없음). `sameAsLocalHeldOut:true`(정답 해시 `8c2d8299…bd9b`)가 나와야 한다. `planSha256`은 카탈로그 파일 해시도 묶으므로 서버마다 다를 수 있다(AWS 2026-11-25: `22817d44…`). 두 모델은 같은 서버 계획으로 재므로 비교에는 영향이 없다.
 ```bash
 cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh prepare
 ```
@@ -99,6 +99,14 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 cd ~/oreumit-agent && cat deploy/gateway-eval-reports/gpt-report.json deploy/gateway-eval-reports/gpt-collection.json deploy/gateway-eval-reports/gemini-report.json deploy/gateway-eval-reports/gemini-collection.json
 ```
    토큰·호출 수는 [32 문서의 확인 SQL](32-agent-gateway-tunnel.md#지연토큰부하-측정-도구)로 함께 본다(`model` 열로 두 흐름이 나뉜다).
+
+### 결과를 해석하지 못했을 때 (`unknown:RESULT_RESPONSE_INVALID`)
+
+2026-11-25 AWS 첫 시험 2건이 2~4초 만에 이 결과로 끝났다(사용자 제공 출력). 수집기는 Gateway 응답이 예상 형식과 다르면 다시 보내지 않고 `unknown`으로 적는다. 이제 그 줄에 `diagnostic`(HTTP 상태, 응답 항목 이름, 상태·오류 코드·동작 같은 정해진 값, 장소 수)을 함께 적고 화면에도 보인다. 장소 ID와 질의 원문은 적지 않는다. 원인을 고친 뒤 `--retry-unknown`을 붙이면 `unknown`으로 끝난 문항만 다시 보낸다(이미 한 번 실행됐을 수 있어 유료 호출이 1건씩 더 든다).
+
+```bash
+cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh collect gpt --limit 2 --retry-unknown
+```
 
 ## 4. 남는 것과 지우는 것
 
