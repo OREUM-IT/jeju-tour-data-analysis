@@ -119,7 +119,16 @@ OPENAI_GET_LLM = '''def _get_llm(self):
 # The first rule-action build (main@fbd0a31) asked for reasoning_effort="low" and every
 # OpenAI call was refused. It stays a known stored graph so the switch and the rollback
 # can still move a server that has it to the fixed build or back to the 8-call build.
-OPENAI_GET_LLM_LOW = OPENAI_GET_LLM.replace('reasoning_effort="none"', 'reasoning_effort="low"')
+OPENAI_GET_LLM_LOW = OPENAI_GET_LLM.replace(
+    """    Streaming stays on for the Agent event contract. gpt-5.4 models reject function
+    tools on Chat Completions unless reasoning_effort is "none" (HTTP 400, param
+    reasoning_effort, seen on AWS 2026-11-25); the server makes every decision and
+    the model only picks place IDs, so no reasoning tokens are requested.
+""", """    Streaming stays on for the Agent event contract; reasoning tokens share the
+    output budget, so effort stays low.
+""").replace('reasoning_effort="none"', 'reasoning_effort="low"')
+# Exactly the text stored on AWS by main@fbd0a31; a test pins it.
+OPENAI_GET_LLM_LOW_SHA256 = '4c438e372c81a86e16354eb1b50ae49efce435f363ff00149068632f503926b8'
 LIMIT_LINE = '            middleware.append(ModelCallLimitMiddleware(run_limit=run_limit))\n'
 GUARDED_LIMIT_LINES = ('            middleware.append(_GatewayFinalAnswerMiddleware(run_limit=run_limit))\n'
                        + LIMIT_LINE)
