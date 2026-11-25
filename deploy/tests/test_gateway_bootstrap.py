@@ -2,6 +2,7 @@ import ast
 import asyncio
 import contextlib
 import copy
+import hashlib
 import datetime as dt
 import importlib.util
 import io
@@ -570,7 +571,11 @@ class GatewayBootstrapTests(unittest.TestCase):
         code = lambda flow: agent_fields(flow)['code']['value']
         self.assertIn('reasoning_effort="none"', code(rule))
         self.assertNotIn('reasoning_effort="low"', code(rule))
-        self.assertEqual(code(low), code(rule).replace('reasoning_effort="none"', 'reasoning_effort="low"'))
+        # The stored AWS graph came from main@fbd0a31: its method text, docstring included, is pinned.
+        self.assertEqual(hashlib.sha256(gateway.OPENAI_GET_LLM_LOW.encode()).hexdigest(), gateway.OPENAI_GET_LLM_LOW_SHA256)
+        self.assertEqual(gateway.OPENAI_GET_LLM_LOW_SHA256, '4c438e372c81a86e16354eb1b50ae49efce435f363ff00149068632f503926b8')
+        self.assertIn('reasoning_effort="low"', code(low))
+        self.assertIn('so effort stays low', code(low))
         for store in (True, False):
             for mode, target, expected in (('rule-action', 'rule-action', rule), ('rule-action-rollback', 'vertex-8-call', budget)):
                 with self.subTest(store=store, mode=mode):
