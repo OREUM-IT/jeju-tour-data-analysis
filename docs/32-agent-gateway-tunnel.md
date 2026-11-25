@@ -478,7 +478,7 @@ SQL
 
 ## 규칙 동작 흐름과 gpt-5.4-mini 전환
 
-2026-11-22 구현·로컬 검증 기록이다. **AWS 적용과 실제 gpt-5.4-mini 호출은 아직 하지 않았다.**
+2026-11-22 구현·로컬 검증 기록이다. **2026-11-25 사용자 AWS 적용은 [성공](#aws-적용-결과사용자-제공-출력-2026-11-25)했고, 실제 gpt-5.4-mini 호출은 아직 확인하지 않았다.**
 
 ### 왜 바꾸는가
 
@@ -591,6 +591,32 @@ MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 �
 
 적용은 모델을 실행하지 않는다. 적용 뒤 로그인한 웹 사용자로 추천 1건을 확인하고, 실행이 쌓이면 위 [확인 SQL](#적용-전후-확인-sql)로 전환 전후를 비교한다. 이 전환도 흐름의 `updated_at`을 바꾸므로 기간 경계가 이 시각으로 옮겨진다. 수락 결과의 `action`은 서버가 조립한 값이다.
 
+
+### AWS 적용 결과(사용자 제공 출력, 2026-11-25)
+
+사용자가 AWS SSH에서 `main@6898212`(#31·#32에 #33~#35 포함)로 실행한 출력이다. 작성자의 직접 원격 실행 결과가 아니다.
+
+| 단계 | 사용자 제공 출력 |
+|---|---|
+| 키 등록 | `set-openai-key.sh` 실행. 확인 모드가 키 확인을 통과해 저장 흐름 비교까지 갔으므로 `JEJU_OPENAI_API_KEY`가 등록돼 있었다 |
+| 적용 전 확인(`--verify-only`) | `GATEWAY_EXISTING_FLOW_DIFFERS`(phase=flow_check). 아직 적용 전이라 예상된 실패이며 아무것도 바뀌지 않았다 |
+| 적용 전 흐름(`--check-flow`) | `build:vertex-8-call`, `messageStore:false`(#35의 메시지 저장 끔이 이미 적용된 상태) |
+| MCP 이미지 | 빌드 1.5초, 유휴 확인(작업 0·activeScopes 0·`maxConcurrent:2`) 뒤 `jeju-mcp` Healthy |
+| 설치된 MCP 오프라인 조립 검사 | `rule-action-offline-runtime`, 981곳, `composedFromSelection:true` |
+| 흐름 교체 | 두 번째 유휴 확인 뒤 `build:rule-action`, `messageStore:false`, `flowStatus:updated`, `settingsChanged:true` |
+| Gateway | `agent-gateway`만 재생성, 16.5초에 Healthy |
+| 흐름 고정·공개 인증·큐 | `gateway-rule-action-checked`, `scope:public`·`runtimeChecked:true`, `queue-runtime-ready` |
+| 마무리 | `markerCleared:true` → `agent-rule-action-applied`, `model:gpt-5.4-mini`, `modelExecuted:false` |
+
+- 메시지 저장 끔(#35)은 흐름 교체 뒤에도 유지됐다(`messageStore:false`).
+- 흐름 ID·Gateway API 키는 바뀌지 않았다. Langflow·DB·cloudflared는 재시작하지 않았다.
+- 이 적용은 모델을 실행하지 않았다.
+- 아직 확인하지 않은 것:
+  - 실제 gpt-5.4-mini 호출이 Langflow 1.13.3 Agent에서 동작하는지
+  - 웹 추천 결과
+  - 차단·장소 포함 비율, 지연, 비용
+- 다음은 로그인한 웹 사용자 추천 1건과, 실행이 쌓인 뒤의 확인 SQL 비교다.
+- `productionReady:false`를 유지한다.
 ### 확인과 되돌리기
 
 규칙 흐름 상태만 재시작 없이 확인한다. 적용 뒤에는 `apply-agent-call-budget.sh --verify-only`가 저장 흐름 불일치로 실패하므로 이 명령을 쓴다.
