@@ -60,6 +60,11 @@ class FakeGateway:
         outcome, started, _ = self.jobs[job]
         if self.clock.elapsed - started < self.duration:
             return 202, self.pending(job, 'running')
+        if outcome == 'odd':
+            return 200, {'schemaVersion': '1.0', 'status': 'accepted', 'requestId': job, 'catalogVersion': VERSION,
+                         'policyVersion': 'recommendation-validation-v1', 'productionReady': False, 'extra': SECRET_PLACE,
+                         'response': {'schemaVersion': '1.0', 'requestId': job, 'action': 'recommend', 'placeIds': [SECRET_PLACE],
+                                      'requirementClaims': [], 'confirmationNotice': False, 'noticeTopics': []}}
         if outcome == 'accepted':
             return 200, {'schemaVersion': '1.0', 'status': 'accepted', 'requestId': job, 'catalogVersion': VERSION,
                          'policyVersion': 'recommendation-validation-v1', 'productionReady': False,
@@ -128,6 +133,23 @@ class CollectorTest(unittest.TestCase):
         result, _ = self.collect(gateway, [entry(i) for i in range(4)], budget=45)
         self.assertEqual((result['status'], result['stoppedReason']), ('stopped', 'CONSECUTIVE_INFRASTRUCTURE_FAILURES'))
         self.assertEqual(len(gateway.posts), 3)
+
+    def test_unexpected_reply_is_described_without_values_and_can_be_retried(self):
+        gateway = FakeGateway(self.clock, ['odd', 'accepted'])
+        result, out = self.collect(gateway, [entry(0)], budget=45)
+        self.assertEqual(result['outcomesThisRun'], {'unknown:RESULT_RESPONSE_INVALID': 1})
+        detail = self.lines()[0]['diagnostic']
+        self.assertEqual(detail['http'], 200)
+        self.assertIn('extra', detail['bodyKeys'])
+        self.assertEqual((detail['status'], detail['action'], detail['placeCount'], detail['requestIdMatches']), ('accepted', 'recommend', 1, True))
+        self.assertEqual(detail['reason'], 'RESULT_RESPONSE_INVALID')
+        self.assertNotIn(SECRET_PLACE, out)
+        self.assertNotIn(SECRET_PLACE, json.dumps(detail))
+        result, _ = self.collect(gateway, [entry(0)], budget=45)
+        self.assertEqual(result['submissionsThisRun'], 0)
+        result, _ = self.collect(gateway, [entry(0)], budget=45, retry_unknown=True)
+        self.assertEqual(result['outcomesThisRun'], {'accepted': 1})
+        self.assertEqual(len(gateway.posts), 2)
 
     def test_requires_explicit_flag(self):
         out = io.StringIO()
