@@ -39,6 +39,9 @@ REFUSED_WAIT_SECONDS = {'RATE_LIMITED': 120, 'BUSY': 30, 'QUEUE_FULL': 30}
 MAX_CASES = 96
 DEFAULT_BUDGET, MAX_BUDGET = 45, 50
 POLL_SECONDS = 2
+# Edge statuses a job read may meet without reaching the Gateway (Cloudflare 5xx and 52x).
+EDGE_TRANSIENT = frozenset((502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530))
+EDGE_RETRY_SECONDS = 5
 MAX_REFUSED_WAIT_SECONDS = 3600
 STOP_AFTER_CONSECUTIVE_INFRA_FAILURES = 3
 
@@ -182,6 +185,12 @@ def collect_case(client, entry, subject, *, monotonic, wall, sleep):
         now = monotonic()
         if read is not None:
             code_http, body = read
+            # A read answered by the edge (e.g. a Cloudflare 502 page) carries no Gateway error code.
+            # It says nothing about the job, so it is treated like a lost read: wait and read again.
+            if code_http in EDGE_TRANSIENT and load.error_code(body) is None:
+                record['edgeRetries'] = record.get('edgeRetries', 0) + 1
+                sleep(EDGE_RETRY_SECONDS)
+                continue
             timing = {}
             try:
                 if code_http == 202:

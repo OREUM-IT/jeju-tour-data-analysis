@@ -39,6 +39,7 @@ class FakeGateway:
     def __init__(self, clock, outcomes, *, duration=10):
         self.clock, self.outcomes, self.duration = clock, list(outcomes), duration
         self.jobs, self.posts, self.subjects = {}, [], []
+        self.edge_failures = 0
 
     def request(self, method, path, subject, payload=None, *, timeout=20):
         assert collector.SUBJECT.fullmatch(subject), subject
@@ -58,6 +59,9 @@ class FakeGateway:
             return 202, self.pending(job, 'running')
         job = path.rsplit('/', 1)[1]
         outcome, started, _ = self.jobs[job]
+        if self.edge_failures:
+            self.edge_failures -= 1
+            return 502, {'cloudflare_error': True, 'status': 502, 'title': 'Bad gateway', 'retryable': True}
         if self.clock.elapsed - started < self.duration:
             return 202, self.pending(job, 'running')
         if outcome == 'odd':
@@ -149,6 +153,17 @@ class CollectorTest(unittest.TestCase):
         self.assertEqual(result['submissionsThisRun'], 0)
         result, _ = self.collect(gateway, [entry(0)], budget=45, retry_unknown=True)
         self.assertEqual(result['outcomesThisRun'], {'accepted': 1})
+        self.assertEqual(len(gateway.posts), 2)
+
+    def test_edge_error_on_a_read_is_read_again_not_recorded(self):
+        gateway = FakeGateway(self.clock, ['accepted', 'GATEWAY_UNAVAILABLE'])
+        gateway.edge_failures = 2
+        result, _ = self.collect(gateway, [entry(0), entry(1)], budget=45)
+        records = self.lines()
+        self.assertEqual(result['outcomesThisRun'], {'accepted': 1, 'failed:GATEWAY_UNAVAILABLE': 1})
+        self.assertEqual(records[0]['edgeRetries'], 2)
+        # A Gateway error code on the same status is still a result, and POSTs are never repeated.
+        self.assertEqual(records[1]['code'], 'GATEWAY_UNAVAILABLE')
         self.assertEqual(len(gateway.posts), 2)
 
     def test_requires_explicit_flag(self):
