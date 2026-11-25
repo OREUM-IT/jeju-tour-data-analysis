@@ -1,6 +1,6 @@
 # 제한 Agent Gateway와 Cloudflare Access·Tunnel 연결
 
-2026-11-25에는 AWS Gateway 흐름이 사용자 실행으로 세 번 바뀌었다(모두 사용자 제공 출력). 먼저 **[Langflow 메시지 저장 끄기](#langflow-메시지-저장-끄기와-오래된-원문-정리)**를 [적용](#저장-끔-aws-적용-결과2026-11-25-사용자-제공-출력)했다. 적용 직전 저장된 빌드는 `vertex-8-call`(Gemini 8회)이었고, `agent-gateway`만 재생성됐으며 모델은 실행하지 않았다. 이어서 [규칙 동작 흐름을 적용](#aws-적용-결과사용자-제공-출력-2026-11-25)했고(PR #36), 도구 이름 문제로 실제 호출 전에 `--rollback`했다([PR #37](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/37) 기록, 이 문단을 쓸 때 병합 전). 두 변경 모두 `messageStore:false`를 유지했다. 적용 뒤 실제 웹 추천이 메시지를 남기지 않는지는 사용자가 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)을 실행하기 전까지 미확인이다. 아래 2026-11-21 문단은 이전 기록이다.
+2026-11-25에는 AWS Gateway 흐름이 사용자 실행으로 세 번 바뀌었다(모두 사용자 제공 출력). 먼저 **[Langflow 메시지 저장 끄기](#langflow-메시지-저장-끄기와-오래된-원문-정리)**를 [적용](#저장-끔-aws-적용-결과2026-11-25-사용자-제공-출력)했다. 적용 직전 저장된 빌드는 `vertex-8-call`(Gemini 8회)이었고, 재생성은 `up 1/1`(helper가 `agent-gateway`만 재생성)이었으며 모델은 실행하지 않았다. 이어서 [규칙 동작 흐름을 적용](#aws-적용-결과사용자-제공-출력-2026-11-25)했고(PR #36), 도구 이름 문제로 실제 호출 전에 `--rollback`했다([PR #37](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/37) 기록, 이 문단을 쓸 때 병합 전). 두 변경 모두 `messageStore:false`를 유지했다. 적용 뒤 실제 웹 추천이 메시지를 남기지 않는지는 사용자가 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)을 실행하기 전까지 미확인이다. 아래 2026-11-21 문단은 이전 기록이다.
 
 2026-11-21 변경은 **[모델 호출 예산 조정](#모델-호출-예산-조정)**이다. Gateway 흐름의 모델 호출을 8회로 늘리고 마지막 호출을 답변 전용으로 바꾼다. PR #21·#22는 main에 병합됐고, 2026-11-21 사용자가 AWS에서 `main@ce2f657` 적용 성공 출력을 제공했다(모델 미실행). 실제 웹 요청의 차단 감소는 아직 확인하지 않았다. 직전 변경은 **[요청 큐와 동시 처리 업데이트](#요청-큐와-동시-처리-업데이트)**다. 기존 PR #19의 후보 복구를 포함해 MCP·Gateway를 함께 갱신한다. 이미 연결된 AWS에서는 아래 최초 설치·Langflow bootstrap을 반복하지 않는다. 기본 동시 2건은 설정·코드 상한이며, 사용자 AWS 8GB에서 실제 모델 2건을 동시에 실행해 성능을 확인한 결과는 아니다.
 
@@ -593,7 +593,7 @@ MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 �
 {"status":"passed","scope":"agent-rule-action-applied","model":"gpt-5.4-mini","modelCallLimit":8,"services":["jeju-mcp","agent-gateway"],"modelExecuted":false,"productionReady":false}
 ```
 
-적용은 모델을 실행하지 않는다. 적용 뒤 로그인한 웹 사용자로 추천 1건을 확인하고, 실행이 쌓이면 위 [확인 SQL](#적용-전후-확인-sql)로 전환 전후를 비교한다. 이 전환도 흐름의 `updated_at`을 바꾸므로 기간 경계가 이 시각으로 옮겨진다. 수락 결과의 `action`은 서버가 조립한 값이다.
+적용은 모델을 실행하지 않는다. 적용 뒤 로그인한 웹 사용자로 추천 1건을 확인하고, 실행이 쌓이면 위 [확인 SQL](#적용-전후-확인-sql)로 전환 전후를 비교한다. 이 전환도 흐름의 `updated_at`을 바꾸므로 기간 경계가 이 시각으로 옮겨진다. 수락 결과의 `action`은 서버가 조립한 값이다. 2026-11-25 메시지 저장 끔 뒤에는 그 SQL로 전후를 비교할 수 없다. 저장 끔은 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)로 확인하고, 비율은 [지연·토큰 집계 SQL](#지연토큰-집계-sql) [2]의 `model`별 `accepted`·`blocked`·`agent_error`로 본다.
 
 
 ### AWS 적용 결과(사용자 제공 출력, 2026-11-25)
@@ -636,8 +636,8 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 ```
 
 되돌리기를 검토할 기준은 위 예산 조정과 같다. 적용 후 20건 이상이 쌓인 뒤 비율로 판단한다. 2026-11-25 메시지 저장 끔 적용 뒤에는 이전 확인 SQL의 `after_flow_change` 비율을 쓸 수 없다. 위 [예산 조정의 기준](#적용-전후-확인-sql) 끝의 안내대로 [지연·토큰 집계 SQL](#지연토큰-집계-sql) [2]의 날짜·모델별 비율로 본다. 규칙 동작 실행과 Vertex 실행은 `model` 열로 구분한다.
-- `blocked_pct`가 줄지 않는다.
-- `agent_error_pct`가 늘어난다. OpenAI 인증·한도 오류(401·429)도 Agent 오류로 나타난다.
+- 차단 비율이 줄지 않는다. 이전 SQL의 `blocked_pct`, 저장 끔 뒤에는 지연·토큰 SQL의 `blocked`/`runs`다.
+- Agent 오류 비율이 늘어난다. 이전 SQL의 `agent_error_pct`, 저장 끔 뒤에는 `agent_error`/`runs`다. OpenAI 인증·한도 오류(401·429)도 Agent 오류로 나타난다.
 - 지연이나 비용을 받아들일 수 없다.
 
 `productionReady:false`를 유지한다.
@@ -922,7 +922,7 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I
 
 ## Langflow 메시지 저장 끄기와 오래된 원문 정리
 
-2026-11-24 구현·작업 환경 검증과 2026-11-25 사용자 AWS 적용 기록이다. **작성자는 AWS·Supabase·모델 공급자에 아무것도 실행하지 않았다.** 적용은 사용자가 아래 명령으로 했다([적용 결과](#저장-끔-aws-적용-결과2026-11-25-사용자-제공-출력)). 같은 날 그 뒤의 규칙 동작 적용과 되돌리기도 저장 끔을 유지했다. [적용 뒤 확인 SQL](#적용-뒤-확인-sql)과 정리 도구의 실행 결과는 아직 받지 않았다.
+2026-11-24 구현·작업 환경 검증과 2026-11-25 사용자 AWS 적용 기록이다. **작성자는 AWS·Supabase·모델 공급자에 아무것도 실행하지 않았다.** 적용은 사용자가 아래 명령으로 했다([적용 결과](#저장-끔-aws-적용-결과2026-11-25-사용자-제공-출력)). 같은 날 그 뒤의 규칙 동작 적용(PR #36)과 되돌리기([PR #37](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/37) 기록, 병합 전)도 저장 끔을 유지했다. [적용 뒤 확인 SQL](#적용-뒤-확인-sql)과 정리 도구의 실행 결과는 아직 받지 않았다.
 
 ### 왜 바꾸는가
 
@@ -977,13 +977,13 @@ Langflow 1.13.3의 Chat Input·Chat Output은 기본값이 `should_store_message
   - 정리 도구 `--older-than-days 1`: 건수 보기는 `older` 0·`keptNewer` 3·모든 `toRedact` 0이었다. `--execute`의 JSON은 확인 명령으로 바로 넘어가 로그에 나오지 않는다. 그 확인(`changed:false`)이 실패하면 단계가 실패하므로, 단계가 성공한 것으로 통과를 안다.
   - 위 값으로 본 해석이다. CI 실행 3건은 모두 Agent 오류로 끝났다(`runHttpStatus:500`, 지연·토큰 SQL의 `agent_error` 3). 그래서 수락·차단 실행의 Chat Output 경로는 CI에서 실행되지 않았다.
 - **병합**(GitHub PR 기록): PR #35의 다섯 검사(bootstrap, private-gateway, Local MCP/HF/Ollama, Offline documents, private-langflow)는 모두 성공이었다. 사용자가 2026-11-25 01:03~01:04 UTC에 앱 PR #77과 PR #35를 병합했다(main `6898212`).
+- **PR #38의 CI**: 적용 뒤 확인 SQL 단계가 실행 45552152805(작업 `private-gateway` 138995589334, 머리 커밋 `305a857`)에서 PostgreSQL 17 이미지의 일회용 DB로 처음 실행돼 통과했다. [1] 흐름 1, [2] `t` 1건(Agent 오류 1)·`f` 2건(Agent 오류 2), [3] `t` 저장 0·오류 1, `f` 저장 1·오류 2, [4] `f`·빈칸이었다. 가짜 Vertex 자격증명이라 경계 뒤 실행이 Agent 오류뿐이어서 판정은 빈칸이다.
 - **AWS 적용**: 2026-11-25(KST) 사용자가 적용했다. 출력은 아래 [AWS 적용 결과](#저장-끔-aws-적용-결과2026-11-25-사용자-제공-출력)에 있다. 적용 직전 AWS에 저장된 빌드는 `vertex-8-call`이었다. 같은 날 그 뒤의 규칙 동작 적용(PR #36)과 되돌리기([PR #37](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/37) 기록)도 `messageStore:false`를 유지했다.
 - **아직 확인하지 않은 것**:
   - 적용 뒤 실제 웹 추천이 저장된 메시지를 남기지 않는지. 사용자가 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)을 실행하기 전까지 미확인이다.
   - 실제 OpenAI·Vertex 호출을 넣은 저장 끔 실행. 작업 환경에서 규칙 동작 빌드는 가짜 OpenAI 서버로, 8회 Vertex 빌드는 가짜 자격증명으로 실행했다. CI도 가짜 Vertex 자격증명이었다.
   - AWS에서 저장 끔 상태로 최종 검증·Chat Output까지 간 실행(빌드와 관계없이). 작업 환경에서 수락·차단 실행의 메시지 0행은 규칙 동작 빌드(가짜 OpenAI 서버)로만 확인했다. 8회 Vertex 빌드의 실행은 작업 환경과 CI 모두 가짜 자격증명이라 Agent 오류로 끝났다. Chat Output 노드가 두 빌드에서 같다는 것은 단위 테스트로만 안다. [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 `can_judge:t`·`passed:t`가 경계 뒤에 저장된 빌드의 첫 실행 확인이 된다.
   - AWS의 PostgreSQL 17에서 적용 뒤 확인 SQL과 정리 도구를 실행한 결과. 둘 다 받지 않았다. 지연·토큰 SQL은 [PR #37](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/37) 기록에 AWS 결과 요약("11-22 이후 실행 없음")만 있고 표는 이 문서에 없다. 저장 끔 적용 helper는 이 SQL들과 정리 도구를 실행하지 않는다(흐름은 Langflow API로 읽고 PATCH했다). 일회용 PostgreSQL 17에서는 위 CI가 지연·토큰 SQL과 정리 도구를 실행했다.
-  - 적용 뒤 확인 SQL의 CI 단계. 이 SQL을 더한 변경의 첫 CI 실행에서 처음 돈다.
 
 ### AWS에 적용할 명령
 
@@ -1064,8 +1064,8 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 받지 못한 것과 그대로 남은 것이다.
 
 - **적용 전 이전 기록 표를 받지 못했다.** 위 명령 앞에서 보관하라고 한 [적용 전후 확인 SQL](#적용-전후-확인-sql)의 [1]~[4] 표는 붙여 주지 않았다.
-- 정리 도구는 실행하지 않았다(받은 출력은 적용 helper뿐이다). 그래서 저장 끔 이전의 `message` 행(요청 JSON의 설문 원문, 최종 출력)과 span 원문은 AWS에 그대로 있다. `transaction`·`vertex_build`는 Langflow의 건수 정리(흐름마다 최신 3000행, 구성 요소마다 최신 50회) 범위 안에서만 남아 있다.
-- 이전 확인 SQL의 경계는 이제 마지막 흐름 변경 시각이다(아래 "같은 날 그 뒤의 흐름 변경"). 지금 실행하면 그 이전의 실행은 모두 `before_flow_change`로 나온다. 차단 코드별 내역(`VALIDATION_FAILED` 등)과 `with_places`는 남은 최종 검증 메시지에서, `limit_notice`는 남은 span 원문에서 센다.
+- 정리 도구를 실행한 출력은 받지 않았다(받은 출력은 적용 helper뿐이다). 실행하지 않았다면 저장 끔 이전의 `message` 행(요청 JSON의 설문 원문, 최종 출력)과 span 원문은 AWS에 그대로 있다. `transaction`·`vertex_build`는 Langflow의 건수 정리(흐름마다 최신 3000행, 구성 요소마다 최신 50회) 범위 안에서만 남아 있다.
+- 이전 확인 SQL의 경계는 이제 마지막 흐름 변경 시각이다(위 "같은 날 그 뒤의 흐름 변경"). 지금 실행하면 그 이전의 실행은 모두 `before_flow_change`로 나온다. 차단 코드별 내역(`VALIDATION_FAILED` 등)과 `with_places`는 남은 최종 검증 메시지에서, `limit_notice`는 남은 span 원문에서 센다.
   - `model_calls`가 5 이상인 행은 여전히 8회 흐름의 실행이다. 4 이하인 행에는 4회 흐름의 실행과 4회 안에 끝난 8회 흐름의 실행이 섞여 있어 이 SQL로는 나눌 수 없다. 날짜로 나눠 보려면 [지연·토큰 집계 SQL](#지연토큰-집계-sql)의 `kst_day`를 본다. 8회 적용일인 2026-11-21에는 두 흐름이 섞일 수 있다.
   - [3]에는 `after_flow_change` 행이 나올 수 있다. 저장 끔 뒤에는 오류로 끝난 실행만 메시지를 남기므로 이 행의 `agent_error_pct`는 100%로 나온다. 오류가 늘었다는 뜻이 아니다. [2]·[4]에는 이 행이 없다. 이전 기록으로는 `before_flow_change` 행만 쓴다.
 - 그 표를 지금 뽑아 둘지는 사용자가 정한다. [정리 도구](#오래된-원문-정리선택)를 `--execute`로 실행하면 N일 지난 실행이 그 표에서 빠진다. 그래서 `--execute`는 이 결정 뒤로 미룬다. 건수만 보는 실행(`--execute` 없음)은 아무것도 바꾸지 않는다.
@@ -1177,7 +1177,8 @@ SQL
 - 경계는 이름이 정확히 `제주 관광 Agent v2 — Gateway 제한 실행`인 흐름의 `updated_at`이다. [이전 확인 SQL](#적용-전후-확인-sql)과 같은 방법이다. 적용 helper도 같은 이름으로 흐름을 찾는다.
   - Langflow 1.13.3은 흐름을 만들거나 고칠 때만 이 시각을 바꾼다. helper의 PATCH와 Langflow 화면의 저장이 그렇다. 내용이 같은 저장도 바꾼다. 흐름 실행(`/api/v1/run`)과 메시지·추적 기록은 바꾸지 않는다. Langflow를 다시 시작해도 이 흐름의 시각은 바뀌지 않는다(아래 [확인 범위](#적용-뒤-확인-sql을-확인한-범위)).
   - 그래서 [1]의 시각은 마지막으로 흐름을 바꾼 helper를 실행한 때여야 한다. 2026-11-25에는 저장 끔 적용, 규칙 동작 적용(PR #36), 되돌리기([PR #37](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/37) 기록) 순으로 세 번 바뀌었고 셋 다 저장 끔을 유지했다. 그 뒤 규칙 동작을 다시 적용했다면 그 시각이다. UTC라 KST보다 9시간 이르게 나온다. helper 출력에는 시각이 없으므로 사용자가 그 helper를 실행한 때와 비교한다. 그보다 몇 분 이상 늦으면 그 뒤에 흐름이 다시 바뀐 것이다(예: Langflow 화면에서 흐름 저장).
-  - 이미 저장 끔인 흐름에 적용 helper를 다시 실행하면(`already-current`) 흐름을 고치지 않으므로 경계가 그대로다. `--rollback`과 빌드를 바꾸는 helper(`apply-agent-call-budget.sh`, `apply-agent-rule-action.sh`)는 경계를 옮긴다.
+  - 경계는 helper 진행 줄이 `flowStatus:"updated"`일 때만, 즉 흐름을 PATCH했을 때만 옮겨진다. 저장 끔·예산 조정·규칙 동작 helper의 적용과 `--rollback`이 모두 그렇다. 같은 흐름이 이미 저장돼 있으면(`already-current`) 어느 helper든 흐름을 고치지 않고, PATCH 전에 멈춘 실행(유휴 확인 실패, 키 없음, 저장 흐름 불일치 등)도 경계를 옮기지 않는다.
+  - [1]이 마지막으로 실행한 helper보다 이르면 그 helper는 흐름을 바꾸지 않은 것이고, 판정은 그 앞의 빌드를 본다. 이 SQL에는 모델 열이 없으므로, 판정한 실행이 어느 모델이었는지는 [지연·토큰 집계 SQL](#지연토큰-집계-sql) [2]의 `model` 열로 같은 날짜를 확인한다.
 - [2]는 실행 시작 시각으로 경계 앞뒤를 나눈다. `accepted`·`blocked`·`agent_error`·`no_final`은 지연·토큰 SQL의 같은 이름 열과 정의가 같다. `runs`는 그 합이다. `redacted`는 그중 [정리 도구](#오래된-원문-정리선택)가 원문을 지운 실행 수다. 지연·토큰 SQL [1]의 `redacted`와 같은 표지로 센다. 결과와 따로 세므로 위 합에는 들지 않는다.
 - [3]은 메시지가 쓰인 시각으로 나눈다.
   - `error_messages`: 구성 요소가 오류로 끝날 때 lfx가 저장 설정과 관계없이 남기는 메시지(`category`가 `error`)다. 저장 끔이어도 Agent 오류 실행마다 남을 수 있다.
@@ -1193,8 +1194,8 @@ SQL
 
 `passed:f`는 경계 뒤에 저장된 메시지가 있다는 뜻이다.
 
-- 되돌리기(`--rollback`) 뒤라면 `f`가 맞다.
-- 드물게, 적용 helper의 유휴 확인과 PATCH 사이 몇 초에 시작한 실행이 이전 그래프로 돌아 경계 뒤에 메시지를 남겼을 수도 있다. 이 실행은 [2]에서 `f` 행에 든다. 그렇다면 나중에 다시 실행해도 [3]의 `t` 행 `stored_messages`가 늘지 않는다. [2]의 `t` 행 실행이 늘 때 `stored_messages`도 함께 늘면 저장이 켜져 있는 것이다.
+- 저장 끔 helper의 `apply-agent-message-store-off.sh --rollback`(저장을 다시 켬) 뒤라면 `f`가 맞다. 규칙 동작·예산 조정 helper의 적용과 `--rollback`은 저장 끔을 유지한다. 그래서 그 뒤의 `f`는 저장이 켜져 있다는 뜻이다. 2026-11-25 규칙 동작 되돌리기 뒤도 그렇다.
+- 드물게, 저장 끔 적용 helper의 유휴 확인과 PATCH 사이 몇 초에 시작한 실행이 이전(저장 켬) 그래프로 돌아 경계 뒤에 메시지를 남겼을 수도 있다. 직전 그래프가 저장 켬이었던 전환, 즉 [1]이 저장 끔 적용 시각일 때만 해당한다. 앞뒤 그래프가 모두 저장 끔인 전환(2026-11-25 되돌리기, 그 뒤 재적용)에는 해당하지 않는다. 이 실행은 [2]에서 `f` 행에 든다. 그렇다면 나중에 다시 실행해도 [3]의 `t` 행 `stored_messages`가 늘지 않는다. [2]의 `t` 행 실행이 늘 때 `stored_messages`도 함께 늘면 저장이 켜져 있는 것이다.
 - 그 밖의 경우나 어느 쪽인지 모르겠으면 표를 그대로 붙여 준다.
 
 판단할 수 없는 경우다. 경계 뒤에 저장된 메시지가 없으면 이때 [4]의 `passed`는 빈칸이다. [2]·[3]의 0을 "저장하지 않았다"로 읽지 않는다.
@@ -1232,11 +1233,12 @@ SQL
   - Langflow가 시작할 때 도는 MCP 자동 설정(`auto_configure_starter_projects_mcp`)도 이 시각을 바꾼다. 다만 'Starter Project' 폴더에서 `mcp_enabled`가 비어 있는 흐름만 고친다. Gateway 흐름은 그 폴더에 있지만 bootstrap이 `mcp_enabled:false`로 만들고, PATCH는 그래프와 설명만 보낸다. 저장 끔 전환은 이 값까지 검토된 빌드와 같을 때만 바꾸므로, 2026-11-25 적용 출력(`flowStatus:"updated"`)으로 보아 AWS 흐름의 값도 `false`였다. 그래서 Langflow를 다시 시작해도 경계는 그대로다.
   - monitor API의 메시지 삭제(`delete_messages_session` 등)는 `message` 행만 지우고 `trace`·`span`은 남긴다. 위 "알아챌 수 없는 경우"의 근거다.
 - CI(`agent-gateway-docker.yml`)가 이 SQL을 일회용 Langflow DB에서 실행하도록 더했다. 마지막 저장 끔 전환 뒤를 본다. 흐름 1개, [2]·[3]의 `t`·`f` 두 행, 경계 뒤 저장된 메시지 0, 경계 뒤 오류 메시지 1 이상, 경계 앞 저장된 메시지 1 이상, [4]가 `f`·빈칸인지 확인한다. 실행 수는 확인하지 않는다. lfx가 오류 실행의 추적을 백그라운드 작업으로 기록하기 때문이다.
+  - PR #38의 CI 실행 45552152805(작업 `private-gateway` 138995589334, 머리 커밋 `305a857`)에서 처음 실행돼 통과했다(값은 위 [확인한 것과 하지 않은 것](#확인한-것과-하지-않은-것)).
   - 이 작업 환경에는 Docker 데몬이 없어 그 단계를 돌려 보지 못했다. 대신 그 단계의 명령을 CI와 같은 `bash -e`로, 명령 모양을 검사하는 가짜 `docker`와 위 사본으로 돌렸다.
   - CI와 같은 상태(경계 뒤 Agent 오류만, 저장 없음)의 사본 3개에서는 통과했다.
   - 다음 12개에서는 실패했다: 마지막 실행이 요청을 저장함, 마지막 저장 끔 전환 없음, 저장 켬 실행이 저장하지 않음, 경계 뒤 메시지 없음, 흐름 없음, 흐름 2개(2개), 흐름 시각 없음, 경계 뒤 수락 실행([4]가 `t`·`t`), 경계 뒤 Agent 오류가 요청을 저장함, 모든 실행 뒤의 경계, 최근 저장 켬 실행만 남긴 정리 사본.
 - `deploy/tests/test_agent_message_store_check_sql.py`는 SQL 글자만 읽는 정적 검사다. 숫자가 맞는지는 확인하지 못한다. SQL을 고치면 숫자 대조를 다시 한다. 변이 26개를 SQL 파일과 위 명령에 함께 넣으면(문서만 다른 1개 포함) 모두 이 검사가 실패했다. 기간을 나누는 결합, 정리 제외, 판정, 표지 문자열, 시간 제한, 쓰기 문장 등이다. 처음 판의 검사에서 살아남던 결합 변이 5개도 들어 있다.
-- AWS(PostgreSQL 17)에서는 실행하지 않았다.
+- AWS에서는 실행하지 않았다. PostgreSQL 17에서는 위 CI의 일회용 DB로만 실행했다.
 
 ### 오래된 원문 정리(선택)
 
