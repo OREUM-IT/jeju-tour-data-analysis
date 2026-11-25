@@ -3,7 +3,7 @@ import { canonicalSha256 } from './evaluation-rng.mjs';
 import { EvaluationSetError } from './evaluation-set.mjs';
 import { validateResponse } from './evaluation-scoring.mjs';
 import { z } from 'zod';
-import { LOCAL_LLM_ADAPTER_VERSION, VALIDATED_BASELINE_ADAPTER_VERSION } from './validated-capture-binding.mjs';
+import { GATEWAY_ADAPTER_VERSION, LOCAL_LLM_ADAPTER_VERSION, VALIDATED_BASELINE_ADAPTER_VERSION } from './validated-capture-binding.mjs';
 
 export { LOCAL_LLM_ADAPTER_VERSION };
 
@@ -187,6 +187,32 @@ export function adaptLocalLlmResponse({ itemId, raw, review, measurements, reque
   return {
     response: normalizeResponse(itemId, result.data, measurements),
     normalization: { adapter: 'local-llm', adapterVersion: LOCAL_LLM_ADAPTER_VERSION, mode: 'structured',
+      rawOutputHash: baselineRawOutputHash(raw), review: null, requestMode: 'langflow-v2', runtimeRequestId: requestId,
+      reportedModel: raw.model },
+  };
+}
+
+/**
+ * Deployed Agent Gateway result (deploy/collect-gateway-eval.py). The Gateway has already passed its own
+ * final validation; this import keeps its decision fields unchanged and only swaps the Gateway's
+ * own gw- identity for the harness's opaque runtime requestId. No review override, no repair.
+ * modelId is the operator-declared model of the flow that was applied when the run was collected.
+ */
+export function adaptGatewayResponse({ itemId, raw, review, measurements, requestId } = {}) {
+  ensure(review === undefined, 'Gateway output cannot carry a review override');
+  ensure(text(requestId), 'Gateway import requires the original runtime requestId');
+  ensure(isRecord(raw) && raw.kind === 'jeju-gateway-output' && text(raw.model) && isRecord(raw.gateway) && isRecord(raw.response),
+    'Gateway import requires a jeju-gateway-output capture');
+  const gateway = raw.gateway;
+  ensure(gateway.status === 'accepted' && /^gw-[a-f0-9]{32}$/u.test(gateway.requestId ?? '')
+    && gateway.policyVersion === 'recommendation-validation-v1' && /^sha256:[a-f0-9]{64}$/u.test(gateway.catalogVersion ?? ''),
+  'Gateway output was not an accepted, versioned Gateway result');
+  ensure(raw.response.requestId === gateway.requestId, 'Gateway response names a different Gateway request');
+  const result = validatedResponseSchema.safeParse({ ...raw.response, requestId });
+  ensure(result.success, 'Gateway output violates the validated response schema');
+  return {
+    response: normalizeResponse(itemId, result.data, measurements),
+    normalization: { adapter: 'gateway', adapterVersion: GATEWAY_ADAPTER_VERSION, mode: 'structured',
       rawOutputHash: baselineRawOutputHash(raw), review: null, requestMode: 'langflow-v2', runtimeRequestId: requestId,
       reportedModel: raw.model },
   };

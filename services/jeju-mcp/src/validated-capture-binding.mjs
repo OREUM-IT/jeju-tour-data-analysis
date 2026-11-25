@@ -5,7 +5,9 @@ import { buildValidatedLangflowRequest, VALIDATED_REQUEST_ADAPTER_VERSION, VALID
 export const VALIDATED_BASELINE_ADAPTER_VERSION = 'langflow-v2-1.0.0';
 // Local open-model pipeline that consumes the same validated request and runtime final validation.
 export const LOCAL_LLM_ADAPTER_VERSION = 'local-llm-1.0.0';
-const VALIDATED_SYSTEMS = Object.freeze({ langflow: VALIDATED_BASELINE_ADAPTER_VERSION, local_llm: LOCAL_LLM_ADAPTER_VERSION });
+// The deployed Agent Gateway (production flow behind the signed queue) answering the same validated request.
+export const GATEWAY_ADAPTER_VERSION = 'gateway-1.0.0';
+const VALIDATED_SYSTEMS = Object.freeze({ langflow: VALIDATED_BASELINE_ADAPTER_VERSION, local_llm: LOCAL_LLM_ADAPTER_VERSION, gateway: GATEWAY_ADAPTER_VERSION });
 export const VALIDATED_REQUEST_MODE = 'langflow-v2';
 const PREFLIGHT_ID = 'baseline-preflight';
 const ensure = (condition, message) => { if (!condition) throw new Error(`Invalid validated capture: ${message}`); };
@@ -52,7 +54,7 @@ export function validateValidatedCapture(plan, capture, catalog) {
     return 'legacy';
   }
   ensure(Object.hasOwn(VALIDATED_SYSTEMS, capture.system?.id ?? '') && capture.system.adapterVersion === VALIDATED_SYSTEMS[capture.system.id],
-    'v2 request provenance requires the v2 Langflow or local LLM adapter');
+    'v2 request provenance requires the v2 Langflow, local LLM or Gateway adapter');
   ensure(same(capture.requestBinding, prepareValidatedCollection(plan, catalog)), 'request mode, catalog, grammar or prepared inputs changed');
   const cases = new Map(plan.cases.map((entry) => [entry.caseId, entry]));
   const seenIds = new Set();
