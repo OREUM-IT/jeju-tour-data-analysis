@@ -52,6 +52,28 @@ test('collected Gateway results import with failures kept and score as the gatew
   assert.ok(!JSON.stringify(collection).includes('gw-'));
 });
 
+test('seconds of results never seen stay out of the timing; a result hidden by an edge 504 counts as a timeout', () => {
+  const results = new Map(plan.cases.map((entry, index) => [entry.caseId, result(index)]));
+  const line = (index, values) => results.set(plan.cases[index].caseId, { caseId: plan.cases[index].caseId,
+    runtimeRequestId: requests[index].runtimeRequest.requestId, ...values });
+  // Shaped like the 2026-11-26 Gemini lines: the seconds run until the hidden result was dropped.
+  const lost = { final: 'failed', gatewayHttp: 404, totalSeconds: 371.5, queueWaitSeconds: 1, runSeconds: 370.5, edgeRetries: 60 };
+  line(1, { ...lost, code: 'JOB_NOT_FOUND' });
+  line(2, { ...lost, code: 'RESULT_HIDDEN_BY_EDGE', edgeStatus: 502 });
+  line(3, { ...lost, code: 'RESULT_HIDDEN_BY_EDGE', edgeStatus: 504 });
+  line(4, { final: 'failed', code: 'JOB_EXPIRED', gatewayHttp: 410, totalSeconds: 600 });
+  line(5, { final: 'unknown', code: 'POLL_DEADLINE_REACHED', totalSeconds: 720 });
+  line(6, { final: 'failed', code: 'RECOMMENDATION_BLOCKED', gatewayHttp: 422, totalSeconds: 30, queueWaitSeconds: 1, runSeconds: 29 });
+  const { capture, collection } = build(results);
+  const run = importCapture(plan, capture, { catalog: inputs.catalog });
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map((i) => run.records[i].error.code),
+    ['transport_error', 'transport_error', 'timeout', 'timeout', 'timeout', 'invalid_output']);
+  // Only the accepted answers (20 s) and the blocked one (30 s) are timed.
+  assert.deepEqual(collection.timingSeconds.totalSeconds, { count: plan.cases.length - 5, p50: 20, p95: 20, max: 30 });
+  assert.equal(collection.timingSeconds.runSeconds.max, 29);
+  assert.equal(collection.outcomes['failed:RESULT_HIDDEN_BY_EDGE'], 2);
+});
+
 test('Gateway import refuses mismatched identities, unversioned results, other models, reviews and foreign runs', () => {
   const fails = (overrides, pattern) => {
     const results = new Map(plan.cases.map((entry, index) => [entry.caseId, result(index, index === 0 ? overrides : {})]));

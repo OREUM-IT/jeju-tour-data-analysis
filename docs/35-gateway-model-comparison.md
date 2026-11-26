@@ -103,7 +103,7 @@ cd ~/oreumit-agent && cat deploy/gateway-eval-reports/gpt-report.json deploy/gat
 
 ### 결과를 해석하지 못했거나 Cloudflare가 가렸을 때
 
-2026-11-25 AWS 첫 시험 2건이 2~4초 만에 `unknown:RESULT_RESPONSE_INVALID`로 끝났다(사용자 제공 출력). 수집기는 Gateway 응답이 예상 형식과 다르면 다시 보내지 않고 `unknown`으로 적는다. 이제 그 줄에 `diagnostic`(HTTP 상태, 응답 항목 이름, 상태·오류 코드·동작 같은 정해진 값, 장소 수)을 함께 적고 화면에도 보인다. 장소 ID와 질의 원문은 적지 않는다. 원인을 고친 뒤 `--retry-unknown`을 붙이면 `unknown`으로 끝난 문항만 다시 보낸다(이미 한 번 실행됐을 수 있어 유료 호출이 1건씩 더 든다).
+2026-11-25 AWS 첫 시험 2건이 2~4초 만에 `unknown:RESULT_RESPONSE_INVALID`로 끝났다(사용자 제공 출력). 수집기는 Gateway 응답이 예상 형식과 다르면 다시 보내지 않고 `unknown`으로 적는다. 이제 그 줄에 `diagnostic`(HTTP 상태, 응답 항목 이름, 상태·오류 코드·동작 같은 정해진 값, 장소 수)을 함께 적고 화면에도 보인다. 장소 ID와 질의 원문은 적지 않는다. 원인을 고친 뒤 `--retry-unknown`을 붙이면 `unknown`으로 끝난 문항만 다시 보낸다(이미 한 번 실행됐을 수 있어 유료 호출이 1건씩 더 든다). 다만 `diagnostic`의 `http`가 500이고 `bodyKeys`에 `cloudflare_error`가 있는 줄은 가려진 Gateway 실패로 보고 다시 보내지 않는다([32 문서](32-agent-gateway-tunnel.md#대기실패재시작의-의미)).
 
 ```bash
 cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh collect gpt --limit 2 --retry-unknown
@@ -111,11 +111,11 @@ cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh collect gpt --limit 2
 
 결과 조회(GET)에 Gateway 오류 코드 없는 5xx(502·503·504·52x·530)가 오면 수집기는 그 답을 작업 결과로 보지 않는다. Cloudflare 같은 가장자리의 일시 오류로 보고, 제출은 다시 하지 않은 채 5초 뒤 같은 작업을 다시 조회한다. 그 횟수는 `edgeRetries`에 적는다(PR #43). 일시 오류라면 다음 조회에서 결과가 온다. 그런데 Gateway가 502·504로 저장한 결과는 Cloudflare가 자기 오류로 바꿔 답한다(Cloudflare 문서, [4절](#결과를-받지-못한-8건)). 그러면 결과 보존 300초가 지나 404 `JOB_NOT_FOUND`가 올 때까지 같은 답만 받는다. 2026-11-26 Gemini의 8건이 이렇게 끝난 것으로 본다(추정).
 
-이 브랜치의 수집기는 가장자리 오류 바로 다음에(그 사이 다른 답 없이) 404 `JOB_NOT_FOUND`나 410 `JOB_EXPIRED`가 오면 `failed:RESULT_HIDDEN_BY_EDGE`로 적고, 마지막 가장자리 응답의 HTTP 상태를 `edgeStatus`에 남긴다(구현, AWS 미적용). 가장자리 오류 뒤에 결과가 사라졌다는 기록이며, 그 결과가 무엇이었는지는 이 기록으로 알 수 없다. `failed`이므로 `--retry-unknown`으로도 다시 보내지 않는다. 이미 적힌 기록은 고치지 않는다. 그래서 Gemini의 8건은 `failed:JOB_NOT_FOUND`로 남는다. 채점기는 두 코드 모두 실패(`transport_error`)로 센다.
+PR #PR-NUMBER-TBD의 수집기는 가장자리 502·504 바로 다음에(그 사이 다른 답 없이) 404 `JOB_NOT_FOUND`가 오거나, 그 상태로 수집기의 기한(제출 뒤 720초)에 이르면 `failed:RESULT_HIDDEN_BY_EDGE`로 적고, 마지막 가장자리 응답의 HTTP 상태를 `edgeStatus`에 남긴다(구현, AWS 미적용). 502·504만 보는 것은 Cloudflare가 원점의 본문을 바꾸는 상태가 이 둘이기 때문이다. 다른 가장자리 오류(503·52x·530) 뒤의 404는 `failed:JOB_NOT_FOUND` 그대로다. 410 `JOB_EXPIRED`는 실행되지 못하고 대기에서 만료된 작업에 Gateway가 직접 보인 답이라 `failed:JOB_EXPIRED` 그대로다. `RESULT_HIDDEN_BY_EDGE`는 결과를 보지 못한 채 작업이 사라졌다는 기록이며, 그 결과가 무엇이었는지는 이 기록으로 알 수 없다. 저장된 502·504가 가려진 경우와, 가장자리가 Gateway에 닿지 못하는 사이 작업이 사라진 경우(작업은 RAM에만 있어 재시작하면 사라진다)가 같은 기록이 된다. 둘은 cloudflared 로그의 원점 연결 오류로 가른다. `failed`이므로 `--retry-unknown`으로도 다시 보내지 않는다. 이미 적힌 기록은 고치지 않는다. 그래서 Gemini의 8건은 `failed:JOB_NOT_FOUND`로 남는다. 채점기는 두 코드 모두 실패(`transport_error`)로 센다. 다만 `edgeStatus` 504인 `RESULT_HIDDEN_BY_EDGE`는 `timeout`으로 센다. Gateway가 시간 초과를 504로 저장하므로 그것이 가려진 것으로 본다(추정).
 
 ## 4. Gemini 수집 결과(2026-11-26, 사용자 제공 출력)
 
-사용자가 AWS에서 3절 5단계(Gemini 수집)를 마치고 붙여 준 출력이다. 작성자의 AWS 실행이 아니다. 흐름은 `vertex-8-call`(메시지 저장 끔)이었다. 채점 보고서는 아직 이 문서에 없다. 본 실행(2026-11-25 시험 2건 뒤의 94건)의 마지막 줄은 다음과 같다.
+사용자가 AWS에서 3절 5단계(Gemini 수집)를 마치고 붙여 준 출력이다. 작성자의 AWS 실행이 아니다. 흐름은 `vertex-8-call`(메시지 저장 끔)이었다. 채점 보고서는 아직 이 문서에 없다. 본 실행(2026-11-25 시험 2건 뒤의 94건)의 마지막 줄 앞부분은 다음과 같다(수집기는 이 뒤에 `modelExecutionRequested`·`productionReady`도 적는다).
 
 ```json
 {"status":"completed","stoppedReason":null,"outcomesThisRun":{"accepted":82,"failed:JOB_NOT_FOUND":8,"failed:RECOMMENDATION_BLOCKED":4},"submissionsThisRun":94,"casesRemaining":0}
@@ -130,11 +130,11 @@ cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh collect gpt --limit 2
 
 ### 결과를 받지 못한 8건
 
-**관측(사용자 제공 출력).** 8건은 문항마다 `edgeRetries` 59~60, `totalSeconds` 361~395였고, 마지막 조회는 404 `JOB_NOT_FOUND`였다. `edgeRetries`는 결과 조회가 Gateway 오류 코드 없는 5xx(502·503·504·52x·530) JSON을 받아 5초 뒤 다시 조회한 횟수다(코드 확인: 수집기 클라이언트는 JSON 응답만 받아들인다). 사용자의 Cloudflare 대시보드에는 2026-11-26 11:17:42~11:18:17 KST에 한 작업의 `GET agent.oreumit.com /v1/jobs/gw-…`가 502 Bad Gateway로 기록돼 있었고, 그 뒤로는 202·200 기록이 보였다. 사용자가 cloudflared 컨테이너 로그를 찾아봤을 때 원점에 닿지 못했다는 오류 줄은 없었다.
+**관측(사용자 제공 출력).** 8건은 문항마다 `edgeRetries` 59~60, `totalSeconds` 361~395였고, 마지막 조회는 404 `JOB_NOT_FOUND`였다. 이 `totalSeconds`는 작업이 끝난 뒤 결과 보관 약 300초 동안 다시 읽은 시간을 포함하므로 실행 시간이 아니다(코드 확인). `edgeRetries`는 결과 조회가 Gateway 오류 코드 없는 5xx(502·503·504·52x·530) JSON을 받아 5초 뒤 다시 조회한 횟수다(코드 확인: 수집기 클라이언트는 JSON 응답만 받아들인다). 사용자의 Cloudflare 대시보드에는 2026-11-26 11:17:42~11:18:17 KST에 한 작업의 `GET agent.oreumit.com /v1/jobs/gw-…`가 502 Bad Gateway로 기록돼 있었고, 그 뒤로는 202·200 기록이 보였다. 이 작업이 8건 가운데 하나인지는 확인하지 않았다(실패한 줄에는 작업 ID가 없다). 사용자가 cloudflared 컨테이너 로그를 찾아봤을 때 원점에 닿지 못했다는 오류 줄은 없었다.
 
 **원인(추정, 근거가 강함).**
 
-1. 지금 AWS의 Gateway(이 브랜치 이전 코드)는 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)를 작업 결과 HTTP 502 `GATEWAY_UNAVAILABLE`로 저장한다(`services/agent-gateway/upstream.mjs`의 `UpstreamError` 기본값, `jobs.mjs`의 `errorResult`). 끝난 결과는 300초 보관하고(`JOB_POLICY.resultTtlMs`), 그 뒤의 조회는 404 `JOB_NOT_FOUND`다.
+1. 지금 AWS의 Gateway(PR #PR-NUMBER-TBD 이전 코드)는 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)를 작업 결과 HTTP 502 `GATEWAY_UNAVAILABLE`로 저장한다(`services/agent-gateway/upstream.mjs`의 `UpstreamError` 기본값, `jobs.mjs`의 `errorResult`). 끝난 결과는 300초 보관하고(`JOB_POLICY.resultTtlMs`), 그 뒤의 조회는 404 `JOB_NOT_FOUND`다.
 2. Cloudflare는 원점이 502·504로 답하면 자기 502·504 오류로 바꿔 답한다([Cloudflare 문서](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502-504/)). 원점의 502·504를 그대로 넘기는 영역 설정 `origin_error_page_pass_thru`는 Enterprise 전용이다. 2026-04-27부터는 요청이 `Accept: application/json`을 보내면 5xx 오류를 JSON(`cloudflare_error`·`retryable` 등)으로 답한다([변경 기록](https://developers.cloudflare.com/changelog/post/2026-04-27-structured-responses-for-5xx-errors/), [오류 응답 설명](https://developers.cloudflare.com/fundamentals/reference/error-responses/)).
 3. 수집기(`deploy/collect-gateway-eval.py`)는 `Accept: application/json`을 보낸다. 그래서 Gateway 코드가 없는 올바른 JSON을 받았고, 이를 가장자리 일시 오류로 보아 5초 뒤 같은 결과를 다시 읽었다. 저장된 결과가 사라질 때까지 이를 되풀이했다. 59~60회 × 5초 ≈ 300초가 보관 시간과 맞는다.
 4. 터널 장애로는 설명되지 않는다. 8건마다 바로 다음 문항이 곧바로 접수됐고(202), cloudflared 로그에도 원점 연결 오류가 없었다.
@@ -149,12 +149,13 @@ cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh collect gpt --limit 2
 
 **비교 규칙(제안).**
 
-- 모델·Agent 실패라면 8건은 다시 보내지 않고 실패로 센다(채점기는 `transport_error`로 센다). GPT 수집에서도 `failed`로 끝난 문항은 다시 보내지 않았다. Gemini의 실패만 다시 보내면 Gemini에만 시도를 더 주게 된다.
+- 모델·Agent 실패라면 8건은 다시 보내지 않고 실패로 센다(채점기는 `transport_error`로 센다). 비교하는 빌드에서 난 실패는 다시 보내지 않는다는 규칙이다. GPT 수집에서도 `failed`로 끝난 문항은 다시 보내지 않았다. Gemini의 실패만 다시 보내면 Gemini에만 시도를 더 주게 된다.
+- GPT 시험 2건을 다시 보낸 것은 이 규칙에 어긋나지 않는다. 이 2건은 비교하는 빌드가 아니라 바뀌기 전 빌드(`rule-action-low`)에서 OpenAI 400(`reasoning_effort`) Agent 오류와 같은 때 `unknown`으로 끝났다([32 문서](32-agent-gateway-tunnel.md#openai-400-reasoning_effort-수정2026-11-25), 다른 세션 기록). 고친 빌드(PR #41)를 적용한 뒤 다시 보낸 것으로 본다(추정, 근거는 아래 32번과 같다).
 - SQL이 인프라 실패를 보일 때만 다시 보낸다. 그것도 Gemini 흐름이 적용돼 있는 동안에만 한다. 그래서 3절 6단계(GPT 다시 적용, `apply-agent-rule-action.sh`)는 이 판정 뒤로 미룬다.
 - 지금 수집기에는 `failed`로 끝난 문항을 다시 보내는 선택지가 없다(`--retry-unknown`은 `unknown`만 다시 보낸다). 다시 보내기로 정하면 그 방법은 그때 정한다.
-- GPT 수집의 32번도 같은 일이었을 수 있다. 결과 조회가 Cloudflare 502 JSON(`cloudflare_error`·`retryable`, Gateway 코드 없음)을 받아 `unknown`으로 끝났고, 다시 보냈다(다른 세션 기록, 커밋 `9620068`). 일시적인 가장자리 오류였는지 가려진 Gateway 실패였는지는 남은 기록으로 알 수 없다. 두 수집을 견줄 때 이 1건을 함께 적는다.
+- 남은 열린 항목은 GPT 수집의 32번이다. 같은 일이었을 수 있다. 결과 조회가 Cloudflare 502 JSON(`cloudflare_error`·`retryable`, Gateway 코드 없음)을 받아 `unknown`으로 끝났다(다른 세션 기록, 커밋 `9620068`). 그 기록에 다시 보낸 내용은 없다. 11-25 GPT 실행 가운데 최종 검증까지 간 것은 97건이다([32 문서](32-agent-gateway-tunnel.md#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)). 나머지 93문항의 1건씩과 32번의 첫 시도 1건에 다시 보낸 3건(시험 2건·32번)을 더한 수와 같아 다시 보낸 것으로 본다(추정, 웹 요청 같은 비교 밖 실행이 섞였다면 달라진다). 일시적인 가장자리 오류였는지 가려진 Gateway 실패였는지는 남은 기록으로 알 수 없다. 두 수집을 견줄 때 이 1건을 함께 적는다.
 
-**수정(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #PR-NUMBER-TBD](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/PR-NUMBER-TBD))는 Gateway가 상류 실패를 500으로 답하게 했다([32 문서](32-agent-gateway-tunnel.md#대기실패재시작의-의미)). 수집기는 가려진 결과를 `failed:RESULT_HIDDEN_BY_EDGE`로 적는다([3절](#결과를-해석하지-못했거나-cloudflare가-가렸을-때)). 이 비교를 마치는 데 Gateway 적용은 필요 없다.
+**수정(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #PR-NUMBER-TBD](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/PR-NUMBER-TBD))는 Gateway가 상류 실패를 500으로 답하게 했다([32 문서](32-agent-gateway-tunnel.md#대기실패재시작의-의미)). 수집기는 가려진 결과를 `failed:RESULT_HIDDEN_BY_EDGE`로 적는다([3절](#결과를-해석하지-못했거나-cloudflare가-가렸을-때)). 채점기는 결과를 보지 못한 줄(`JOB_NOT_FOUND`·`RESULT_HIDDEN_BY_EDGE`), 실행되지 않은 대기 만료(`JOB_EXPIRED`), `unknown` 줄의 초를 수집 보고서의 시간 집계(`timingSeconds`)에서 뺀다. 이전 채점기로는 이 8건의 361~395초가 `totalSeconds`·`runSeconds` 집계에 들어가 p95와 최대를 정한다(96건 중 8.3%로 상위 5%보다 많다). 이미 채점했다면 그 `gemini-collection.json`의 시간 집계가 그렇다. 채점 단계는 checkout의 스크립트를 쓰므로(`run-gateway-eval.sh`) 이 변경을 받은 뒤 채점하면 이미지를 다시 빌드하지 않아도 빠진다. 이 비교를 마치는 데 Gateway 적용은 필요 없다.
 
 ## 5. 남는 것과 지우는 것
 

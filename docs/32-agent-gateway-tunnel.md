@@ -297,13 +297,23 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
 - 취소 API는 **아직 대기 중인 작업만** 취소한다. 이미 실행 중인 모델은 취소 API로 중단하거나 재실행하지 않는다. 적용 helper는 취소 API를 호출하지 않는다.
 - 실패로 끝난 작업의 결과는 HTTP 상태와 Gateway 오류 코드로 남는다. 그중 차단된 답은 422, 시간 초과는 504 `UPSTREAM_TIMEOUT_NO_RETRY`, 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)는 `GATEWAY_UNAVAILABLE`이다. 상류 실패의 상태는 처음에 502였고 2026-11-26 아래처럼 500으로 바꿨다.
 
-**2026-11-26 상류 실패를 500으로(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #PR-NUMBER-TBD](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/PR-NUMBER-TBD))는 상류 실패의 작업 결과, 서버가 상태 없는 오류에 쓰던 기본값, 오버투어리즘 결과 불일치(`OVERTOURISM_RESULT_MISMATCH`)를 502 대신 500으로 답한다.
+**2026-11-26 상류 실패를 500으로(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #PR-NUMBER-TBD](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/PR-NUMBER-TBD))는 Gateway가 502로 답하던 상류 실패를 500으로 답한다. 바뀐 곳은 `UpstreamError`의 기본 상태(대기열 작업 결과와 동기 `/v1/recommend`·`/v1/overtourism` 응답 모두), 상태 없는 오류에 쓰던 기본값(`jobs.mjs`의 `errorResult`, `server.mjs`의 오류 응답), 오버투어리즘 결과 불일치(`OVERTOURISM_RESULT_MISMATCH`)에 명시하던 502다.
 
 - 이유: Cloudflare는 원점이 502·504로 답하면 자기 502·504 오류로 바꿔 답한다([Cloudflare 문서](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502-504/)). 원점 응답을 그대로 넘기는 영역 설정 `origin_error_page_pass_thru`는 Enterprise 전용이다. 그래서 502로는 Gateway 오류 코드가 클라이언트에 닿지 않는다. 2026-11-26 Gemini 비교 수집에서 결과 8건을 받지 못한 원인으로 본다(추정, [35 문서](35-gateway-model-comparison.md#결과를-받지-못한-8건)).
 - 시간 초과는 504로 둔다. 웹 앱이 504라는 상태만으로 다시 요청하지 않음(`AGENT_TIMEOUT_NO_RETRY`)을 정하기 때문이다. 그 본문은 계속 Cloudflare가 가린다.
-- 웹 앱은 지금 500을 502와 똑같이 다룬다(`AGENT_UPSTREAM_UNAVAILABLE`, 자동 재요청 없음). 앱 `prototype/src/agent-gateway-client.ts`의 `upstreamError()`를 읽기 전용 로컬 사본(`fab4547`, 2026-11-24)으로 확인했다.
-- Cloudflare 문서가 바꾼다고 밝힌 상태는 502·504다. 500이 그대로 지나는지는 AWS에 적용한 뒤 다음 실패 작업으로 확인한다. 비교 수집기의 기록이 `failed:GATEWAY_UNAVAILABLE`·`gatewayHttp` 500이면 지난 것이다.
-- 적용은 사용자가 `agent-gateway` 이미지를 다시 빌드해 재생성하면 된다. 이 저장소에 Gateway만 다시 빌드하는 helper는 없다. 이미지를 다시 빌드하는 helper는 위 [요청 큐 적용](#aws에-적용할-명령)의 `deploy/apply-agent-queue.sh`다. MCP·Gateway 이미지를 함께 빌드하고, 대기·실행 작업이 없을 때만 두 서비스를 갱신한 뒤 큐·공개 준비 검사를 한다. 2026-11-19 [공개 인증 수정](#공개-검사의-1010과-단계별-실패-확인) 때 쓴 Gateway만의 재빌드 명령은 큐가 생기기 전 것이라 대기 작업을 확인하지 않는다. 35 문서의 비교를 마치는 데는 이 적용이 필요 없다.
+- 추천 경로의 웹 앱은 지금 500을 502와 똑같이 다룬다(`AGENT_UPSTREAM_UNAVAILABLE`, 자동 재요청 없음). 앱 `prototype/src/agent-gateway-client.ts`의 `upstreamError()`가 500과 502를 같은 오류로 바꾸므로 그 뒤의 처리도 같다. 읽기 전용 로컬 사본(`fab4547`, 2026-11-24)으로 확인했다.
+- 오버투어리즘 진단(같은 사본의 `prototype/src/overtourism-gateway.ts`)은 오류 본문에 Gateway 코드가 보이면 그 코드를, 아니면 `HTTP_<상태>`를 오류 이름으로 쓴다. 어느 오류든 같은 대체 경로(앱 안 에이전트→규칙 진단)로 넘어간다. 바뀌는 것은 진단 안내에 남는 이유(`AWS: …`)뿐이다. 가려진 502는 `HTTP_502`이고, 500이 그대로 지나면 `GATEWAY_UNAVAILABLE`·`OVERTOURISM_RESULT_MISMATCH` 같은 Gateway 코드가 된다.
+- Cloudflare 문서가 바꾼다고 밝힌 상태는 502·504다. 500이 그대로 지나는지는 AWS에 적용한 뒤 다음 실패 작업으로 확인한다. 비교 수집기의 기록이 `failed:GATEWAY_UNAVAILABLE`·`gatewayHttp` 500이면 지난 것이다. `unknown:RESULT_RESPONSE_INVALID`이고 `diagnostic`의 `http`가 500, `bodyKeys`에 `cloudflare_error`가 있으면 Cloudflare가 500도 바꾼 것이다(수집기는 코드 없는 500을 가장자리 오류로 보지 않는다). 그 줄은 가려진 Gateway 실패로 보고 `--retry-unknown`으로 다시 보내지 않는다. 다시 보내면 그 모델에만 시도를 한 번 더 주게 된다.
+- 적용은 사용자가 `agent-gateway` 이미지를 다시 빌드해 재생성하면 된다. 이 저장소에 Gateway만 다시 빌드하는 helper는 없다. Gateway 이미지를 다시 빌드하는 helper는 위 [요청 큐 적용](#aws에-적용할-명령)의 `deploy/apply-agent-queue.sh`와 [오버투어리즘 진단](34-overtourism-diagnosis-agent.md)의 `deploy/apply-overtourism-agent.sh`(적용 모드)다. 뒤의 것은 진단 흐름도 만들고 고정하므로, 이 변경만 적용할 때는 `apply-agent-queue.sh`를 쓴다. 이 helper는 MCP·Gateway 이미지를 함께 빌드하고, 대기·실행 작업이 없을 때만 두 서비스를 갱신한 뒤 큐·공개 준비 검사를 한다. 2026-11-19 [공개 인증 수정](#공개-검사의-1010과-단계별-실패-확인) 때 쓴 Gateway만의 재빌드 명령은 큐가 생기기 전 것이라 대기 작업을 확인하지 않는다. 35 문서의 비교를 마치는 데는 이 적용이 필요 없다.
+- 이 변경을 받은 checkout에서 이미지를 다시 빌드하기 전에 `apply-agent-queue.sh --verify-only`를 실행하면 `AGENT_QUEUE_APPLY_FAILED: phase=queue_offline_check`로 멈춘다. 호스트의 새 `jobs.test.mjs`(500을 기대)를 실행 중인 이전 이미지의 `/app` 모듈(502)에 넣어 돌리기 때문이다. Gateway 고장이 아니며 서비스도 바뀌지 않는다(작업 환경 확인: main의 Gateway 모듈에 새 `jobs.test.mjs`를 넣어 돌리면 2개가 실패한다). 적용은 아래처럼 `--verify-only` 없이 하고, `--verify-only`는 적용이 끝난 뒤에만 쓴다.
+
+```bash
+cd ~/oreumit-agent &&
+git diff --quiet && git diff --cached --quiet &&
+git fetch origin refs/heads/main:refs/remotes/origin/main &&
+git merge --ff-only origin/main &&
+sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
+```
 
 AWS 적용 출력과 이후 실제 사용자 응답을 따로 확인한다. 오프라인 검사·공개 준비 검사 통과만으로 병렬 모델 성공·운영 품질 완료를 기록하지 않고 `productionReady:false`를 유지한다.
 
@@ -1311,7 +1321,7 @@ SQL
 **경계 뒤 2건의 빌드는 이 SQL 출력에 없다.** 아래 추정은 뒤의 추가 출력으로 확인됐다(이 문단 끝). 이 SQL에는 모델 열이 없다. 지연·토큰 SQL [2]의 11-25 행(`gemini-3.8-flash` 2건 모두 수락, `gpt-5.4-mini` 100건)으로도 가를 수 없다. 경계 뒤 2건이 Gemini 2건이든 GPT 2건이든 위 [2]·[3]의 모든 수가 같게 나오기 때문이다. 다음으로 보아 20:09:59 KST 변경은 Gemini 8회 흐름으로의 되돌리기이고, 그 뒤 2건은 Gemini 실행으로 **추정**한다.
 
 - 이날 GPT 실행 중 최종 검증까지 간 97건은 고친 빌드의 실행이어야 한다([지연·토큰 결과](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)의 추정). 경계 뒤 실행은 2건뿐이므로, 마지막 변경은 그 빌드를 적용한 때가 아니라 적어도 95건이 시작된 뒤의 다른 변경이다.
-- [35 문서](35-gateway-model-comparison.md)의 절차는 GPT 96문항 수집 다음에 `--rollback`으로 Gemini 흐름을 적용하고, `collect gemini --limit 2`로 2건을 먼저 시험한다. 다른 세션의 PR #43은 GPT 96건 수집 중 생긴 문제를 고치며 "Gemini 수집 전에 병합하면 Gemini 쪽에서는 같은 문제가 생기지 않는다"고 적었고, 11:09:05 UTC에 병합됐다. 마지막 변경은 그 약 55초 뒤다.
+- [35 문서](35-gateway-model-comparison.md)의 절차는 GPT 96문항 수집 다음에 `--rollback`으로 Gemini 흐름을 적용하고, `collect gemini --limit 2`로 2건을 먼저 시험한다. 다른 세션의 PR #43은 GPT 96건 수집 중 생긴 문제를 고치며 "Gemini 수집 전에 병합하면 Gemini 쪽에서는 같은 문제가 생기지 않는다"고 적었고, 11:09:05 UTC에 병합됐다. 마지막 변경은 그 약 55초 뒤다. 2026-11-26 Gemini 수집에서도 결과 조회가 Gateway 코드 없는 5xx를 받아 8건이 결과를 받지 못했다(Cloudflare가 Gateway의 502 결과를 가린 것으로 추정, [35 문서](35-gateway-model-comparison.md#결과를-받지-못한-8건)).
 - 사용자가 20:09:59 KST에 실행한 helper가 무엇이었는지로 확인할 수 있다. GPT 2건이었다면 이 판정은 규칙 동작 빌드에 대한 것이다.
 
 **추가 확인(같은 날, 사용자 제공 출력):** 경계 뒤 2건은 Gemini 8회 빌드의 실행이다.

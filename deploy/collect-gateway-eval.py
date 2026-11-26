@@ -41,6 +41,9 @@ DEFAULT_BUDGET, MAX_BUDGET = 45, 50
 POLL_SECONDS = 2
 # Edge statuses a job read may meet without a Gateway body (Cloudflare 5xx and 52x).
 EDGE_TRANSIENT = frozenset((502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530))
+# Origin statuses whose body Cloudflare replaces with its own error, so a stored Gateway result with one of them
+# reads like an edge error. The other edge statuses come from the edge itself and hide no stored result.
+EDGE_REPLACED = frozenset((502, 504))
 EDGE_RETRY_SECONDS = 5
 MAX_REFUSED_WAIT_SECONDS = 3600
 STOP_AFTER_CONSECUTIVE_INFRA_FAILURES = 3
@@ -195,7 +198,8 @@ def collect_case(client, entry, subject, *, monotonic, wall, sleep):
                 edge_status = code_http
                 sleep(EDGE_RETRY_SECONDS)
                 continue
-            hidden, edge_status = edge_status, None
+            hidden = edge_status if edge_status in EDGE_REPLACED else None
+            edge_status = None
             timing = {}
             try:
                 if code_http == 202:
@@ -212,9 +216,12 @@ def collect_case(client, entry, subject, *, monotonic, wall, sleep):
                             **accepted_result(body, job_id)}, 0
                 code = load.error_code(body)
                 require(code is not None)
-                if hidden is not None and (code_http, code) in ((404, 'JOB_NOT_FOUND'), (410, 'JOB_EXPIRED')):
-                    # Gone right after edge reads: the job ended with a result other than 200, 202 or 422 that the
-                    # edge replaced. Failed, not unknown: --retry-unknown would give this model an extra attempt.
+                if hidden is not None and (code_http, code) == (404, 'JOB_NOT_FOUND'):
+                    # Dropped right after edge 502/504 reads: no result was seen. Most likely a stored 502/504 result
+                    # whose body Cloudflare replaced; a Gateway the edge could not reach until the job was lost (jobs
+                    # are RAM-only, e.g. a restart) reads the same. A 410 JOB_EXPIRED is the Gateway's own visible
+                    # answer for a job that never ran, so it stays JOB_EXPIRED.
+                    # Failed, not unknown: --retry-unknown would give this model an extra attempt.
                     return {**record, 'final': 'failed', 'code': 'RESULT_HIDDEN_BY_EDGE', 'edgeStatus': hidden,
                             'gatewayHttp': code_http, **timing, 'finishedAt': iso(wall())}, 0
                 return {**record, 'final': 'failed', 'code': code, 'gatewayHttp': code_http, **timing, 'finishedAt': iso(wall())}, 0
@@ -225,8 +232,12 @@ def collect_case(client, entry, subject, *, monotonic, wall, sleep):
                 return {**record, 'final': 'unknown', 'code': 'RESULT_RESPONSE_INVALID', 'diagnostic': detail, **timing,
                         'finishedAt': iso(wall())}, 0
         sleep(POLL_SECONDS)
-    return {**record, 'final': 'unknown', 'code': 'POLL_DEADLINE_REACHED', 'totalSeconds': round(monotonic() - sent, 2),
-            'finishedAt': iso(wall())}, 0
+    end = {'totalSeconds': round(monotonic() - sent, 2), 'finishedAt': iso(wall())}
+    if edge_status in EDGE_REPLACED:
+        # Still meeting edge 502/504 at the deadline: the job's own 720 s lifetime is (all but) over and its result
+        # was not seen. Recorded like the dropped case above, not as unknown.
+        return {**record, 'final': 'failed', 'code': 'RESULT_HIDDEN_BY_EDGE', 'edgeStatus': edge_status, **end}, 0
+    return {**record, 'final': 'unknown', 'code': 'POLL_DEADLINE_REACHED', **end}, 0
 
 
 def run(client, entries, results_path, *, budget, limit=None, retry_unknown=False, monotonic=time.monotonic, wall=time.time,

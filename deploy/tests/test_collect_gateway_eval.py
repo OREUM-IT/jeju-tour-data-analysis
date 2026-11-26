@@ -18,8 +18,14 @@ SPEC.loader.exec_module(collector)
 NOW = 1795046400
 VERSION = 'sha256:' + 'd' * 64
 SECRET_PLACE = 'place-PRIVATE-CANARY'
-EDGE_502 = (502, {'cloudflare_error': True, 'status': 502, 'title': 'Bad gateway', 'retryable': True})
-CODE_STATUS = {'RECOMMENDATION_BLOCKED': 422, 'JOB_NOT_FOUND': 404}
+
+
+def edge(status):
+    return status, {'cloudflare_error': True, 'status': status, 'title': 'Edge error', 'retryable': True}
+
+
+EDGE_502 = edge(502)
+CODE_STATUS = {'RECOMMENDATION_BLOCKED': 422, 'JOB_NOT_FOUND': 404, 'JOB_EXPIRED': 410}
 
 
 class Clock:
@@ -40,6 +46,8 @@ class FakeGateway:
     """Each POST gets the next scripted outcome; accepted jobs finish after `duration` fake seconds.
 
     'hidden' finishes with a stored 502 whose body the edge replaces until the result is dropped after 300 s (then 404).
+    'hidden-<status>' answers that edge status instead (504: a stored timeout; 503 or 530: an edge outage that
+    outlasts the stored result).
     """
     def __init__(self, clock, outcomes, *, duration=10):
         self.clock, self.outcomes, self.duration = clock, list(outcomes), duration
@@ -70,10 +78,10 @@ class FakeGateway:
             return EDGE_502
         if self.clock.elapsed - started < self.duration:
             return 202, self.pending(job, 'running')
-        if outcome == 'hidden':
+        if outcome.startswith('hidden'):
             if self.clock.elapsed - started < self.duration + 300:
                 self.edge_reads += 1
-                return EDGE_502
+                return edge(int(outcome.partition('-')[2] or 502))
             if self.lost_reads_when_gone:
                 self.lost_reads_when_gone -= 1
                 raise OSError('read timed out')
@@ -202,6 +210,36 @@ class CollectorTest(unittest.TestCase):
         self.collect(gateway, [entry(0)], budget=45)
         record = self.lines()[0]
         self.assertEqual((record['code'], record['edgeStatus'], record['edgeRetries']), ('RESULT_HIDDEN_BY_EDGE', 502, 60))
+
+    def test_only_edge_502_or_504_before_the_dropped_job_mark_it_hidden(self):
+        # 503 and 530 come from the edge itself and hide no stored result: the job stays JOB_NOT_FOUND.
+        gateway = FakeGateway(self.clock, ['hidden-504', 'accepted', 'hidden-530', 'accepted', 'hidden-503'])
+        self.collect(gateway, [entry(i) for i in range(5)], budget=45)
+        records = self.lines()
+        self.assertEqual([(r['code'], r.get('edgeStatus'), r['gatewayHttp'], r['edgeRetries']) for r in records[0::2]],
+                         [('RESULT_HIDDEN_BY_EDGE', 504, 404, 60), ('JOB_NOT_FOUND', None, 404, 60),
+                          ('JOB_NOT_FOUND', None, 404, 60)])
+
+    def test_edge_read_just_before_a_queue_expiry_stays_job_expired(self):
+        # 410 JOB_EXPIRED is the Gateway's own visible answer for a job that never ran; a dropped result answers 404.
+        gateway = FakeGateway(self.clock, ['JOB_EXPIRED'], duration=0)
+        gateway.edge_failures = 1
+        result, _ = self.collect(gateway, [entry(0)], budget=45)
+        self.assertEqual(result['outcomesThisRun'], {'failed:JOB_EXPIRED': 1})
+        record = self.lines()[0]
+        self.assertEqual((record['gatewayHttp'], record['edgeRetries']), (410, 1))
+        self.assertNotIn('edgeStatus', record)
+
+    def test_hidden_result_that_outlives_the_collector_deadline_is_failed_not_unknown(self):
+        # The job ends 430 s after submission, so its stored 502 stays until 730 s, past the 720 s deadline.
+        gateway = FakeGateway(self.clock, ['hidden'], duration=430)
+        result, _ = self.collect(gateway, [entry(0)], budget=45)
+        self.assertEqual(result['outcomesThisRun'], {'failed:RESULT_HIDDEN_BY_EDGE': 1})
+        record = self.lines()[0]
+        self.assertEqual((record['edgeStatus'], record['edgeRetries'], record['totalSeconds']), (502, gateway.edge_reads, 720))
+        self.assertNotIn('gatewayHttp', record)
+        result, _ = self.collect(gateway, [entry(0)], budget=45, retry_unknown=True)
+        self.assertEqual(result['submissionsThisRun'], 0)
 
     def test_edge_read_then_normal_polls_then_not_found_stays_job_not_found(self):
         gateway = FakeGateway(self.clock, ['JOB_NOT_FOUND'])
