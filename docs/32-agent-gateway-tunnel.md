@@ -297,7 +297,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
 - 취소 API는 **아직 대기 중인 작업만** 취소한다. 이미 실행 중인 모델은 취소 API로 중단하거나 재실행하지 않는다. 적용 helper는 취소 API를 호출하지 않는다.
 - 실패로 끝난 작업의 결과는 HTTP 상태와 Gateway 오류 코드로 남는다. 그중 차단된 답은 422, 시간 초과는 504 `UPSTREAM_TIMEOUT_NO_RETRY`, 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)는 `GATEWAY_UNAVAILABLE`이다. 상류 실패의 상태는 처음에 502였고 2026-11-26 아래처럼 500으로 바꿨다.
 
-**2026-11-26 상류 실패를 500으로(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #PR-NUMBER-TBD](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/PR-NUMBER-TBD))는 Gateway가 502로 답하던 상류 실패를 500으로 답한다. 바뀐 곳은 `UpstreamError`의 기본 상태(대기열 작업 결과와 동기 `/v1/recommend`·`/v1/overtourism` 응답 모두), 상태 없는 오류에 쓰던 기본값(`jobs.mjs`의 `errorResult`, `server.mjs`의 오류 응답), 오버투어리즘 결과 불일치(`OVERTOURISM_RESULT_MISMATCH`)에 명시하던 502다.
+**2026-11-26 상류 실패를 500으로(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #46](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/46))는 Gateway가 502로 답하던 상류 실패를 500으로 답한다. 바뀐 곳은 `UpstreamError`의 기본 상태(대기열 작업 결과와 동기 `/v1/recommend`·`/v1/overtourism` 응답 모두), 상태 없는 오류에 쓰던 기본값(`jobs.mjs`의 `errorResult`, `server.mjs`의 오류 응답), 오버투어리즘 결과 불일치(`OVERTOURISM_RESULT_MISMATCH`)에 명시하던 502다.
 
 - 이유: Cloudflare는 원점이 502·504로 답하면 자기 502·504 오류로 바꿔 답한다([Cloudflare 문서](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502-504/)). 원점 응답을 그대로 넘기는 영역 설정 `origin_error_page_pass_thru`는 Enterprise 전용이다. 그래서 502로는 Gateway 오류 코드가 클라이언트에 닿지 않는다. 2026-11-26 Gemini 비교 수집에서 결과 8건을 받지 못한 원인으로 본다(추정, [35 문서](35-gateway-model-comparison.md#결과를-받지-못한-8건)).
 - 시간 초과는 504로 둔다. 웹 앱이 504라는 상태만으로 다시 요청하지 않음(`AGENT_TIMEOUT_NO_RETRY`)을 정하기 때문이다. 그 본문은 계속 Cloudflare가 가린다.
