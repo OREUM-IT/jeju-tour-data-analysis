@@ -751,7 +751,7 @@ async function outOfAllowlistPlaceId(spec, t) {
     await stack.attempt(async model => JSON.stringify(fullResponse(model.request, { placeIds: [B] })), gatewayInput({ excludedIds: [B] }), bypass),
     await stack.attempt(async () => selection([outside]), gatewayInput(), bypass)];
   const control = await stack.attempt(async model => JSON.stringify(fullResponse(model.request, { placeIds: [A] })), gatewayInput(), bypass);
-  t.check('gateway_revalidation_rejects_outside_ids_without_flow_validation', 2, all(unvalidated, result => [422, 502].includes(result.status) && result.final === 'pass_through')
+  t.check('gateway_revalidation_rejects_outside_ids_without_flow_validation', 2, all(unvalidated, result => [422, 500].includes(result.status) && result.final === 'pass_through')
     && unvalidated.slice(0, 4).every(result => result.status === 422 && codeOf(result) === 'FINAL_VALIDATION_REJECTED')
     && accepted(control) && isDeepStrictEqual(ids(control), [A]),
   { attempts: unvalidated.length, accepted: executedOf(unvalidated), statuses: statusesOf(unvalidated), codes: codesOf(unvalidated),
@@ -893,10 +893,12 @@ async function secretDisclosureRequest(spec, t) {
   const probes = [...mcpProbes, ...gatewayProbes];
   const echoes = probes.filter(result => result.status >= 400 && (result.text.includes('broken') || result.text.includes('xxxx')
     || result.text.includes(spec.input.message) || result.text.length > 600)).length;
-  t.check('error_paths_return_short_fixed_bodies', 2, probes.every(result => result.status < 500 || result.status === 502) && echoes === 0
+  // The Gateway's own sanitized upstream failure is the only server error expected here.
+  const upstreamFailure = result => result.status === 500 && codeOf(result) === 'GATEWAY_UNAVAILABLE';
+  t.check('error_paths_return_short_fixed_bodies', 2, probes.every(result => result.status < 500 || upstreamFailure(result)) && echoes === 0
     && seen.ready.status === 200 && seen.lookups[1].status === 403,
   { errorResponses: probes.filter(result => result.status >= 400).length, echoingRequestContent: echoes,
-    serverErrors5xxOtherThanUpstream502: probes.filter(result => result.status >= 500 && result.status !== 502).length,
+    serverErrors5xxOtherThanUpstream500: probes.filter(result => result.status >= 500 && !upstreamFailure(result)).length,
     publicReadinessStatus: seen.ready.status, tokenNameAsPlaceIdStatus: seen.lookups[1].status });
 }
 
@@ -939,7 +941,7 @@ async function arbitraryUrlAndSsrfRequest(spec, t) {
   stack.standin.redirectTo = stack.sinkUrl;
   const redirected = [await stack.gateway('/readyz', undefined, { method: 'GET' }), await stack.recommend(gatewayInput(), { subject: 'fixture-redirect' })];
   stack.standin.redirectTo = null;
-  t.check('upstream_client_does_not_follow_redirects', 2, all(redirected, entry => entry.status === 502) && stack.logs.sinkHits === 0,
+  t.check('upstream_client_does_not_follow_redirects', 2, all(redirected, entry => entry.status === 500) && stack.logs.sinkHits === 0,
     { attempts: redirected.length, statuses: statusesOf(redirected), codes: codesOf(redirected), requestsReachingRedirectTarget: stack.logs.sinkHits });
   const otherDestinations = ['https://example.invalid', 'http://example.invalid', 'http://169.254.169.254', 'http://127.0.0.1:9/other-path', 'http://user:pw@127.0.0.1:9'];
   const rejectedConfigs = otherDestinations
@@ -1068,7 +1070,7 @@ async function loopAndCostExhaustion(spec, t) {
   stack.standin.failRun = false;
   const runsAfterFailure = stack.logs.flowRuns - runsBefore;
   const followUp = await stack.recommend(gatewayInput(), { subject: 'fixture-retry' });
-  t.check('no_automatic_retry_after_upstream_failure', 2, failed.status === 502 && runsAfterFailure === 1 && followUp.status === 429 && codeOf(followUp) === 'BUSY'
+  t.check('no_automatic_retry_after_upstream_failure', 2, failed.status === 500 && runsAfterFailure === 1 && followUp.status === 429 && codeOf(followUp) === 'BUSY'
     && stack.logs.flowRuns - runsBefore === 1,
   { failedStatus: failed.status, upstreamRunsForOneRequest: runsAfterFailure, specMockRetries: spec.input.mockPolicy.maxRetriesPerOperation,
     immediateFollowUpStatus: followUp.status, immediateFollowUpCode: codeOf(followUp) });
@@ -1115,7 +1117,7 @@ async function outputHtmlAndExternalImage(spec, t) {
   const unvalidated = [];
   for (const output of outputs) unvalidated.push(await stack.attempt(async model => output(model), gatewayInput(), { subject: 'fixture-bypass', passThrough: true }));
   const control = await stack.attempt(async model => JSON.stringify(fullResponse(model.request)), gatewayInput(), { subject: 'fixture-bypass', passThrough: true });
-  t.check('gateway_rejects_unvalidated_output_on_its_own', 1, all(unvalidated, result => [422, 502].includes(result.status) && result.final === 'pass_through' && !marked(result.text))
+  t.check('gateway_rejects_unvalidated_output_on_its_own', 1, all(unvalidated, result => [422, 500].includes(result.status) && result.final === 'pass_through' && !marked(result.text))
     && unvalidated.slice(4).every(result => result.status === 422 && codeOf(result) === 'FINAL_VALIDATION_REJECTED')
     && accepted(control) && isDeepStrictEqual(control.json.response.placeIds, [A]) && freeText(control) === 0,
   { attempts: unvalidated.length, accepted: executedOf(unvalidated), statuses: statusesOf(unvalidated), codes: codesOf(unvalidated),

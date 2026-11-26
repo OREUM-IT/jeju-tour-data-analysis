@@ -295,6 +295,15 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
 - Langflow 종료 응답이 확인된 뒤 최종 검증에서 실패한 작업은 슬롯을 해제한다. 시간 초과·중단·전송 실패처럼 종료 여부를 확인하지 못한 작업은 기존 120초 보호 lease를 유지한다. 실패를 완료로 임의 처리하거나 곧바로 반복 실행하지 않는다.
 - 대기 요청·결과 원문은 RAM에만 있고 완료 결과는 최대 5분·128건으로 제한한다. 재시작 후 대기 작업을 복원·자동 실행하지 않는다. SQLite에는 해시와 사용량·재전송·lease 상태만 남기며, 재시작 전 실행 결과가 불확실하면 그 보호 시간을 유지한다. 사라진 작업의 404는 재전송 승인이 아니다.
 - 취소 API는 **아직 대기 중인 작업만** 취소한다. 이미 실행 중인 모델은 취소 API로 중단하거나 재실행하지 않는다. 적용 helper는 취소 API를 호출하지 않는다.
+- 실패로 끝난 작업의 결과는 HTTP 상태와 Gateway 오류 코드로 남는다. 그중 차단된 답은 422, 시간 초과는 504 `UPSTREAM_TIMEOUT_NO_RETRY`, 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)는 `GATEWAY_UNAVAILABLE`이다. 상류 실패의 상태는 처음에 502였고 2026-11-26 아래처럼 500으로 바꿨다.
+
+**2026-11-26 상류 실패를 500으로(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #PR-NUMBER-TBD](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/PR-NUMBER-TBD))는 상류 실패의 작업 결과, 서버가 상태 없는 오류에 쓰던 기본값, 오버투어리즘 결과 불일치(`OVERTOURISM_RESULT_MISMATCH`)를 502 대신 500으로 답한다.
+
+- 이유: Cloudflare는 원점이 502·504로 답하면 자기 502·504 오류로 바꿔 답한다([Cloudflare 문서](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502-504/)). 원점 응답을 그대로 넘기는 영역 설정 `origin_error_page_pass_thru`는 Enterprise 전용이다. 그래서 502로는 Gateway 오류 코드가 클라이언트에 닿지 않는다. 2026-11-26 Gemini 비교 수집에서 결과 8건을 받지 못한 원인으로 본다(추정, [35 문서](35-gateway-model-comparison.md#결과를-받지-못한-8건)).
+- 시간 초과는 504로 둔다. 웹 앱이 504라는 상태만으로 다시 요청하지 않음(`AGENT_TIMEOUT_NO_RETRY`)을 정하기 때문이다. 그 본문은 계속 Cloudflare가 가린다.
+- 웹 앱은 지금 500을 502와 똑같이 다룬다(`AGENT_UPSTREAM_UNAVAILABLE`, 자동 재요청 없음). 앱 `prototype/src/agent-gateway-client.ts`의 `upstreamError()`를 읽기 전용 로컬 사본(`fab4547`, 2026-11-24)으로 확인했다.
+- Cloudflare 문서가 바꾼다고 밝힌 상태는 502·504다. 500이 그대로 지나는지는 AWS에 적용한 뒤 다음 실패 작업으로 확인한다. 비교 수집기의 기록이 `failed:GATEWAY_UNAVAILABLE`·`gatewayHttp` 500이면 지난 것이다.
+- 적용은 사용자가 `agent-gateway` 이미지를 다시 빌드해 재생성하면 된다. 이 저장소에 Gateway만 다시 빌드하는 helper는 없다. 이미지를 다시 빌드하는 helper는 위 [요청 큐 적용](#aws에-적용할-명령)의 `deploy/apply-agent-queue.sh`다. MCP·Gateway 이미지를 함께 빌드하고, 대기·실행 작업이 없을 때만 두 서비스를 갱신한 뒤 큐·공개 준비 검사를 한다. 2026-11-19 [공개 인증 수정](#공개-검사의-1010과-단계별-실패-확인) 때 쓴 Gateway만의 재빌드 명령은 큐가 생기기 전 것이라 대기 작업을 확인하지 않는다. 35 문서의 비교를 마치는 데는 이 적용이 필요 없다.
 
 AWS 적용 출력과 이후 실제 사용자 응답을 따로 확인한다. 오프라인 검사·공개 준비 검사 통과만으로 병렬 모델 성공·운영 품질 완료를 기록하지 않고 `productionReady:false`를 유지한다.
 
@@ -369,7 +378,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I deploy/check-agent-qu
 
 - 8회 안에서도 최종 JSON이 형식이나 검증 규칙을 어기면 계속 차단된다.
 - 최종 검증 컴포넌트는 Agent 메시지 전체 텍스트를 읽는다. 도구를 부르는 응답에 모델이 설명 문장을 붙이면 그 문장이 최종 JSON 앞에 합쳐져 차단된다. 이 변경 전부터 있던 경로이며 호출이 늘면 기회도 늘어난다.
-- 5~8번째 호출의 공급자 오류·시간 초과는 재시도 없이 Agent 오류가 된다. Gateway는 이를 502와 120초 이상의 불확실 실행 보호로 처리한다. 원래 422로 바로 끝나던 실행이므로 성공을 잃지는 않지만 실행 슬롯과 같은 사용자의 재요청이 잠시 묶일 수 있다.
+- 5~8번째 호출의 공급자 오류·시간 초과는 재시도 없이 Agent 오류가 된다. Gateway는 이를 502(2026-11-26 [수정](#대기실패재시작의-의미)부터 500, AWS 미적용)와 120초 이상의 불확실 실행 보호로 처리한다. 원래 422로 바로 끝나던 실행이므로 성공을 잃지는 않지만 실행 슬롯과 같은 사용자의 재요청이 잠시 묶일 수 있다.
 - 쓸 수 있는 장소 ID 없이 8번째 호출에 이르면 장소 없는 `ask_clarification`만 검증을 통과한다. 이는 웹에서 차단 문구 대신 추가 확인 안내로 보이지만 추천 성공은 아니다.
 
 ### AWS에 적용할 명령

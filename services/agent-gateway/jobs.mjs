@@ -22,7 +22,10 @@ const owner = subject => {
 function errorResult(error) {
   const timeout = ['TimeoutError', 'AbortError'].includes(error?.name);
   const code = timeout ? 'UPSTREAM_TIMEOUT_NO_RETRY' : SAFE_CODES.has(error?.code) ? error.code : 'GATEWAY_UNAVAILABLE';
-  const statusCode = timeout ? 504 : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 502;
+  // Cloudflare replaces the body of an origin 502 or 504 with its own error, so a code sent with 502 never
+  // reaches the client; upstream failures are therefore 500. Timeouts stay 504 because the web app treats
+  // that status itself as "do not resubmit".
+  const statusCode = timeout ? 504 : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
   return { statusCode, body: { error: { code } } };
 }
 

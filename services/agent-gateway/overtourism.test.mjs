@@ -122,7 +122,7 @@ test('flow drift, blocked answers and tampered finals fail closed', async t => {
   assert.equal((await blocked.mcpCall('/gateway/overtourism/readyz', undefined, true)).body.activeScopes, 0);
 
   const forged = await stack(t, { final: value => ({ ...value, diagnosisSha256: 'f'.repeat(64) }) });
-  await rejects(forged.upstream.execute(snapshot(), context()), 'OVERTOURISM_RESULT_MISMATCH', 502);
+  await rejects(forged.upstream.execute(snapshot(), context()), 'OVERTOURISM_RESULT_MISMATCH', 500);
   assert.equal((await forged.mcpCall('/gateway/overtourism/readyz', undefined, true)).body.activeScopes, 0);
 
   const source = await stack(t, { message: { properties: { source: { id: 'Other', source: 'Other' } } } });

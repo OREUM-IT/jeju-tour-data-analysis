@@ -18,6 +18,8 @@ SPEC.loader.exec_module(collector)
 NOW = 1795046400
 VERSION = 'sha256:' + 'd' * 64
 SECRET_PLACE = 'place-PRIVATE-CANARY'
+EDGE_502 = (502, {'cloudflare_error': True, 'status': 502, 'title': 'Bad gateway', 'retryable': True})
+CODE_STATUS = {'RECOMMENDATION_BLOCKED': 422, 'JOB_NOT_FOUND': 404}
 
 
 class Clock:
@@ -35,11 +37,14 @@ def entry(index):
 
 
 class FakeGateway:
-    """Each POST gets the next scripted outcome; accepted jobs finish after `duration` fake seconds."""
+    """Each POST gets the next scripted outcome; accepted jobs finish after `duration` fake seconds.
+
+    'hidden' finishes with a stored 502 whose body the edge replaces until the result is dropped after 300 s (then 404).
+    """
     def __init__(self, clock, outcomes, *, duration=10):
         self.clock, self.outcomes, self.duration = clock, list(outcomes), duration
         self.jobs, self.posts, self.subjects = {}, [], []
-        self.edge_failures = 0
+        self.edge_failures, self.edge_reads, self.lost_reads_when_gone = 0, 0, 0
 
     def request(self, method, path, subject, payload=None, *, timeout=20):
         assert collector.SUBJECT.fullmatch(subject), subject
@@ -61,9 +66,18 @@ class FakeGateway:
         outcome, started, _ = self.jobs[job]
         if self.edge_failures:
             self.edge_failures -= 1
-            return 502, {'cloudflare_error': True, 'status': 502, 'title': 'Bad gateway', 'retryable': True}
+            self.edge_reads += 1
+            return EDGE_502
         if self.clock.elapsed - started < self.duration:
             return 202, self.pending(job, 'running')
+        if outcome == 'hidden':
+            if self.clock.elapsed - started < self.duration + 300:
+                self.edge_reads += 1
+                return EDGE_502
+            if self.lost_reads_when_gone:
+                self.lost_reads_when_gone -= 1
+                raise OSError('read timed out')
+            return 404, {'error': {'code': 'JOB_NOT_FOUND'}}
         if outcome == 'odd':
             return 200, {'schemaVersion': '1.0', 'status': 'accepted', 'requestId': job, 'catalogVersion': VERSION,
                          'policyVersion': 'recommendation-validation-v1', 'productionReady': False, 'extra': SECRET_PLACE,
@@ -74,7 +88,7 @@ class FakeGateway:
                          'policyVersion': 'recommendation-validation-v1', 'productionReady': False,
                          'response': {'schemaVersion': '1.0', 'requestId': job, 'action': 'recommend', 'placeIds': [SECRET_PLACE],
                                       'requirementClaims': [], 'confirmationNotice': False, 'noticeTopics': []}}
-        return (422 if outcome == 'RECOMMENDATION_BLOCKED' else 503), {'error': {'code': outcome}}
+        return CODE_STATUS.get(outcome, 503), {'error': {'code': outcome}}
 
     def pending(self, job, state):
         expiry = self.jobs[job][2]
@@ -165,6 +179,38 @@ class CollectorTest(unittest.TestCase):
         # A Gateway error code on the same status is still a result, and POSTs are never repeated.
         self.assertEqual(records[1]['code'], 'GATEWAY_UNAVAILABLE')
         self.assertEqual(len(gateway.posts), 2)
+
+    def test_result_hidden_by_the_edge_until_it_is_dropped_is_failed_not_unknown(self):
+        gateway = FakeGateway(self.clock, ['hidden'])
+        result, out = self.collect(gateway, [entry(0)], budget=45)
+        self.assertEqual(result['outcomesThisRun'], {'failed:RESULT_HIDDEN_BY_EDGE': 1})
+        record = self.lines()[0]
+        self.assertEqual((record['final'], record['code'], record['edgeStatus'], record['gatewayHttp']),
+                         ('failed', 'RESULT_HIDDEN_BY_EDGE', 502, 404))
+        self.assertEqual(record['edgeRetries'], gateway.edge_reads)
+        self.assertEqual(gateway.edge_reads, 60)
+        self.assertGreaterEqual(record['totalSeconds'], 300)
+        self.assertIn('failed:RESULT_HIDDEN_BY_EDGE', out)
+        # Recorded as failed, so --retry-unknown does not send it again.
+        result, _ = self.collect(gateway, [entry(0)], budget=45, retry_unknown=True)
+        self.assertEqual(result['submissionsThisRun'], 0)
+        self.assertEqual(len(gateway.posts), 1)
+
+    def test_lost_read_between_edge_reads_and_the_dropped_job_does_not_clear_them(self):
+        gateway = FakeGateway(self.clock, ['hidden'])
+        gateway.lost_reads_when_gone = 1
+        self.collect(gateway, [entry(0)], budget=45)
+        record = self.lines()[0]
+        self.assertEqual((record['code'], record['edgeStatus'], record['edgeRetries']), ('RESULT_HIDDEN_BY_EDGE', 502, 60))
+
+    def test_edge_read_then_normal_polls_then_not_found_stays_job_not_found(self):
+        gateway = FakeGateway(self.clock, ['JOB_NOT_FOUND'])
+        gateway.edge_failures = 1
+        result, _ = self.collect(gateway, [entry(0)], budget=45)
+        self.assertEqual(result['outcomesThisRun'], {'failed:JOB_NOT_FOUND': 1})
+        record = self.lines()[0]
+        self.assertEqual((record['gatewayHttp'], record['edgeRetries']), (404, 1))
+        self.assertNotIn('edgeStatus', record)
 
     def test_requires_explicit_flag(self):
         out = io.StringIO()
