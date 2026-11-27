@@ -6,6 +6,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createGatewayState } from './state.mjs';
 import { createJobQueue, JOB_POLICY } from './jobs.mjs';
+import { UpstreamError } from './upstream.mjs';
 
 const START = 1_795_046_400_000;
 const id = n => 'gw-' + n.toString(16).padStart(32, '0');
@@ -134,7 +135,18 @@ test('failure before submission releases capacity, and polling never exposes arb
   f.submit(1); f.submit(2); await tick();
   assert.equal(executions, 2);
   assert.deepEqual(f.jobs.ready(), { queued: 0, running: 0, uncertain: 0 });
-  assert.deepEqual(f.jobs.get(query(1)), { statusCode: 502, body: { error: { code: 'GATEWAY_UNAVAILABLE' } } });
+  assert.deepEqual(f.jobs.get(query(1)), { statusCode: 500, body: { error: { code: 'GATEWAY_UNAVAILABLE' } } });
+});
+
+test('a failed upstream run is stored as 500 GATEWAY_UNAVAILABLE, never 502, and a timeout stays 504', async t => {
+  const f = fixture(t);
+  f.submit(1); f.submit(2); await tick();
+  // What the upstream client throws when Langflow answers the run with a non-200 status (e.g. an Agent error).
+  f.calls[0].reject(new UpstreamError('UPSTREAM_REJECTED'));
+  f.calls[1].reject(new DOMException('canary-private-timeout', 'TimeoutError'));
+  await tick();
+  assert.deepEqual(f.jobs.get(query(1)), { statusCode: 500, body: { error: { code: 'GATEWAY_UNAVAILABLE' } } });
+  assert.deepEqual(f.jobs.get(query(2)), { statusCode: 504, body: { error: { code: 'UPSTREAM_TIMEOUT_NO_RETRY' } } });
 });
 
 test('queued expiry does not execute or release an unrelated running worker', async t => {

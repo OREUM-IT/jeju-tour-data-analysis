@@ -5,7 +5,7 @@ const FINAL_OUTPUT = 'ChatOutput-jejuV2';
 const MAX_RESPONSE = 2 * 1024 * 1024;
 const binding = ['requestSha256', 'catalogSha256', 'catalogVersion', 'policyVersion', 'candidateCount'];
 export class UpstreamError extends Error {
-  constructor(code, status = 502) { super(code); this.code = code; this.status = status; }
+  constructor(code, status = 500) { super(code); this.code = code; this.status = status; }
 }
 const require = (ok, code, status) => { if (!ok) throw new UpstreamError(code, status); };
 export const canonical = value => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`

@@ -1109,7 +1109,7 @@
             "accepted": 0,
             "statuses": [
               422,
-              502
+              500
             ],
             "codes": [
               "FINAL_VALIDATION_REJECTED",
@@ -1526,7 +1526,7 @@
           "observed": {
             "errorResponses": 56,
             "echoingRequestContent": 0,
-            "serverErrors5xxOtherThanUpstream502": 0,
+            "serverErrors5xxOtherThanUpstream500": 0,
             "publicReadinessStatus": 200,
             "tokenNameAsPlaceIdStatus": 403
           }
@@ -1745,7 +1745,7 @@
           "observed": {
             "attempts": 2,
             "statuses": [
-              502
+              500
             ],
             "codes": [
               "GATEWAY_UNAVAILABLE"
@@ -2329,7 +2329,7 @@
           "expectation": 2,
           "passed": true,
           "observed": {
-            "failedStatus": 502,
+            "failedStatus": 500,
             "upstreamRunsForOneRequest": 1,
             "specMockRetries": 1,
             "immediateFollowUpStatus": 429,
@@ -2505,7 +2505,7 @@
             "accepted": 0,
             "statuses": [
               422,
-              502
+              500
             ],
             "codes": [
               "FINAL_VALIDATION_REJECTED",

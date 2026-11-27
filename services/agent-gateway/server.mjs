@@ -164,7 +164,8 @@ export function createGatewayServer({ authKey, mode = 'private', publicHost, acc
       req.resume();
       const timeout = ['TimeoutError', 'AbortError'].includes(error?.name);
       const code = timeout ? 'UPSTREAM_TIMEOUT_NO_RETRY' : codes.has(error?.code) ? error.code : 'GATEWAY_UNAVAILABLE';
-      const status = timeout ? 504 : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 502;
+      // 500, not 502: Cloudflare would replace the body and drop the code (see errorResult in jobs.mjs).
+      const status = timeout ? 504 : Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 500;
       const diagnostic = code === 'ORIGIN_REJECTED' && error instanceof RequestError
         ? { headerContext: error.headerContext } : {};
       const retryAfter = Number.isInteger(error?.retryAfterSeconds) && error.retryAfterSeconds >= 1

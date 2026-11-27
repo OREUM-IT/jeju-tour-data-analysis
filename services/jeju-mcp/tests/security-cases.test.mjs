@@ -110,9 +110,9 @@ test('verdicts come from counted side effects of the real servers', () => {
   assert.deepEqual(observed('SEC-012', 'html_never_forwarded_as_output_text'), { attempts: 6, blockedAfterRealServerValidation: 2,
     blockedByStandInBeforeAnyServerSawTheText: 2, rebuiltFromInScopeIdsOnly: 2, forwardedWithModelText: 0 });
   // With the final-validation step skipped, the Gateway alone refuses all six and still accepts a valid answer.
-  assert.deepEqual(observed('SEC-012', 'gateway_rejects_unvalidated_output_on_its_own'), { attempts: 6, accepted: 0, statuses: [422, 502],
+  assert.deepEqual(observed('SEC-012', 'gateway_rejects_unvalidated_output_on_its_own'), { attempts: 6, accepted: 0, statuses: [422, 500],
     codes: ['FINAL_VALIDATION_REJECTED', 'GATEWAY_UNAVAILABLE'], responsesWithMarkup: 0, validAnswerControlStatus: 200 });
-  assert.deepEqual(observed('SEC-005', 'gateway_revalidation_rejects_outside_ids_without_flow_validation'), { attempts: 5, accepted: 0, statuses: [422, 502],
+  assert.deepEqual(observed('SEC-005', 'gateway_revalidation_rejects_outside_ids_without_flow_validation'), { attempts: 5, accepted: 0, statuses: [422, 500],
     codes: ['FINAL_VALIDATION_REJECTED', 'GATEWAY_UNAVAILABLE'], validAnswerControlStatus: 200, validAnswerControlPlaceIds: ['PLACE_FIXTURE_A'] });
   assert.equal(observed('SEC-013', 'returned_ids_match_fixture_and_carry_source').servedDataMode, 'app-export');
   for (const entry of report.cases.filter(item => item.instrumentation)) {

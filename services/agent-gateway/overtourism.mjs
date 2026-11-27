@@ -102,7 +102,7 @@ export function createOvertourismUpstream({ flowId, flowSha256, langflowApiKey, 
         && result.policyVersion === OVERTOURISM_POLICY_VERSION
         && result.indicatorsSha256 === prepared.indicatorsSha256 && result.diagnosisSha256 === final.diagnosisSha256
         && digest(result.indicators) === result.indicatorsSha256 && digest(result.diagnosis) === result.diagnosisSha256
-        && Array.isArray(result.diagnosis?.regions) && result.diagnosis.regions.length === 14, 'OVERTOURISM_RESULT_MISMATCH', 502);
+        && Array.isArray(result.diagnosis?.regions) && result.diagnosis.regions.length === 14, 'OVERTOURISM_RESULT_MISMATCH', 500);
       return { schemaVersion: '1.0', status: 'accepted', diagnosisId, policyVersion: OVERTOURISM_POLICY_VERSION,
         model: OVERTOURISM_MODEL, validatedAt: result.validatedAt, toolCalls: result.toolCalls,
         indicatorsSha256: result.indicatorsSha256, diagnosisSha256: result.diagnosisSha256,

@@ -379,7 +379,7 @@ test('pre-submission errors and state failures are sanitized and never advertise
   const upstream = { ready: async () => ({}), execute: async () => { throw new Error('canary-secret-token'); } };
   const { send, state } = await fixture(t, { upstream });
   const response = await send();
-  assert.equal(response.status, 502);
+  assert.equal(response.status, 500);
   const value = await response.json();
   assert.deepEqual(value.error, { code: 'GATEWAY_UNAVAILABLE' });
   assert.equal(JSON.stringify(value).includes('canary'), false);

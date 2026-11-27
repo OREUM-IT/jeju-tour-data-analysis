@@ -33,6 +33,9 @@ const LABEL = /^[a-z0-9][a-z0-9-]{0,40}$/u;
 // Gateway outcomes that mean the run finished and the final validation refused the answer.
 const BLOCKED = new Set(['RECOMMENDATION_BLOCKED', 'FINAL_VALIDATION_REJECTED', 'TOO_MANY_PLACES']);
 const TIMEOUTS = new Set(['UPSTREAM_TIMEOUT_NO_RETRY', 'POLL_DEADLINE_REACHED', 'JOB_EXPIRED']);
+// Failed outcomes whose seconds are no run's time: the job never ran (queue expiry), or its result was never seen and
+// the seconds run until it was gone (the Gateway keeps a finished result 300 s).
+const UNTIMED = new Set(['JOB_EXPIRED', 'JOB_NOT_FOUND', 'RESULT_HIDDEN_BY_EDGE']);
 const USAGE = 'Usage: node scripts/gateway-eval.mjs <prepare|requests|reference|score> --catalog <.local/catalog.json> --dir <.local/dir> [--label <name>] [--model <id> --flow <build> --reports <dir>]';
 
 const files = (dir, label, reports) => ({
@@ -96,7 +99,8 @@ export function parseResults(text) {
 
 function errorCode(result) {
   if (result.final === 'failed' && BLOCKED.has(result.code)) return 'invalid_output';
-  if (TIMEOUTS.has(result.code)) return 'timeout';
+  // The Gateway stores a timeout as 504, whose body Cloudflare replaces: hidden by an edge 504 is most likely a timeout.
+  if (TIMEOUTS.has(result.code) || (result.code === 'RESULT_HIDDEN_BY_EDGE' && result.edgeStatus === 504)) return 'timeout';
   return 'transport_error';
 }
 
@@ -138,7 +142,10 @@ export function buildCapture({ plan, catalog, requests, results, model, flow, st
     outcomes[name] = (outcomes[name] ?? 0) + 1;
     if (!result) return { ...base, error: { code: 'not_executed' } };
     if (result.runtimeRequestId !== request.runtimeRequest.requestId) throw new Error('result belongs to a different runtime request');
-    for (const key of Object.keys(timing)) if (Number.isFinite(result[key])) timing[key].push(result[key]);
+    // Only answers seen for the job itself are timed: unknown lines and results never seen are left out.
+    if (result.final === 'accepted' || (result.final === 'failed' && !UNTIMED.has(result.code))) {
+      for (const key of Object.keys(timing)) if (Number.isFinite(result[key])) timing[key].push(result[key]);
+    }
     if (result.final !== 'accepted') return { ...base, runtimeRequest: request.runtimeRequest, error: { code: errorCode(result) } };
     const raw = { kind: 'jeju-gateway-output', model, flow,
       gateway: { status: result.gateway.status, requestId: result.gateway.requestId, catalogVersion: result.gateway.catalogVersion,
