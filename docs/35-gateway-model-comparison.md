@@ -1,6 +1,6 @@
 # 35. 운영 Gateway에서 Gemini와 GPT 비교 (같은 96문항)
 
-2026-11-25 준비 기록이다. 사용자가 "96문항 평가로 공정 비교"를 골랐다. **도구를 만들고 이 저장소 작업 환경에서만 확인했다. 작성자는 AWS에서 실행하지 않았고, 실제 Gemini·OpenAI 호출도 하지 않았다.** 수집과 채점은 사용자가 아래 절차로 AWS에서 했다. 2026-11-26 Gemini 수집이 끝났고([4절](#4-gemini-수집-결과2026-11-26-사용자-제공-출력)), 2026-11-27 두 안의 채점을 마쳤다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)). 둘 다 사용자 제공 출력이다. 결과를 받지 못한 Gemini 8건은 Agent 오류로 판정돼 다시 보내지 않았고, 3절 6단계(GPT 다시 적용)의 보류는 풀렸다. 어느 안을 운영에 둘지는 사용자가 정한다. `productionReady:false`다.
+2026-11-25 준비 기록이다. 사용자가 "96문항 평가로 공정 비교"를 골랐다. **도구를 만들고 이 저장소 작업 환경에서만 확인했다. 작성자는 AWS에서 실행하지 않았고, 실제 Gemini·OpenAI 호출도 하지 않았다.** 수집과 채점은 사용자가 아래 절차로 AWS에서 했다. 2026-11-26 Gemini 수집이 끝났고([4절](#4-gemini-수집-결과2026-11-26-사용자-제공-출력)), 2026-11-27 두 안의 채점을 마쳤다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)). 둘 다 사용자 제공 출력이다. 결과를 받지 못한 Gemini 8건은 Agent 오류로 판정돼 다시 보내지 않았다. 같은 날 사용자가 3절 6단계(GPT 다시 적용)를 실행했고 PR #46의 Gateway 변경도 AWS에 적용했다(사용자 제공 출력, [5.4절](#54-제안결정은-사용자)). `productionReady:false`다.
 
 ## 1. 무엇을 비교하나
 
@@ -47,11 +47,11 @@ Langflow 로그인을 쓰는 적용·되돌리기 명령 사이에는 1분쯤 �
 cd ~/oreumit-agent && git fetch origin refs/heads/main:refs/remotes/origin/main && git merge --ff-only origin/main
 ```
 
-1. 문항·계획 만들기(모델·네트워크 없음). `sameAsLocalHeldOut:true`(정답 해시 `8c2d8299…bd9b`)가 나와야 한다. `planSha256`은 카탈로그 파일 해시도 묶으므로 서버마다 다를 수 있다(AWS 2026-11-25: `22817d44…`). 두 모델은 같은 서버 계획으로 재므로 비교에는 영향이 없다.
+1. 문항·계획 만들기(모델·네트워크 없음). `sameAsLocalHeldOut:true`(정답 해시 `8c2d8299…bd9b`)가 나와야 한다. `planSha256`은 카탈로그 내용 해시도 묶으므로 서버마다 다를 수 있다(AWS 2026-11-25: `22817d44…`). 두 모델은 같은 서버 계획으로 재므로 비교에는 영향이 없다.
 ```bash
 cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh prepare
 ```
-2. (선택) 모델 없는 기준선을 AWS에서도 만든다. 2절 표와 같은 값이 나오면 카탈로그가 같다는 확인이 된다. 2026-11-25 AWS에서 만든 보고서의 채점 수치는 2절과 같았다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)).
+2. (선택) 모델 없는 기준선을 AWS에서도 만든다. 2절 표와 같은 값이 나오면 서버 규칙만의 점수가 그 서버의 카탈로그에서도 같다는 확인이 된다(카탈로그 해시는 다를 수 있다). 2026-11-25 AWS에서 만든 보고서의 채점 수치는 2절과 같았고 카탈로그 해시는 달랐다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)).
 ```bash
 cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh reference
 ```
@@ -91,7 +91,7 @@ cd ~/oreumit-agent && sudo sh -c 'nohup bash deploy/run-gateway-eval.sh collect 
 cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh score gemini gemini-3.8-flash vertex-8-call
 ```
    `failed:JOB_NOT_FOUND`나 `failed:RESULT_HIDDEN_BY_EDGE`로 끝난 문항이 있으면 6번 전에 [4절](#결과를-받지-못한-8건)대로 다시 보낼지부터 정한다.
-6. **GPT로 다시 적용**. Gemini에서 결과를 받지 못한 문항이 있으면 [4절](#결과를-받지-못한-8건)의 판정 뒤에 한다. 다시 보내야 한다면 Gemini 흐름이 적용돼 있는 동안 보내야 하기 때문이다. 2026-11-27 판정으로 이번 비교에서는 다시 보낼 문항이 없어 이 보류가 풀렸다. 다시 적용할지는 어느 안을 운영에 둘지 고르는 사용자의 결정이다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)).
+6. **GPT로 다시 적용**. Gemini에서 결과를 받지 못한 문항이 있으면 [4절](#결과를-받지-못한-8건)의 판정 뒤에 한다. 다시 보내야 한다면 Gemini 흐름이 적용돼 있는 동안 보내야 하기 때문이다. 2026-11-27 판정으로 이번 비교에서는 다시 보낼 문항이 없어 이 보류가 풀렸고, 같은 날 사용자가 이 단계를 실행했다(사용자 제공 출력, [32 문서](32-agent-gateway-tunnel.md#비교-뒤-다시-적용2026-11-27-사용자-제공-출력)).
 ```bash
 cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-rule-action.sh
 ```
@@ -134,7 +134,7 @@ PR #46의 수집기는 가장자리 502·504 바로 다음에(그 사이 다른 
 
 **원인(추정, 근거가 강함).**
 
-1. 지금 AWS의 Gateway(PR #46 이전 코드)는 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)를 작업 결과 HTTP 502 `GATEWAY_UNAVAILABLE`로 저장한다(`services/agent-gateway/upstream.mjs`의 `UpstreamError` 기본값, `jobs.mjs`의 `errorResult`). 끝난 결과는 300초 보관하고(`JOB_POLICY.resultTtlMs`), 그 뒤의 조회는 404 `JOB_NOT_FOUND`다.
+1. 2026-11-26 수집 당시 AWS의 Gateway(PR #46 이전 코드)는 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)를 작업 결과 HTTP 502 `GATEWAY_UNAVAILABLE`로 저장했다(`services/agent-gateway/upstream.mjs`의 `UpstreamError` 기본값, `jobs.mjs`의 `errorResult`). 끝난 결과는 300초 보관하고(`JOB_POLICY.resultTtlMs`), 그 뒤의 조회는 404 `JOB_NOT_FOUND`다.
 2. Cloudflare는 원점이 502·504로 답하면 자기 502·504 오류로 바꿔 답한다([Cloudflare 문서](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502-504/)). 원점의 502·504를 그대로 넘기는 영역 설정 `origin_error_page_pass_thru`는 Enterprise 전용이다. 2026-04-27부터는 요청이 `Accept: application/json`을 보내면 5xx 오류를 JSON(`cloudflare_error`·`retryable` 등)으로 답한다([변경 기록](https://developers.cloudflare.com/changelog/post/2026-04-27-structured-responses-for-5xx-errors/), [오류 응답 설명](https://developers.cloudflare.com/fundamentals/reference/error-responses/)).
 3. 수집기(`deploy/collect-gateway-eval.py`)는 `Accept: application/json`을 보낸다. 그래서 Gateway 코드가 없는 올바른 JSON을 받았고, 이를 가장자리 일시 오류로 보아 5초 뒤 같은 결과를 다시 읽었다. 저장된 결과가 사라질 때까지 이를 되풀이했다. 59~60회 × 5초 ≈ 300초가 보관 시간과 맞는다.
 4. 터널 장애로는 설명되지 않는다. 8건마다 바로 다음 문항이 곧바로 접수됐고(202), cloudflared 로그에도 원점 연결 오류가 없었다.
@@ -151,15 +151,15 @@ PR #46의 수집기는 가장자리 502·504 바로 다음에(그 사이 다른 
 
 - 모델·Agent 실패라면 8건은 다시 보내지 않고 실패로 센다(채점기는 `transport_error`로 센다). 2026-11-27 판정이 이 경우다. 비교하는 빌드에서 난 실패는 다시 보내지 않는다는 규칙이다. GPT 수집에서도 `failed`로 끝난 문항은 다시 보내지 않았다. Gemini의 실패만 다시 보내면 Gemini에만 시도를 더 주게 된다.
 - GPT 시험 2건을 다시 보낸 것은 이 규칙에 어긋나지 않는다. 이 2건은 비교하는 빌드가 아니라 바뀌기 전 빌드(`rule-action-low`)에서 OpenAI 400(`reasoning_effort`) Agent 오류와 같은 때 `unknown`으로 끝났다([32 문서](32-agent-gateway-tunnel.md#openai-400-reasoning_effort-수정2026-11-25), 다른 세션 기록). 고친 빌드(PR #41)를 적용한 뒤 다시 보내 수락됐다(사용자 제공 출력, 다른 세션 기록).
-- SQL이 인프라 실패를 보일 때만, Gemini 흐름이 적용돼 있는 동안 다시 보내기로 했다. 그래서 3절 6단계(GPT 다시 적용, `apply-agent-rule-action.sh`)를 이 판정 뒤로 미뤘다. 판정이 모델·Agent 실패여서 다시 보낼 문항이 없고, 이 보류는 풀렸다(2026-11-27). 다시 적용할지는 운영안을 고르는 사용자의 결정이다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)).
+- SQL이 인프라 실패를 보일 때만, Gemini 흐름이 적용돼 있는 동안 다시 보내기로 했다. 그래서 3절 6단계(GPT 다시 적용, `apply-agent-rule-action.sh`)를 이 판정 뒤로 미뤘다. 판정이 모델·Agent 실패여서 다시 보낼 문항이 없고, 이 보류는 풀렸다(2026-11-27). 같은 날 사용자가 GPT를 다시 적용했다(사용자 제공 출력, [32 문서](32-agent-gateway-tunnel.md#비교-뒤-다시-적용2026-11-27-사용자-제공-출력)).
 - 수집기에는 `failed`로 끝난 문항을 다시 보내는 선택지가 없다(`--retry-unknown`은 `unknown`만 다시 보낸다). 이번에는 필요 없었다.
 - GPT 수집의 32번(사용자 제공 출력, 다른 세션 기록). 본 실행에서 제출 0.14초 뒤의 첫 결과 조회가 Cloudflare 502 JSON(`cloudflare_error`·`retryable`, Gateway 코드 없음)을 받아 `unknown:RESULT_RESPONSE_INVALID`(`QUEUE_MODEL_CHECK_INVALID`)로 끝났다(커밋 `9620068`). 0.14초는 GPT 실행이 끝나기에 너무 짧다(Langflow 실행 p50 2.1초). 그래서 저장된 결과가 가려진 것이 아니라 지나가는 가장자리 오류였을 가능성이 크다(추정. 0.14초 안에 Gateway가 Langflow 앞에서 실패했을 가능성은 기록으로 배제하지 못한다). 이 1건만 `--retry-unknown --limit 1`로 다시 보내 수락됐다(6.39초). 그래서 GPT 결과는 수락 81·차단 15다. 첫 채점(다시 보내기 전)은 수락 80·차단 15·`unknown` 1이었고, [5절](#5-두-안-비교2026-11-27-사용자-제공-출력)의 2026-11-27 채점은 다시 보낸 32번을 포함한다. 11-25 GPT 실행 가운데 최종 검증까지 간 97건(수락 82, [32 문서](32-agent-gateway-tunnel.md#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력))은 수집 96줄(수락 81)보다 1건 많다. 32번의 첫 시도도 끝까지 실행돼 수락됐다고 보면 수가 맞는다(추정, 웹 요청 같은 비교 밖 실행이 섞였다면 달라진다).
 
-**수정(구현, PR #46 병합).** `claude/gateway-edge-hidden-failure`([PR #46](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/46))는 Gateway가 상류 실패를 500으로 답하게 했다([32 문서](32-agent-gateway-tunnel.md#대기실패재시작의-의미)). 수집기는 가려진 결과를 `failed:RESULT_HIDDEN_BY_EDGE`로 적는다([3절](#결과를-해석하지-못했거나-cloudflare가-가렸을-때)). 채점기는 결과를 보지 못한 줄(`JOB_NOT_FOUND`·`RESULT_HIDDEN_BY_EDGE`), 실행되지 않은 대기 만료(`JOB_EXPIRED`), `unknown` 줄의 초를 수집 보고서의 시간 집계(`timingSeconds`)에서 뺀다. 이전 채점기로는 이 8건의 361~395초가 `totalSeconds`·`runSeconds` 집계에 들어가 p95와 최대를 정한다(96건 중 8.3%로 상위 5%보다 많다). 채점 단계는 checkout의 스크립트를 쓰므로(`run-gateway-eval.sh`) 이미지를 다시 빌드하지 않아도 이 변경을 쓴다. 2026-11-27 사용자가 AWS에서 `main@26029b2`(PR #46 병합)를 받아 다시 채점했다(사용자 제공 출력). 그래서 [5절](#5-두-안-비교2026-11-27-사용자-제공-출력)의 Gemini 시간 집계는 결과를 본 88줄만 센다. Gateway 변경(상류 실패 500)을 AWS에 적용한 출력은 받지 않았다. 이 비교를 마치는 데 Gateway 적용은 필요 없었다.
+**수정(구현, PR #46 병합).** `claude/gateway-edge-hidden-failure`([PR #46](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/46))는 Gateway가 상류 실패를 500으로 답하게 했다([32 문서](32-agent-gateway-tunnel.md#대기실패재시작의-의미)). 수집기는 가려진 결과를 `failed:RESULT_HIDDEN_BY_EDGE`로 적는다([3절](#결과를-해석하지-못했거나-cloudflare가-가렸을-때)). 채점기는 결과를 보지 못한 줄(`JOB_NOT_FOUND`·`RESULT_HIDDEN_BY_EDGE`), 실행되지 않은 대기 만료(`JOB_EXPIRED`), `unknown` 줄의 초를 수집 보고서의 시간 집계(`timingSeconds`)에서 뺀다. 이전 채점기로는 이 8건의 361~395초가 `totalSeconds`·`runSeconds` 집계에 들어가 p95와 최대를 정한다(96건 중 8.3%로 상위 5%보다 많다). 채점 단계는 checkout의 스크립트를 쓰므로(`run-gateway-eval.sh`) 이미지를 다시 빌드하지 않아도 이 변경을 쓴다. 2026-11-27 사용자가 AWS에서 `main@26029b2`(PR #46 병합)를 받아 다시 채점했다(사용자 제공 출력). 그래서 [5절](#5-두-안-비교2026-11-27-사용자-제공-출력)의 Gemini 시간 집계는 결과를 본 88줄만 센다. 이 비교를 마치는 데 Gateway 적용은 필요 없었다. 채점 뒤 같은 날 사용자가 `apply-agent-queue.sh`로 Gateway 변경(상류 실패 500)을 AWS에 적용했다(사용자 제공 출력, [32 문서](32-agent-gateway-tunnel.md#대기실패재시작의-의미)).
 
 ## 5. 두 안 비교(2026-11-27, 사용자 제공 출력)
 
-2026-11-27 사용자가 AWS에서 `main@26029b2`(PR #46 병합)를 받고, GPT·Gemini의 채점 결과만 지운 뒤 같은 채점기로 두 안을 다시 채점해 붙여 줬다. 작성자의 AWS 실행이 아니다. 채점 출력의 결과 수는 GPT `accepted` 81·`failed:RECOMMENDATION_BLOCKED` 15, Gemini `accepted` 84·`failed:JOB_NOT_FOUND` 8·`failed:RECOMMENDATION_BLOCKED` 4였다. 세 보고서는 같은 서버 계획(`planSha256` `22817d44…`)과 정답(`8c2d8299…bd9b`)을 묶는다. 모델 없는 기준선은 2026-11-25 AWS에서 만든 보고서가 있어 다시 만들지 않았다. 그 채점 수치(`groups`)는 [2절](#2-모델-없이-서버만으로-나오는-점수-기준선)의 로컬 보고서와 모두 같고 카탈로그 파일 해시만 다르다(작성자가 옮겨 적은 파일로 비교). 서버 규칙만의 점수가 AWS 카탈로그에서도 같다는 확인이다.
+2026-11-27 사용자가 AWS에서 `main@26029b2`(PR #46 병합)를 받고, GPT·Gemini의 채점 결과만 지운 뒤 같은 채점기로 두 안을 다시 채점해 붙여 줬다. 작성자의 AWS 실행이 아니다. 채점 출력의 결과 수는 GPT `accepted` 81·`failed:RECOMMENDATION_BLOCKED` 15, Gemini `accepted` 84·`failed:JOB_NOT_FOUND` 8·`failed:RECOMMENDATION_BLOCKED` 4였다. 세 보고서는 같은 서버 계획(`planSha256` `22817d44…`)과 정답(`8c2d8299…bd9b`)을 묶는다. 모델 없는 기준선은 2026-11-25 AWS에서 만든 보고서가 있어 다시 만들지 않았다. 그 채점 수치(`groups`)는 [2절](#2-모델-없이-서버만으로-나오는-점수-기준선)의 로컬 보고서와 모두 같다(작성자가 옮겨 적은 파일로 비교). 묶은 해시 가운데서는 카탈로그 해시(`catalogSha256`, 읽은 JSON의 정규화 해시)만 다르고, 그것을 묶는 `planSha256`·`runSha256`과 실행 시각도 다르다. 카탈로그 내용이 어딘가 다르다는 뜻이며, 어디가 다른지는 보고서로 알 수 없다. 서버 규칙만의 점수가 AWS 카탈로그에서도 같다는 확인이고, 카탈로그가 같다는 확인은 아니다.
 
 **운영 구성 두 가지의 비교다.** 흐름 구조와 모델이 함께 다르다([1절](#1-무엇을-비교하나)). 아래 차이를 모델 우열로 읽지 않는다.
 
@@ -168,6 +168,8 @@ PR #46의 수집기는 가장자리 502·504 바로 다음에(그 사이 다른 
 | 모델 없음 기준선(AWS, 2026-11-25) | [채점](../reports/gateway-eval-heldout-no-model-reference-aws-20261125.json) | [수집](../reports/gateway-eval-heldout-no-model-reference-aws-collection-20261125.json) |
 | GPT 안(`gpt-5.4-mini`, `rule-action`, 2026-11-25 수집) | [채점](../reports/gateway-eval-heldout-gpt-5.4-mini-rule-action-20261125.json) | [수집](../reports/gateway-eval-heldout-gpt-5.4-mini-rule-action-collection-20261125.json) |
 | Gemini 안(`gemini-3.8-flash`, `vertex-8-call`, 2026-11-25~26 수집) | [채점](../reports/gateway-eval-heldout-gemini-3.8-flash-vertex-8-call-20261126.json) | [수집](../reports/gateway-eval-heldout-gemini-3.8-flash-vertex-8-call-collection-20261126.json) |
+
+보고서 이름은 기존 로컬 기준선과 같은 `gateway-eval-heldout-<이름>[-collection]-<UTC 완료 날짜>.json` 형식이다. 이름 자리에는 채점 명령에 넘긴 모델 ID와 흐름 이름을 점까지 그대로 썼다(수집 보고서의 `model`·`flow`와 같다).
 
 ### 5.1 품질
 
@@ -216,16 +218,17 @@ SQL 수치는 [32 문서의 (나)·(다)](32-agent-gateway-tunnel.md#집계-sql-
 
 - **장소 선택(관측).** 두 안 모두 기준선보다 P@5·R@5·허용 안 된 ID·페르소나 일치가 크게 낫다. 모델 몫이 있다는 뜻이다([2절](#2-모델-없이-서버만으로-나오는-점수-기준선)). R@5의 차이에는 기준선이 3곳만 넘기는 구조도 들어 있다.
 - **답한 문항끼리(관측, 우연 여부는 추정).** Gemini 안이 P@5(0.928 대 0.842)·R@5(0.956 대 0.897)·허용 안 된 ID(0.012 대 0.043)에서 앞선다. 짝짓지 않고 문항별 흩어짐을 가정한 거친 계산(작성자, 정식 검정 아님)으로는 P@5 차이는 우연을 넘을 가능성이 높고 R@5는 경계다. 허용 안 된 ID는 ID 단위로 세면 우연을 넘어 보이지만, 위반이 GPT 6문항·Gemini 2문항에 몰려 있어 문항 단위로는 우연 범위다. 페르소나 일치는 비슷하다(0.693 대 0.681). 확인 안내 제공률은 Gemini 안이 높지만(0.725 대 0.595) 이 표본에서는 우연 범위다. 답한 문항의 동작 정답과 응답 수의 차이도 우연 범위다.
-- **전체 96문항(관측).** 실패가 동작 정답을 좌우한다. 기준선 0.906 > Gemini 0.802 > GPT 0.750이다. AI 결과가 없는 문항은 GPT 15(모두 최종 검증 차단)·Gemini 12(차단 4·Agent 오류 8)로 비슷하다.
+- **전체 96문항(관측).** 실패가 동작 정답을 좌우한다. 기준선 0.906, Gemini 안 0.802, GPT 안 0.750이다. 두 안의 차이(5/96)는 이 표본에서 우연 범위다(추정). AI 결과가 없는 문항은 GPT 15(모두 최종 검증 차단)·Gemini 12(차단 4·Agent 오류 8)로 비슷하다.
 - **GPT 안의 허용 안 된 ID(관측·추정).** 15개 중 10개가 걷기 최소화 요청에 낸 경로(`routeForMinimalWalk`)다. 운영 조립기는 걷기를 문맥 조건으로만 받고 경로를 빼는 규칙이 없다(코드 확인). [33 문서 2.1절](33-huggingface-models-evaluation.md#21-고도화-실험-동작은-서버-규칙-모델은-장소-선택만-2026-11-22)이 적은 규칙 차이(걷기 최소화 경로 제외)와 같은 것으로 본다(추정). 기준선에도 6개가 있다. 이 규칙을 고친다면 이 96문항이 아니라 새 시드의 세 번째 세트로 확인한다.
 - **되묻기.** 운영 서버 조립기는 `ask_clarification`을 만들지 않으므로, 이 세트의 되묻기 8문항은 GPT 안이 맞힐 수 없다([2절](#2-모델-없이-서버만으로-나오는-점수-기준선)).
-- **속도(관측·추정).** 수집기 기준 GPT 안이 p50 약 4배(4.32초 대 18.77초), p95 약 9배(6.41초 대 60.6초) 빠르다. 호출 1회가 빠르고(p50 907 대 3128 ms, 약 3.4배) 실행당 호출이 적은(2.35 대 4.16회, 약 1.8배) 두 가지가 겹친 것으로 본다(추정). 이 차이는 우연으로 설명할 수 없을 만큼 크다.
+- **속도(관측·추정).** 수집기 기준 GPT 안이 p50 약 4배(4.32초 대 18.77초), p95 약 9배(6.41초 대 60.6초) 빠르다. 호출 1회가 빠르고(p50 907 대 3128 ms. Gemini 값은 11-19부터의 660회 전체이고 비교일만의 값은 없다) 실행당 호출이 적은(2.35 대 4.16회, 약 1.8배) 두 가지가 겹친 것으로 본다(추정). 이 차이는 우연으로 설명할 수 없을 만큼 크다.
 
 ### 5.4 제안(결정은 사용자)
 
-- 어느 안을 운영에 둘지는 맞바꿈이다. GPT 안은 빠르고, 비교한 빌드에서 Agent 오류가 없었다. Gemini 안은 답한 문항의 장소 정확도(P@5·허용 안 된 ID)가 높다. AI 결과가 없는 비율은 비슷하다(15.6% 대 12.5%).
+- 어느 안을 운영에 둘지는 맞바꿈이다. GPT 안은 빠르고, 비교한 빌드에서 Agent 오류가 없었다. Gemini 안은 답한 문항의 P@5가 높다(허용 안 된 ID도 적지만 문항 단위로는 우연 범위다. 둘 다 짝짓지 않은 비교다). AI 결과가 없는 비율은 비슷하다(15.6% 대 12.5%).
 - 작성자 제안: GPT 안을 운영에 다시 적용하고(3절 6단계), 차단 15건과 걷기 최소화 경로 규칙을 손본다. 규칙을 바꾸면 새 시드의 세 번째 세트로 확인한다.
-- Gemini 안을 고른다면 Agent 오류(96문항 중 8, 8%)와 p95 약 60초를 먼저 줄여야 한다. 그때는 PR #46의 Gateway 변경(상류 실패를 500으로)도 AWS에 적용해, 실패가 Cloudflare를 지나도 Gateway 코드를 남기게 한다.
+- **2026-11-27 비교 뒤 적용(사용자 제공 출력).** 사용자가 3절 6단계대로 GPT 안을 다시 적용했다(`agent-rule-action-verified`, 메시지 저장 끔, [32 문서](32-agent-gateway-tunnel.md#비교-뒤-다시-적용2026-11-27-사용자-제공-출력)). 이어 PR #46의 Gateway 변경(상류 실패를 500으로)도 적용했다(`agent-queue-applied`, [32 문서](32-agent-gateway-tunnel.md#대기실패재시작의-의미)). 두 적용 모두 모델을 실행하지 않았다. 웹 추천은 지금 GPT 안으로 동작한다. 운영 준비 완료가 아니며 `productionReady:false`다. 다음은 로그인 웹 추천이 최종 검증까지 간 뒤 [적용 뒤 확인 SQL](32-agent-gateway-tunnel.md#적용-뒤-확인-sql)로 이 빌드의 메시지 저장 끔을 직접 판정하는 것과, 실제 웹 실행 20건 이상의 차단·Agent 오류 비율이다. 실패가 Cloudflare를 지나도 Gateway 코드가 남는지는 실제 실패 작업이 생긴 뒤 확인한다.
+- Gemini 안을 고른다면 Agent 오류(96문항 중 8, 8%)와 느린 응답을 먼저 줄여야 한다. 수집기 p95 약 60초는 결과를 본 88줄의 값이고, Agent 오류 8건을 넣은 Langflow 실행 p95는 69.5초다.
 - 다음 측정:
   - 같은 문항끼리 짝지은 비교. 문항별 결과는 AWS의 `deploy/.local/gateway-eval/`에만 있다. 거기서 짝지은 집계만 내는 작은 도구를 AWS에서 돌려야 한다(아직 만들지 않음).
   - GPT 토큰 기록. 규칙 동작 클라이언트에 `stream_usage=True`를 더하는 수정은 [32 문서](32-agent-gateway-tunnel.md#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)에서 제안만 했고 구현하지 않았다. 기록이 생겨야 두 안의 비용을 견줄 수 있다.
@@ -250,10 +253,12 @@ df9bb9c61196840257ed839b77268763d8b00966eb19cb18d7967b5dee9e6e82  deploy/gateway
 9c9c73280bb4e67f1e4d3b833030964100e7dafff2b45be9f53d8ef02d4a87eb  deploy/gateway-eval-reports/gemini-collection.json
 ```
 
+CI에는 `gateway-eval` 보고서를 보는 검사가 아직 없다. 작성자가 저장소 검사기의 외부 집계 검사(`scripts/check_repository.py`의 `validate_external_baseline_summary`)를 메모리에서만 고쳐(`gateway` 시스템 허용, 새 세트의 정답·명세 해시) 옮겨 적은 채점 보고서 3개와 2절의 로컬 기준선에 돌렸고, 모두 통과했다. 이 검사는 정해진 키만 있는지, 자유 문장이 없는지, 개수와 비율이 서로 맞는지를 본다. 수집 보고서 3개는 이 검사의 대상이 아니다.
+
 ## 6. 남는 것과 지우는 것
 
 - `deploy/.local/gateway-eval/`(0700, root): 문항·정답·요청·응답 원문·세부 채점. Git에 넣지 않는다. 비교가 끝나면 사용자가 지워도 된다. 다만 짝지은 비교(5.4절)를 하려면 그때까지 남겨 둔다(제안).
-- `deploy/gateway-eval-reports/`: 공유 가능한 집계(채점 요약·수집 결과 수·시간). Git에는 이 저장소의 `reports/`로 옮겨 넣는다. 2026-11-27 세 안의 보고서 6개를 `reports/gateway-eval-heldout-*`로 넣었다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)의 표, 옮겨 적은 사본).
+- `deploy/gateway-eval-reports/`: 공유 가능한 집계(채점 요약·수집 결과 수·시간). Git에는 이 저장소의 `reports/`로 옮겨 넣는다. 2026-11-27 세 안의 보고서 6개를 `reports/`에 넣었다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)의 표, 옮겨 적은 사본). 이름은 `gateway-eval-heldout-`로 시작하며, 같은 접두사의 로컬 기준선 2개(2절)와는 별개다.
 - Langflow DB에는 운영 요청처럼 `gw-` trace가 남는다. 메시지는 저장되지 않는다. 정리는 [32 문서](32-agent-gateway-tunnel.md#langflow-메시지-저장-끄기와-오래된-원문-정리)의 도구를 따른다.
 
 ## 7. 도구
