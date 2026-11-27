@@ -51,7 +51,7 @@ cd ~/oreumit-agent && git fetch origin refs/heads/main:refs/remotes/origin/main 
 ```bash
 cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh prepare
 ```
-2. (선택) 모델 없는 기준선을 AWS에서도 만든다. 2절 표와 같은 값이 나오면 카탈로그가 같다는 확인이 된다.
+2. (선택) 모델 없는 기준선을 AWS에서도 만든다. 2절 표와 같은 값이 나오면 카탈로그가 같다는 확인이 된다. 2026-11-25 AWS에서 만든 보고서의 채점 수치는 2절과 같았다([5절](#5-두-안-비교2026-11-27-사용자-제공-출력)).
 ```bash
 cd ~/oreumit-agent && sudo bash deploy/run-gateway-eval.sh reference
 ```
