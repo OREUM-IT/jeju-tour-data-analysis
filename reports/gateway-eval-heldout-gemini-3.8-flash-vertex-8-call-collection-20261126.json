@@ -1,0 +1,35 @@
+{
+  "kind": "jeju-gateway-eval-collection",
+  "model": "gemini-3.8-flash",
+  "flow": "vertex-8-call",
+  "planSha256": "22817d445e7df5d0bb91b0271b2c2fe33694ca72a6f4e35d9d8288c2a5ea7f7a",
+  "cases": 96,
+  "outcomes": {
+    "accepted": 84,
+    "failed:JOB_NOT_FOUND": 8,
+    "failed:RECOMMENDATION_BLOCKED": 4
+  },
+  "timingSeconds": {
+    "totalSeconds": {
+      "count": 88,
+      "p50": 18.77,
+      "p95": 60.6,
+      "max": 70.96
+    },
+    "runSeconds": {
+      "count": 88,
+      "p50": 18.68,
+      "p95": 60.51,
+      "max": 70.88
+    },
+    "queueWaitSeconds": {
+      "count": 88,
+      "p50": 0.07,
+      "p95": 0.11,
+      "max": 0.73
+    }
+  },
+  "startedAt": "2026-11-25T11:10:52.139Z",
+  "completedAt": "2026-11-26T04:11:27.035Z",
+  "productionReady": false
+}
