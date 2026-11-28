@@ -233,7 +233,7 @@ SQL 수치는 [32 문서의 (나)·(다)](32-agent-gateway-tunnel.md#집계-sql-
 - Gemini 안을 고른다면 Agent 오류(96문항 중 8, 8%)와 느린 응답을 먼저 줄여야 한다. 수집기 p95 약 60초는 결과를 본 88줄의 값이고, Agent 오류 8건을 넣은 Langflow 실행 p95는 69.5초다.
 - 다음 측정:
   - 같은 문항끼리 짝지은 비교. 문항별 결과는 AWS의 `deploy/.local/gateway-eval/`에만 있다. 거기서 짝지은 집계만 내는 작은 도구를 AWS에서 돌려야 한다(아직 만들지 않음).
-  - GPT 토큰 기록. 규칙 동작 클라이언트에 `stream_usage=True`를 더하는 수정은 [32 문서](32-agent-gateway-tunnel.md#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)에서 제안만 했고 구현하지 않았다. 기록이 생겨야 두 안의 비용을 견줄 수 있다.
+  - GPT 토큰 기록. 규칙 동작 클라이언트에 `stream_usage=True`를 더하는 수정은 [32 문서](32-agent-gateway-tunnel.md#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)에서 제안만 했고 구현하지 않았다. 기록이 생겨야 두 안의 비용을 견줄 수 있다. → 2026-11-28 구현했다(AWS 미적용, [32 문서](32-agent-gateway-tunnel.md#토큰-기록-수정stream_usage-2026-11-28)). 토큰은 적용 뒤 실행부터 남고, 이 비교의 GPT 실행에는 남지 않는다.
   - 사람 검수(아직 0).
 
 ### 5.5 옮겨 적은 보고서
@@ -335,7 +335,7 @@ CI에는 `gateway-eval` 보고서를 보는 검사가 아직 없다. 작성자�
 
 ### 6.6 AWS 적용(사용자 단계, 아직 안 함)
 
-이 변경을 병합한 뒤 MCP 이미지를 다시 빌드해야 한다. 흐름은 바꾸지 않으므로 흐름을 교체하는 `apply-agent-rule-action.sh`가 아니라 `apply-agent-queue.sh`를 쓴다. 이 helper는 `jeju-mcp`·`agent-gateway` 이미지를 빌드하고, MCP 범위와 Gateway의 대기·실행·불확실 작업이 0일 때만 두 서비스를 갱신한 뒤 오프라인 검사·공개 인증·큐 준비 검사를 한다. Langflow 흐름·자격증명·DB·cloudflared는 건드리지 않는다(스크립트 확인). Gateway 코드는 이 변경에서 바뀌지 않았다. 웹에서 새 추천이 들어오지 않는 때 실행한다.
+이 변경을 병합한 뒤 MCP 이미지를 다시 빌드해야 한다. 이 변경만 적용할 때는 흐름을 바꿀 일이 없으므로 흐름을 교체하는 `apply-agent-rule-action.sh`가 아니라 `apply-agent-queue.sh`를 쓴다. 먼저 병합된 [토큰 기록 수정](32-agent-gateway-tunnel.md#토큰-기록-수정stream_usage-2026-11-28)(PR #50, AWS 미적용)과 함께 적용할 때는 `apply-agent-rule-action.sh` 한 번으로 된다. 그 helper도 `jeju-mcp` 이미지를 다시 빌드해 MCP를 바꾼 뒤 흐름을 교체하기 때문이다(스크립트 확인). 그때는 흐름이 바뀌어 확인 SQL의 경계가 옮겨진다. 어느 쪽이든 끝난 뒤 아래 확인 명령을 실행한다. 이 helper는 `jeju-mcp`·`agent-gateway` 이미지를 빌드하고, MCP 범위와 Gateway의 대기·실행·불확실 작업이 0일 때만 두 서비스를 갱신한 뒤 오프라인 검사·공개 인증·큐 준비 검사를 한다. Langflow 흐름·자격증명·DB·cloudflared는 건드리지 않는다(스크립트 확인). Gateway 코드는 이 변경에서 바뀌지 않았다. 웹에서 새 추천이 들어오지 않는 때 실행한다.
 
 AWS SSH에서 **한 줄씩** 실행한다.
 
@@ -353,7 +353,7 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 cd ~/oreumit-agent/deploy && sudo docker compose -p oreumit-bootstrap -f compose.yaml -f compose.catalog.yaml -f compose.langflow.yaml -f compose.gateway.yaml -f compose.tunnel.yaml exec -T jeju-mcp node --input-type=module - < tests/check-walk-route.mjs
 ```
 
-`"scope":"walk-route-offline-runtime"`과 `"routesWithheld":true`가 나와야 한다(로컬 사본의 `routePlaces`는 48). 이전 이미지에서는 `WALK_ROUTE_OFFLINE_CHECK_FAILED`로 끝난다. 흐름을 바꾸지 않으므로 [적용 뒤 확인 SQL](32-agent-gateway-tunnel.md#적용-뒤-확인-sql)의 경계는 옮겨지지 않는다. `run-gateway-eval.sh reference`는 이미지가 아니라 checkout의 코드를 쓴다. 다만 2026-11-25에 3절 2단계를 실행한 서버에는 그때의 `deploy/.local/gateway-eval/reference-*`가 남아 있어(지우지 않았다면) 첫 단계(`requests`)에서 `EEXIST`로 멈춘다. 이 도구는 이미 있는 파일에 쓰지 않으므로 덮어쓰지는 않는다(코드 확인, 이 작업 환경에서 같은 동작 확인). 3절 2단계처럼 선택 단계다. 새 규칙의 AWS 기준선을 만들려면 먼저 5.5절의 sha256 대조를 마치고, `deploy/.local/gateway-eval/reference-*`와 `deploy/gateway-eval-reports/reference-{report,collection}.json`을 다른 곳으로 옮긴 뒤 실행한다(제안). 새 보고서의 `model`·`flow`(`no-model-first-3`·`rule-action`)는 11-25 보고서와 같아서, 둘은 파일을 둔 곳으로만 구별된다. `productionReady:false`를 유지한다.
+`"scope":"walk-route-offline-runtime"`과 `"routesWithheld":true`가 나와야 한다(로컬 사본의 `routePlaces`는 48). 이전 이미지에서는 `WALK_ROUTE_OFFLINE_CHECK_FAILED`로 끝난다. `apply-agent-queue.sh`로 적용했다면 흐름을 바꾸지 않으므로 [적용 뒤 확인 SQL](32-agent-gateway-tunnel.md#적용-뒤-확인-sql)의 경계는 옮겨지지 않는다. `run-gateway-eval.sh reference`는 이미지가 아니라 checkout의 코드를 쓴다. 다만 2026-11-25에 3절 2단계를 실행한 서버에는 그때의 `deploy/.local/gateway-eval/reference-*`가 남아 있어(지우지 않았다면) 첫 단계(`requests`)에서 `EEXIST`로 멈춘다. 이 도구는 이미 있는 파일에 쓰지 않으므로 덮어쓰지는 않는다(코드 확인, 이 작업 환경에서 같은 동작 확인). 3절 2단계처럼 선택 단계다. 새 규칙의 AWS 기준선을 만들려면 먼저 5.5절의 sha256 대조를 마치고, `deploy/.local/gateway-eval/reference-*`와 `deploy/gateway-eval-reports/reference-{report,collection}.json`을 다른 곳으로 옮긴 뒤 실행한다(제안). 새 보고서의 `model`·`flow`(`no-model-first-3`·`rule-action`)는 11-25 보고서와 같아서, 둘은 파일을 둔 곳으로만 구별된다. `productionReady:false`를 유지한다.
 
 ## 7. 남는 것과 지우는 것
 
