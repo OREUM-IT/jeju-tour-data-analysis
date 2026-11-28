@@ -936,7 +936,7 @@ SQL
   - 최종 검증 출력이 `{"status":"blocked"`로 시작하면 `blocked`, 다른 출력이면 `accepted`다. 출력 원문은 이 고정 앞부분 비교에만 쓰고 결과로 내보내지 않는다. 원문을 정리한 실행은 정리 때 남긴 `finalStatus` 표지로 나눈다.
   - 메시지 표를 읽지 않으므로 메시지를 저장하지 않는 실행도 센다. 이전 판은 메시지 표로 나눴다. 그래서 저장을 끈 실행이 모두 `no_final`로 나왔다(2026-11-24 임시 DB에서 6건 확인).
   - `accepted`는 흐름 안 검증을 통과한 실행이다. Gateway는 그 뒤에 MCP로 한 번 더 검증하므로 웹의 최종 수락 수와 다를 수 있다.
-  - `blocked`의 코드별 내역은 메시지를 저장하던 실행에만 있다. 위 [확인 SQL](#적용-전후-확인-sql)의 [2]에서 본다(이전 기록용).
+  - `blocked`의 코드별 내역은 아래 [차단 사유 집계 SQL](#차단-사유-집계-sql)의 [1]에서 본다. 메시지 저장과 관계없이 최종 검증 span으로 나눈다. 위 [확인 SQL](#적용-전후-확인-sql)의 [2]는 메시지를 저장하던 실행만 나눈다(이전 기록용).
   - `agent_error`는 최종 검증 출력이 없고 구성 요소(Agent 등) 하나가 오류로 끝난 실행이다. `no_final`은 둘 다 없는 실행이다.
 - `error_traces`: Langflow가 오류로 표시한 실행 수다.
 - `p50_ms`·`p95_ms`·`max_ms`: Langflow가 기록한 흐름 1회의 실행 시간이다. 단위는 밀리초다. 추적이 기록된 실행만 들어 있다. 실행 수가 적으면 `p95_ms`는 약한 값이다. 20건 이상 쌓인 날짜를 본다.
@@ -1061,6 +1061,347 @@ SQL
 - **쓰임**: 11-26 행으로 [35 문서](35-gateway-model-comparison.md#결과를-받지-못한-8건)에서 결과를 받지 못한 Gemini 비교 8건을 판정했다. 실행 94가 비교 본 실행의 제출 수와 같고 Agent 오류 8·`no_final` 0이어서, 모델·Agent 쪽 실패로 보고 다시 보내지 않았다. 이 행과 11-25 GPT 행의 지연·호출 수는 [35 문서 5절](35-gateway-model-comparison.md#5-두-안-비교2026-11-27-사용자-제공-출력)의 두 안 비교에 쓴다.
 - 관측: 11-26 행의 토큰 기록 없는 호출(6)이 실패한 호출(5)보다 1회 많다. 그 1회가 무엇인지는 이 출력으로 알 수 없다.
 - 추정: 실패한 모델 호출 5회와 가장 긴 실행 90145 ms로 보아, Agent 오류 8건은 모델 호출 오류와 Agent 실행 상한 90초(`GUARDED_AGENT_MAX_SECONDS`)가 섞인 것으로 본다. 이 SQL은 실행별로 나누지 못한다.
+
+### 차단 사유 집계 SQL
+
+2026-11-27 구현 기록이다. **작성자는 AWS에서 아무것도 실행하지 않았다.** [35 문서](35-gateway-model-comparison.md)의 GPT 비교 수집에서 96문항 중 15건이 Gateway HTTP 422 `RECOMMENDATION_BLOCKED`로 끝났다(사용자 제공 출력. 수치는 35 문서가 아니라 [PR #47](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/47)이 더한 수집 보고서 `reports/gateway-eval-heldout-gpt-5.4-mini-rule-action-collection-20261125.json`에 있다: `accepted` 81·`failed:RECOMMENDATION_BLOCKED` 15). 흐름 안 최종 검증 구성 요소(`services/langflow/gateway_components.py`의 `JejuFinalValidation`)는 MCP가 수락하지 않은 이유를 내보내지 않고 고정 차단 문구만 출력한다. 이 SQL은 그 차단이 어떤 실행이었는지를 Langflow 실행 기록(`trace`·`span`)에 남은 것으로 나눠 센다. 모델이나 서비스를 호출하지 않는다.
+
+Langflow DB를 읽기만 한다. 세션을 읽기 전용으로 두고 문장마다 15초 제한을 건다. 세션 ID·질의·답 원문·장소 ID·회원 정보는 출력하지 않는다. 건수와 고정 이름표만 나온다. 데이터에서 온 이름표는 고정 문자열이거나, 엄격한 형식을 통과한 모델 이름이다. 실행 결과와 모델 이름은 [지연·토큰 집계 SQL](#지연토큰-집계-sql)과 글자까지 같은 부분으로 나눈다(테스트로 고정). PostgreSQL 16 이상이 필요하다(`pg_input_is_valid`. AWS는 17이다). 같은 SQL이 `deploy/agent-block-reasons.sql`에 있고, 테스트가 두 곳이 같은지 확인한다.
+
+```bash
+cd ~/oreumit-agent && sudo docker compose -p oreumit-bootstrap -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off -v ON_ERROR_STOP=1' <<'SQL'
+-- Read-only breakdown of the Gateway runs (session ids starting with gw-) that final validation blocked, from
+-- the Langflow tracing tables. Output is counts and fixed labels only: no session ids, query or answer texts, place
+-- ids or member data. A label taken from data is a fixed string or a recorded model name that passes a strict pattern.
+-- Run outcomes and model names use the CTEs of deploy/agent-run-metrics.sql, character for character.
+-- [3] and [4] read the agent answer as the final validation span received it (inputs.agent_response.text), parsed
+-- only when it holds at most 10000 opening brackets (deeper JSON raises a stack depth error that pg_input_is_valid
+-- does not catch) and passes pg_input_is_valid, and search the stored tool call outputs of the same run for fixed id
+-- needles; neither text is returned. The MCP's own rejection reasons are not stored anywhere: [3] and [4] approximate
+-- them.
+-- docs/32-agent-gateway-tunnel.md holds the same text inside the AWS command; a deploy test keeps them equal.
+SET default_transaction_read_only = on;
+SET statement_timeout = '15s';
+SET TIME ZONE 'UTC';
+\echo '[0] session time zone (UTC)'
+SHOW TimeZone;
+\echo '[1] Gateway runs by KST day and recorded model; blocked runs split by the fixed code in the final validation output'
+WITH s AS (
+  SELECT sp.trace_id, lower(sp.span_type::text) AS kind, sp.attributes::jsonb AS a, sp.name
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) = 'llm'),
+c AS (
+  SELECT trace_id, string_agg(DISTINCT coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')'), '+'
+    ORDER BY coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')')) AS model
+  FROM s GROUP BY 1),
+f AS (
+  SELECT sp.trace_id,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text LIKE '{"redacted":true,"finalStatus":"%'
+      OR sp.outputs -> 'message' ->> 'text' IS NOT NULL, false) END) AS has_final,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}'
+      OR sp.outputs -> 'message' ->> 'text' LIKE '{"status":"blocked"%', false) END) AS blocked,
+    bool_or(lower(sp.status::text) = 'error') AS agent_error
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL GROUP BY 1),
+v AS (
+  SELECT sp.trace_id,
+    CASE WHEN bool_or(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}') THEN 'blocked_redacted'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"RECOMMENDATION_BLOCKED",'))
+        THEN 'RECOMMENDATION_BLOCKED'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"VALIDATION_FAILED",'))
+        THEN 'VALIDATION_FAILED'
+      ELSE 'blocked_other' END AS code
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL AND sp.name = 'Jeju Final Validation' GROUP BY 1),
+run AS (
+  SELECT t.id AS trace_id, (t.start_time + interval '9 hours')::date AS kst_day,
+    CASE WHEN c.model IS NULL THEN '-' WHEN c.model ~ '^[A-Za-z0-9 ._:+()/-]{1,120}$' THEN c.model ELSE '(other)' END AS model,
+    CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'
+      WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome, v.code
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.trace_id = t.id LEFT JOIN v ON v.trace_id = t.id
+  WHERE t.session_id LIKE 'gw-%')
+SELECT kst_day, model, count(*) AS runs,
+  count(*) FILTER (WHERE outcome = 'accepted') AS accepted,
+  count(*) FILTER (WHERE outcome = 'blocked') AS blocked,
+  count(*) FILTER (WHERE outcome = 'blocked' AND code = 'RECOMMENDATION_BLOCKED') AS recommendation_blocked,
+  count(*) FILTER (WHERE outcome = 'blocked' AND code = 'VALIDATION_FAILED') AS validation_failed,
+  count(*) FILTER (WHERE outcome = 'blocked' AND code = 'blocked_redacted') AS blocked_redacted,
+  count(*) FILTER (WHERE outcome = 'blocked' AND code = 'blocked_other') AS blocked_other,
+  count(*) FILTER (WHERE outcome = 'agent_error') AS agent_error,
+  count(*) FILTER (WHERE outcome = 'no_final') AS no_final
+FROM run GROUP BY 1, 2 ORDER BY 1, 2;
+\echo '[2] accepted and blocked runs by model calls and tool calls per run; runs_with_tool_error = a tool call returned an error'
+WITH s AS (
+  SELECT sp.trace_id, lower(sp.span_type::text) AS kind, sp.attributes::jsonb AS a, sp.name
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) = 'llm'),
+c AS (
+  SELECT trace_id, string_agg(DISTINCT coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')'), '+'
+    ORDER BY coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')')) AS model
+  FROM s GROUP BY 1),
+f AS (
+  SELECT sp.trace_id,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text LIKE '{"redacted":true,"finalStatus":"%'
+      OR sp.outputs -> 'message' ->> 'text' IS NOT NULL, false) END) AS has_final,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}'
+      OR sp.outputs -> 'message' ->> 'text' LIKE '{"status":"blocked"%', false) END) AS blocked,
+    bool_or(lower(sp.status::text) = 'error') AS agent_error
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL GROUP BY 1),
+v AS (
+  SELECT sp.trace_id,
+    CASE WHEN bool_or(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}') THEN 'blocked_redacted'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"RECOMMENDATION_BLOCKED",'))
+        THEN 'RECOMMENDATION_BLOCKED'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"VALIDATION_FAILED",'))
+        THEN 'VALIDATION_FAILED'
+      ELSE 'blocked_other' END AS code
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL AND sp.name = 'Jeju Final Validation' GROUP BY 1),
+run AS (
+  SELECT t.id AS trace_id, (t.start_time + interval '9 hours')::date AS kst_day,
+    CASE WHEN c.model IS NULL THEN '-' WHEN c.model ~ '^[A-Za-z0-9 ._:+()/-]{1,120}$' THEN c.model ELSE '(other)' END AS model,
+    CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'
+      WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome, v.code
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.trace_id = t.id LEFT JOIN v ON v.trace_id = t.id
+  WHERE t.session_id LIKE 'gw-%'),
+k AS (
+  SELECT sp.trace_id, count(*) FILTER (WHERE lower(sp.span_type::text) = 'llm') AS model_calls,
+    count(*) FILTER (WHERE lower(sp.span_type::text) = 'tool') AS tool_calls,
+    count(*) FILTER (WHERE lower(sp.span_type::text) = 'tool' AND (lower(sp.status::text) = 'error'
+      OR strpos(sp.outputs::text, ' status=''error''') > 0)) AS tool_errors
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) IN ('llm', 'tool') GROUP BY 1)
+SELECT run.kst_day, run.model, CASE WHEN run.outcome = 'blocked' THEN run.code ELSE run.outcome END AS result,
+  count(*) AS runs,
+  count(*) FILTER (WHERE coalesce(k.model_calls, 0) = 0) AS model_calls_0,
+  count(*) FILTER (WHERE k.model_calls = 1) AS model_calls_1,
+  count(*) FILTER (WHERE k.model_calls = 2) AS model_calls_2,
+  count(*) FILTER (WHERE k.model_calls BETWEEN 3 AND 7) AS model_calls_3_7,
+  count(*) FILTER (WHERE k.model_calls >= 8) AS model_calls_8_plus,
+  count(*) FILTER (WHERE coalesce(k.tool_calls, 0) = 0) AS tool_calls_0,
+  count(*) FILTER (WHERE k.tool_calls = 1) AS tool_calls_1,
+  count(*) FILTER (WHERE k.tool_calls = 2) AS tool_calls_2,
+  count(*) FILTER (WHERE k.tool_calls >= 3) AS tool_calls_3_plus,
+  count(*) FILTER (WHERE k.tool_errors > 0) AS runs_with_tool_error
+FROM run LEFT JOIN k ON k.trace_id = run.trace_id
+WHERE run.outcome IN ('accepted', 'blocked')
+GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+\echo '[3] accepted and blocked runs by the shape of the agent answer that final validation received (no answer text is printed)'
+WITH s AS (
+  SELECT sp.trace_id, lower(sp.span_type::text) AS kind, sp.attributes::jsonb AS a, sp.name
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) = 'llm'),
+c AS (
+  SELECT trace_id, string_agg(DISTINCT coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')'), '+'
+    ORDER BY coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')')) AS model
+  FROM s GROUP BY 1),
+f AS (
+  SELECT sp.trace_id,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text LIKE '{"redacted":true,"finalStatus":"%'
+      OR sp.outputs -> 'message' ->> 'text' IS NOT NULL, false) END) AS has_final,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}'
+      OR sp.outputs -> 'message' ->> 'text' LIKE '{"status":"blocked"%', false) END) AS blocked,
+    bool_or(lower(sp.status::text) = 'error') AS agent_error
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL GROUP BY 1),
+v AS (
+  SELECT sp.trace_id,
+    CASE WHEN bool_or(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}') THEN 'blocked_redacted'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"RECOMMENDATION_BLOCKED",'))
+        THEN 'RECOMMENDATION_BLOCKED'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"VALIDATION_FAILED",'))
+        THEN 'VALIDATION_FAILED'
+      ELSE 'blocked_other' END AS code
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL AND sp.name = 'Jeju Final Validation' GROUP BY 1),
+run AS (
+  SELECT t.id AS trace_id, (t.start_time + interval '9 hours')::date AS kst_day,
+    CASE WHEN c.model IS NULL THEN '-' WHEN c.model ~ '^[A-Za-z0-9 ._:+()/-]{1,120}$' THEN c.model ELSE '(other)' END AS model,
+    CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'
+      WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome, v.code
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.trace_id = t.id LEFT JOIN v ON v.trace_id = t.id
+  WHERE t.session_id LIKE 'gw-%'),
+a AS MATERIALIZED (
+  SELECT DISTINCT ON (sp.trace_id) sp.trace_id, sp.outputs::text LIKE '{"redacted":true%' AS redacted,
+    p.doc IS NOT NULL AS readable,
+    CASE WHEN jsonb_typeof(p.doc #> '{agent_response,text}') = 'string' THEN p.doc #>> '{agent_response,text}' END AS answer,
+    CASE WHEN jsonb_typeof(p.doc #> '{prepared_request,text}') = 'string' THEN p.doc #>> '{prepared_request,text}' END AS prepared
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+    CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(sp.inputs::text, 'jsonb') THEN sp.inputs::text::jsonb END AS doc
+      OFFSET 0) p
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL AND sp.name = 'Jeju Final Validation'
+  ORDER BY sp.trace_id, sp.start_time DESC, sp.id),
+b AS (
+  SELECT trace_id, redacted, readable, answer,
+    CASE WHEN length(answer) - length(translate(answer, '[{', '')) > 10000 THEN NULL
+      WHEN pg_input_is_valid(answer, 'jsonb') THEN answer::jsonb END AS j,
+    CASE WHEN pg_input_is_valid(prepared, 'jsonb') THEN prepared::jsonb -> 'request' END AS request
+  FROM a),
+x AS (
+  SELECT trace_id,
+    CASE WHEN redacted THEN 'redacted' WHEN NOT readable THEN 'unreadable'
+      WHEN answer IS NULL THEN 'no_answer_text' WHEN answer ~ '^[[:space:]]*$' THEN 'empty_text'
+      WHEN j IS NULL THEN CASE WHEN answer ~ '^[[:space:]]*`{3}' THEN 'not_json_code_fence'
+        WHEN strpos(answer, 'Model call limits exceeded') > 0 THEN 'not_json_call_limit_notice'
+        WHEN strpos(answer, 'placeIds') > 0 THEN 'not_json_mentions_placeIds' ELSE 'not_json' END
+      WHEN jsonb_typeof(j) <> 'object' THEN 'json_not_object'
+      WHEN (SELECT count(*) FROM json_object_keys(answer::json)) <> (SELECT count(*) FROM jsonb_object_keys(j))
+        THEN 'duplicate_keys'
+      WHEN NOT j ? 'placeIds' THEN 'json_without_placeIds'
+      WHEN (SELECT count(*) FROM jsonb_object_keys(j)) > 1 THEN 'json_with_other_keys'
+      WHEN jsonb_typeof(j -> 'placeIds') <> 'array' THEN 'placeIds_not_array'
+      WHEN jsonb_array_length(j -> 'placeIds') = 0 THEN 'placeIds_empty'
+      WHEN jsonb_array_length(j -> 'placeIds') > 50 THEN 'placeIds_over_50'
+      WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'placeIds') e WHERE jsonb_typeof(e) <> 'string')
+        THEN 'non_string_ids'
+      WHEN EXISTS (SELECT 1 FROM jsonb_array_elements_text(j -> 'placeIds') e (id)
+        WHERE id = '' OR length(id) > 160 OR id ~ '^[[:space:]]|[[:space:]]$') THEN 'bad_id_strings'
+      WHEN jsonb_array_length(j -> 'placeIds') <= 5 THEN 'placeIds_1_to_5' ELSE 'placeIds_6_to_50' END AS answer_shape
+  FROM b)
+SELECT run.kst_day, run.model, CASE WHEN run.outcome = 'blocked' THEN run.code ELSE run.outcome END AS result,
+  x.answer_shape, count(*) AS runs
+FROM run JOIN x ON x.trace_id = run.trace_id
+WHERE run.outcome IN ('accepted', 'blocked')
+GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4;
+\echo '[4] runs whose answer lists 1 to 50 place ids as strings, split by answer keys: were the ids in the tool results of the same run (seen)?'
+WITH s AS (
+  SELECT sp.trace_id, lower(sp.span_type::text) AS kind, sp.attributes::jsonb AS a, sp.name
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) = 'llm'),
+c AS (
+  SELECT trace_id, string_agg(DISTINCT coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')'), '+'
+    ORDER BY coalesce(nullif(a ->> 'gen_ai.response.model', ''), '(' || name || ')')) AS model
+  FROM s GROUP BY 1),
+f AS (
+  SELECT sp.trace_id,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text LIKE '{"redacted":true,"finalStatus":"%'
+      OR sp.outputs -> 'message' ->> 'text' IS NOT NULL, false) END) AS has_final,
+    bool_or(CASE WHEN sp.name = 'Jeju Final Validation' THEN coalesce(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}'
+      OR sp.outputs -> 'message' ->> 'text' LIKE '{"status":"blocked"%', false) END) AS blocked,
+    bool_or(lower(sp.status::text) = 'error') AS agent_error
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL GROUP BY 1),
+v AS (
+  SELECT sp.trace_id,
+    CASE WHEN bool_or(sp.outputs::text = '{"redacted":true,"finalStatus":"blocked"}') THEN 'blocked_redacted'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"RECOMMENDATION_BLOCKED",'))
+        THEN 'RECOMMENDATION_BLOCKED'
+      WHEN bool_or(starts_with(sp.outputs -> 'message' ->> 'text', '{"status":"blocked","code":"VALIDATION_FAILED",'))
+        THEN 'VALIDATION_FAILED'
+      ELSE 'blocked_other' END AS code
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL AND sp.name = 'Jeju Final Validation' GROUP BY 1),
+run AS (
+  SELECT t.id AS trace_id, (t.start_time + interval '9 hours')::date AS kst_day,
+    CASE WHEN c.model IS NULL THEN '-' WHEN c.model ~ '^[A-Za-z0-9 ._:+()/-]{1,120}$' THEN c.model ELSE '(other)' END AS model,
+    CASE WHEN f.has_final AND NOT f.blocked THEN 'accepted' WHEN f.has_final THEN 'blocked'
+      WHEN f.agent_error THEN 'agent_error' ELSE 'no_final' END AS outcome, v.code
+  FROM trace t LEFT JOIN c ON c.trace_id = t.id LEFT JOIN f ON f.trace_id = t.id LEFT JOIN v ON v.trace_id = t.id
+  WHERE t.session_id LIKE 'gw-%'),
+a AS MATERIALIZED (
+  SELECT DISTINCT ON (sp.trace_id) sp.trace_id, sp.outputs::text LIKE '{"redacted":true%' AS redacted,
+    p.doc IS NOT NULL AS readable,
+    CASE WHEN jsonb_typeof(p.doc #> '{agent_response,text}') = 'string' THEN p.doc #>> '{agent_response,text}' END AS answer,
+    CASE WHEN jsonb_typeof(p.doc #> '{prepared_request,text}') = 'string' THEN p.doc #>> '{prepared_request,text}' END AS prepared
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+    CROSS JOIN LATERAL (SELECT CASE WHEN pg_input_is_valid(sp.inputs::text, 'jsonb') THEN sp.inputs::text::jsonb END AS doc
+      OFFSET 0) p
+  WHERE t.session_id LIKE 'gw-%' AND sp.parent_span_id IS NULL AND sp.name = 'Jeju Final Validation'
+  ORDER BY sp.trace_id, sp.start_time DESC, sp.id),
+b AS (
+  SELECT trace_id, redacted, readable, answer,
+    CASE WHEN length(answer) - length(translate(answer, '[{', '')) > 10000 THEN NULL
+      WHEN pg_input_is_valid(answer, 'jsonb') THEN answer::jsonb END AS j,
+    CASE WHEN pg_input_is_valid(prepared, 'jsonb') THEN prepared::jsonb -> 'request' END AS request
+  FROM a),
+l AS (
+  SELECT trace_id, j -> 'placeIds' AS chosen, (SELECT count(*) FROM jsonb_object_keys(j)) = 1 AS ids_only, request
+  FROM b
+  WHERE CASE WHEN jsonb_typeof(j -> 'placeIds') = 'array' THEN jsonb_array_length(j -> 'placeIds') BETWEEN 1 AND 50
+    AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'placeIds') e WHERE jsonb_typeof(e) <> 'string') ELSE false END),
+n AS (
+  SELECT l.trace_id, e.id, bool_or(coalesce(l.request -> 'excludedIds' @> jsonb_build_array(e.id), false)) AS excluded
+  FROM l CROSS JOIN LATERAL jsonb_array_elements_text(l.chosen) AS e (id) GROUP BY 1, 2),
+o AS (
+  SELECT sp.trace_id, sp.outputs::text AS output
+  FROM span sp JOIN trace t ON t.id = sp.trace_id
+  WHERE t.session_id LIKE 'gw-%' AND lower(sp.span_type::text) = 'tool'),
+q AS (
+  SELECT n.trace_id, n.id, n.excluded, count(o.trace_id) AS tools,
+    coalesce(bool_or(n.id ~ '^[A-Za-z0-9._:-]{1,160}$' AND (strpos(o.output, E'\\"id\\":\\"' || n.id || E'\\"') > 0
+      OR strpos(o.output, E'\\"id\\": \\"' || n.id || E'\\"') > 0 OR strpos(o.output, '"id":"' || n.id || '"') > 0
+      OR strpos(o.output, '"id": "' || n.id || '"') > 0)), false) AS seen
+  FROM n LEFT JOIN o ON o.trace_id = n.trace_id GROUP BY 1, 2, 3),
+r AS (
+  SELECT trace_id, count(*) AS ids, count(*) FILTER (WHERE seen) AS seen, bool_or(excluded) AS excluded,
+    max(tools) AS tools
+  FROM q GROUP BY 1)
+SELECT run.kst_day, run.model, CASE WHEN run.outcome = 'blocked' THEN run.code ELSE run.outcome END AS result,
+  CASE WHEN l.ids_only THEN 'placeIds_only' ELSE 'with_other_keys' END AS answer_keys, count(*) AS runs,
+  count(*) FILTER (WHERE r.seen = r.ids) AS all_seen,
+  count(*) FILTER (WHERE r.seen > 0 AND r.seen < r.ids) AS some_unseen,
+  count(*) FILTER (WHERE r.seen = 0) AS none_seen,
+  count(*) FILTER (WHERE r.seen = 0 AND r.tools = 0) AS none_seen_without_tool_call,
+  count(*) FILTER (WHERE r.excluded) AS with_excluded_id,
+  count(*) FILTER (WHERE CASE WHEN jsonb_typeof(l.request -> 'requirements') = 'array'
+    THEN jsonb_array_length(l.request -> 'requirements') > 0 ELSE false END) AS with_requirement
+FROM run JOIN l ON l.trace_id = run.trace_id JOIN r ON r.trace_id = run.trace_id
+WHERE run.outcome IN ('accepted', 'blocked')
+GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4;
+SQL
+```
+
+표 다섯 개가 나온다. [1]~[4]는 KST 날짜와 기록된 모델 이름(`model`)별이다.
+
+| 표 | 내용 |
+|---|---|
+| [0] | 조회 세션의 시간대. SQL이 `UTC`로 고정한다 |
+| [1] | Gateway 실행의 결과. 차단은 흐름 출력의 고정 코드로 나눈다 |
+| [2] | 수락·차단 실행의 실행당 모델 호출·도구 호출 수와 도구 오류 |
+| [3] | 최종 검증이 받은 Agent 최종 답의 모양 |
+| [4] | 답이 장소 ID를 고른 실행에서, 그 ID가 같은 실행의 도구 결과에 있었는지. 답의 키가 `placeIds` 하나뿐인지로도 나눈다 |
+
+읽는 법이다.
+
+- [1]의 `runs`·`accepted`·`blocked`·`agent_error`·`no_final`은 지연·토큰 SQL [2]의 같은 이름 열과 정의가 같다. `blocked`는 아래 네 열로 나뉘고, 넷의 합이 `blocked`다.
+  - `recommendation_blocked`: 흐름 출력이 `RECOMMENDATION_BLOCKED`다. 답을 JSON 객체로 읽어 MCP에 보냈고, MCP가 수락하지 않았다.
+  - `validation_failed`: 흐름 출력이 `VALIDATION_FAILED`다. 답을 JSON 객체로 읽지 못했거나(중복 키·`NaN`·128 KiB 초과 포함), MCP 검증 호출 자체가 실패했다(코드 확인).
+  - `blocked_redacted`: [정리 도구](#오래된-원문-정리선택)가 원문을 지워 코드가 남지 않은 차단이다. `blocked_other`: 그 밖의 코드다. 지금 빌드에는 없다.
+  - Gateway는 두 코드를 모두 HTTP 422 `RECOMMENDATION_BLOCKED`로 돌려준다(`services/agent-gateway/upstream.mjs`, 코드 확인). 그래서 35 문서의 차단 15건에는 두 코드가 섞여 있을 수 있다.
+- [2]의 `result`는 `accepted` 또는 [1]의 코드 이름이다. 모델 호출은 0·1·2·3~7·8 이상, 도구 호출은 0·1·2·3 이상으로 나눈다. 두 분포는 따로 센 것이다. 8회 흐름에서 `model_calls_8_plus`는 호출 예산을 다 쓴 실행이고, `tool_calls_0`은 도구를 한 번도 부르지 않고(검색 없이) 답한 실행이다.
+  - `runs_with_tool_error`: 도구 호출이 오류로 끝났거나 오류 결과(`GATEWAY_TOOL_FAILED`·`GATEWAY_TOOL_ARGUMENTS_INVALID`)를 받은 실행 수다. 범위 밖 ID 조회, 검색 10건 초과, 도구 예산 초과 같은 MCP 거절이 이렇게 남는다(코드 확인). 거절된 도구 호출이 기록 원문에 `status='error'`로 남는 것은 작업 환경의 langchain-core 1.8.4로 재현했고, 실제 Langflow 실행 기록으로는 확인하지 않았다.
+- [3]의 `answer_shape`는 최종 검증 span 입력의 `agent_response.text`를 흐름 검증·MCP와 같은 순서로 나눈 이름이다. 답 원문은 출력하지 않는다.
+  - `redacted`: 원문을 정리한 실행. `unreadable`: PostgreSQL이 그 span 입력을 JSON으로 바꾸지 못했다(`\u0000` 등). `no_answer_text`: 답 문자열이 없다.
+  - `VALIDATION_FAILED`로 끝나는 답: `empty_text`(빈 답), `not_json_code_fence`(코드 블록 표시로 감쌈), `not_json_call_limit_notice`(모델 호출 한도 문장), `not_json_mentions_placeIds`(설명 문장 속 `placeIds`), `not_json`, `json_not_object`(배열 등), `duplicate_keys`(같은 키 반복. 흐름 검증은 거절한다).
+  - MCP가 선택으로 읽지 않는 모양(규칙 동작 계약 `{"placeIds":[...]}` 밖): `json_without_placeIds`, `json_with_other_keys`, `placeIds_not_array`, `placeIds_over_50`, `non_string_ids`, `bad_id_strings`(빈 문자열·160자 초과·앞뒤 공백). Vertex 8회 빌드는 전체 응답 JSON으로 답하므로, JSON으로 답한 실행은 수락이든 차단이든 `json_with_other_keys`다.
+  - `placeIds_empty`: `{"placeIds":[]}`다. 확인된 조건 실패가 아닌 후보가 하나라도 있으면 차단이고, 없으면 서버가 `impossible`로 조립해 수락한다(`services/jeju-mcp/src/gateway-scopes.mjs`의 `selection()`, 코드 확인).
+  - `placeIds_1_to_5`·`placeIds_6_to_50`: 계약에 맞는 선택이다. 이 모양이 `RECOMMENDATION_BLOCKED`이면 고른 ID가 하나도 남지 않은 것이다. 후보 범위 밖이거나(제외·검색 조건 밖·카탈로그에 없음), 확인된 조건 실패다. 드물게는 서버가 조립한 응답이 다시 검증에서 거절된 경우다. 어느 쪽인지는 [4]의 `placeIds_only` 행으로 짐작한다. 이 모양이 `VALIDATION_FAILED`이면 고른 ID와 관계없이 MCP 검증 호출 자체가 실패한 것이다(10초 시간 초과, 범위 만료처럼 200이 아닌 응답 등. 코드 확인).
+  - 모양의 경계는 근사다. JSON은 흐름(Python)이 아니라 PostgreSQL이 읽는다. 여는 괄호(`[`·`{`, 문자열 안 포함)가 1만 개를 넘는 답은 올바른 JSON이어도 읽지 않고 `not_json`으로 시작하는 이름으로 센다. 깊게 중첩된 JSON(작업 환경 PostgreSQL 16에서 약 1만6천 단계)은 깊이 제한 오류로 SQL을 멈추게 하고, `pg_input_is_valid`도 이 오류는 막지 못해서다. 계약에 맞는 답(ID 50개 이하·각 160자 이하)은 이 수를 넘지 않는다. `\u0000` 이스케이프가 든 답도 PostgreSQL은 읽지 못해 `not_json`으로 시작하는 이름이 된다. 흐름은 그런 답을 읽어 MCP에 보내므로 `RECOMMENDATION_BLOCKED`로 끝날 수 있다(코드 확인).
+  - `bad_id_strings`의 앞뒤 공백은 PostgreSQL의 `[[:space:]]`로 본다. DB 로캘에 따라 다르고, 시험한 C 로캘에서는 ASCII 공백만이다. MCP의 `trim()`은 줄바꿈 없는 공백(U+00A0)·전각 공백(U+3000) 같은 유니코드 공백도 지우므로, 그런 공백이 붙은 ID는 `placeIds_1_to_5` 등으로 셀 수 있다. 둘 다 드문 경우다.
+- [4]는 답의 `placeIds`가 1~50개 문자열인 수락·차단 실행을 센다(다른 키가 있어도 센다). 고른 ID마다 같은 실행의 도구 호출 기록 원문에서 `"id":"<ID>"` 꼴을 찾는다.
+  - `answer_keys`: 답의 키가 `placeIds` 하나뿐이면 `placeIds_only`, 다른 키도 있으면 `with_other_keys`다. MCP는 `placeIds_only`인 답만 규칙 동작 선택(`selection()`)으로 읽는다. `with_other_keys`인 답은 엄격 검증을 거치고, 수락되지 않으면(장소 6곳 이상 포함) `schemaVersion`·`requestId`·`action`이 맞을 때만 고른 ID로 복구한다(`gateway-scopes.mjs`의 `validate()`, 코드 확인). 그래서 이 행의 차단은 고른 ID와 관계없이 생길 수 있다. 규칙 동작 빌드의 답이 `placeIds`에 `reason` 같은 키만 더했다면 그 세 키가 없어 고른 ID와 관계없이 차단된다. Vertex 8회 빌드의 답은 전체 응답 JSON이라 [4]에서는 모두 이 행이다.
+  - 고른 ID가 도구 결과에 모두 있었다(`all_seen`)·일부만 있었다(`some_unseen`)·하나도 없었다(`none_seen`). `none_seen_without_tool_call`은 `none_seen` 가운데 도구를 한 번도 부르지 않은 실행이다.
+  - `with_excluded_id`: 요청의 제외 ID(`excludedIds`)를 고른 실행이다. `with_requirement`: 요청에 필수 조건이 1개 이상인 실행이다.
+  - 도구 결과의 장소는 모두 등록된 후보 범위 안에서 나온다(`gateway-scopes.mjs`의 `call()`, 코드 확인). 그래서 `RECOMMENDATION_BLOCKED`·`placeIds_only`인데 `all_seen`이면, 고른 장소가 모두 범위 안이었고 장소마다 확인된 조건 실패로 빠졌을 가능성이 크다(추정). `none_seen`이면 도구 결과에 없던 ID다. 모델이 지어냈거나 요청의 제외 ID를 옮겼다(`with_excluded_id`로 일부 가른다).
+  - 영문·숫자·`._:-`로만 된 ID만 찾는다. 작업 환경의 981곳 카탈로그 사본에서는 ID가 모두 이 형식이었다(관측). 다른 글자가 든 ID는 없었던 것으로 센다.
+
+이 SQL이 알려 주지 않는 것이다.
+
+- **MCP의 거절 이유는 어디에도 저장되지 않는다.** MCP는 검증 결과의 `reasons`를 흐름에 돌려주지만, 최종 검증 구성 요소가 출력에 넣지 않는다. [3]·[4]는 답과 도구 기록으로 본 근사다. 실행별·ID별 원인을 단정하지 않는다.
+- 흐름 뒤 Gateway의 두 번째 검증(`FINAL_VALIDATION_REJECTED`·`TOO_MANY_PLACES`)은 Langflow 기록에 없다. `accepted`는 흐름 안 수락이다.
+- 웹 요청과 합성 요청을 나누지 못한다. 35 문서의 15건과는 날짜·모델 행으로만 맞춰 본다.
+- 정리 도구가 원문을 지운 실행은 차단 코드와 답이 남지 않는다. 차단은 [1]에서 `blocked_redacted`로 나오고, 수락·차단 모두 [3]에서 `redacted`이며 [4]에는 없다. 수락 여부와 [2]의 호출 수는 그대로 나온다. [2]의 도구 오류는 span 상태가 오류인 호출만 센다(오류 결과 표시는 원문과 함께 지워진다).
+
+확인한 범위다(구현·관측, 작업 환경에서만).
+
+- 실제 Langflow 1.13.3이 쓴 행: [메시지 저장 끄기](#확인한-것과-하지-않은-것)를 확인할 때 만든 PostgreSQL 16 DB(규칙 동작 빌드·가짜 OpenAI)를 복원했다. Gateway 실행 20건(수락 11·차단 4·Agent 오류 5)에서 출력이 SQL을 쓰지 않은 독립 재계산과 모든 칸에서 같았다. 차단 4건은 모두 `RECOMMENDATION_BLOCKED`·`placeIds_1_to_5`·`placeIds_only`·`none_seen`이었다(가짜 모델이 카탈로그에 없는 ID를 고르게 한 시험 실행이다). 수락 11건은 모두 `placeIds_only`·`all_seen`이었다.
+- `deploy/tests/test_agent_block_reasons_sql_runtime.py`: PostgreSQL 16 임시 클러스터(서버 기본 시간대 `Asia/Seoul`)에 Langflow 1.13.3 마이그레이션의 `trace`·`span` 정의와 합성 실행 66건(Gateway 61건)을 넣는다. 모든 코드·호출 구간·답 모양·키 구분·ID 판정(테스트가 [1]·[2]·[4]의 건수 열마다 한 건 이상 있는지 확인한다), 경계의 ID 수(5·6·50·51개), `\u0000`·짝 없는 서로게이트, 여는 괄호가 1만 개를 넘는 답, 따옴표를 넣어 찾는 꼴을 흉내 내는 ID, `gw-`가 아닌 세션이 들어 있다. 출력이 독립 재계산과 같은지, `PGTZ` 3개에서 같은지, 같은 세션의 `DELETE`가 거부되는지 본다. PostgreSQL 16 이상이 없으면 건너뛴다.
+- `deploy/tests/test_agent_block_reasons_sql.py`: SQL 글자만 읽는 정적 검사다. 문서의 명령과 파일이 같은지, 읽기 전용 설정, 읽는 표와 열, 지연·토큰 SQL과 같은 부분, 고정 이름표, JSON을 확인한 뒤에만(답은 여는 괄호 1만 개까지만) 읽는지를 고정한다.
+- 규모: 위 실제 행을 1000벌 복제한 사본(실행 2만·span 28만7천)에서 [1]·[2]는 1.1~1.5초, [3]은 약 3.9초, [4]는 약 5.1초였다(괄호 수 상한과 `answer_keys`를 더한 지금 판. 더하기 전과 같은 수준이다). 처음 판의 [4]는 15초 제한에 걸려, 도구 기록을 JSON으로 바꾸지 않고 원문에서 찾게 고쳤다. AWS의 실제 행 수와 디스크에서는 재지 않았다.
+- CI(`agent-gateway-docker.yml`)가 일회용 Langflow DB(PostgreSQL 17)에서 실행해 다섯 표와 열 수, [1]의 합을 확인한다. CI 실행은 최종 검증 전에 끝나므로 [2]~[4]는 비어 있을 수 있다. 이 작업 환경에는 Docker 데몬이 없어, 그 단계는 명령을 가로채는 가짜 `docker`와 위 DB로만 돌려 보았다.
+
+붙여 줄 것은 [0]부터 [4]까지의 표 전체다. 오류가 나면 `ERROR:`로 시작하는 줄만 붙인다. 원인에 맞는 수정(프롬프트, 서버 조립 등)은 그 표를 본 뒤 정한다(제안).
 
 ### 제한 부하 검사(승인 뒤에만)
 
