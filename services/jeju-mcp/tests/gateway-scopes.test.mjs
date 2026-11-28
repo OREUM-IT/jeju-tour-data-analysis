@@ -437,6 +437,117 @@ test('rule-action selection without an eligible ID stays blocked while viable ca
   }
 });
 
+// Minimal walking: route places are withheld like exclusions; prepared metadata and the strict check do not change.
+const WALK = '합성 장소 후보를 보여 주세요. 거의 걷지 않으려고 합니다.';
+const WITHHELD = 'Route places (trails, Olle courses, bike routes) are left out: the original request asks for minimal walking.';
+const route = { value: { km: 9.6, level: null, summary: null }, basis: 'source_reported', source: 'synthetic' };
+const routes = [place('olle', '합성 올레 코스', { category: 'hike', attributes: { route } }),
+  place('trail', '합성 탐방로', { category: 'hike', attributes: { route } })];
+const walking = (extra = {}) => request({ query: WALK, filters: { zone: 'JC', text: '합성' }, ...extra });
+
+test('minimal walking withholds route places from search, get and check while binding and the strict view stay unchanged', () => {
+  const input = catalog(routes);
+  const strict = createRuntimeValidator({ catalog: input, now: NOW });
+  const scopes = createGatewayScopes({ catalog: input, now: NOW });
+  const prepared = scopes.register(registration(walking()));
+  assert.deepEqual(prepared, strict.prepare(walking()));
+  assert.equal(prepared.candidateCount, 5);
+  assert.deepEqual(scopes.prepare(walking()), prepared);
+  const found = scopes.call(tool('places.search', {}));
+  assert.deepEqual(found.data.items.map(item => item.id), ['food', 'p1', 'p2']);
+  assert.equal(found.data.totalMatches, 3);
+  assert.deepEqual(found.data.excludedIds, ['excluded']);
+  assert.equal(found.warnings.filter(warning => warning === WITHHELD).length, 1);
+  assert.deepEqual(scopes.call(tool('places.search', { query: '올레' })).data.items, []);
+  for (const name of ['places.get', 'constraints.check']) {
+    for (const ids of [['olle'], ['p1', 'trail']]) throwsCode(() => scopes.call(tool(name, { ids })), 'GATEWAY_PLACE_OUTSIDE_SCOPE', 403);
+  }
+  assert.deepEqual(scopes.call(tool('places.get', { ids: ['p1', 'p2'] })).data.items.map(item => item.id), ['p1', 'p2']);
+
+  // The same request without the sentence keeps every candidate and adds no warning.
+  const plain = request({ requestId: OTHER_ID, filters: { zone: 'JC', text: '합성' } });
+  scopes.register(registration(plain));
+  const all = scopes.call(tool('places.search', {}, OTHER_ID));
+  assert.deepEqual(all.data.items.map(item => item.id), ['food', 'olle', 'p1', 'p2', 'trail']);
+  assert.ok(!all.warnings.includes(WITHHELD));
+  assert.deepEqual(scopes.call(tool('places.get', { ids: ['olle'] }, OTHER_ID)).data.items.map(item => item.id), ['olle']);
+  // A walking request whose candidates hold no route place is not told about one.
+  scopes.release(OTHER_ID);
+  scopes.register(registration(walking({ requestId: THIRD_ID, filters: { category: 'art', zone: 'JC', text: '합성' } })));
+  const art = scopes.call(tool('places.search', {}, THIRD_ID));
+  assert.deepEqual(art.data.items.map(item => item.id), ['p1', 'p2']);
+  assert.ok(!art.warnings.includes(WITHHELD));
+});
+
+test('rule-action selection drops withheld route IDs in model order; only routes stay blocked as the strict check decides', () => {
+  const { validate, strict, body } = validationFixture({ original: walking(), extraPlaces: routes });
+  const selection = { placeIds: ['olle', 'p2', 'trail', 'missing', 'p1'] };
+  const composed = validate(selection);
+  assert.equal(composed.status, 'accepted');
+  assert.deepEqual(composed.response, recommendation(['p2', 'p1']));
+  assert.deepEqual(validate(composed.response), composed);
+  assert.equal(strict.validate(body(composed.response)).status, 'accepted');
+  for (const placeIds of [['olle'], ['trail', 'olle'], []]) {
+    const blocked = validate({ placeIds });
+    assert.equal(blocked.status, 'blocked');
+    assert.deepEqual(blocked, strict.validate(body({ placeIds })));
+  }
+  // Without the sentence the same selection keeps the route places.
+  const plain = validationFixture({ original: request({ filters: { zone: 'JC', text: '합성' } }), extraPlaces: routes });
+  assert.deepEqual(plain.validate(selection).response.placeIds, ['olle', 'p2', 'trail', 'p1']);
+});
+
+test('when only route places could be recommended, the walking selection stays blocked instead of impossible', () => {
+  const original = walking({ filters: { zone: 'JC', text: '합성 올레' } });
+  const { validate, strict, body, prepared } = validationFixture({ original, extraPlaces: routes });
+  assert.equal(prepared.candidateCount, 1);
+  for (const placeIds of [[], ['olle']]) {
+    const blocked = validate({ placeIds });
+    assert.equal(blocked.status, 'blocked');
+    assert.deepEqual(blocked, strict.validate(body({ placeIds })));
+  }
+  // The strict check does not apply the walking rule, so it cannot establish impossibility here.
+  assert.equal(strict.validate(body(recommendation([], { action: 'impossible' }))).status, 'blocked');
+  const plain = validationFixture({ original: request({ filters: { zone: 'JC', text: '합성 올레' } }), extraPlaces: routes });
+  assert.deepEqual(plain.validate({ placeIds: ['olle'] }).response, recommendation(['olle']));
+  // The same holds when verified failures leave only an unfailed route place.
+  const closed = verified({ openMin: 540, closeMin: 1080, text: '매일 09:00~18:00' });
+  const late = [place('late', '합성 늦은 전시관', { attributes: { hours: closed } }),
+    place('late-route', '합성 늦은 산책로', { category: 'hike', attributes: { route } })];
+  const requirements = [{ type: 'open_at', value: '20:00' }];
+  const failing = validationFixture({ original: walking({ filters: { zone: 'JC', text: '합성 늦은' }, requirements }), extraPlaces: late });
+  for (const placeIds of [[], ['late', 'late-route']]) assert.equal(failing.validate({ placeIds }).status, 'blocked');
+  const open = validationFixture({ original: request({ filters: { zone: 'JC', text: '합성 늦은' }, requirements }), extraPlaces: late });
+  assert.deepEqual(open.validate({ placeIds: ['late', 'late-route'] }).response.placeIds, ['late-route']);
+});
+
+test('a walking request still returns impossible when every registered candidate, route places included, fails', () => {
+  const closed = verified({ openMin: 540, closeMin: 1080, text: '매일 09:00~18:00' });
+  const original = walking({ filters: { zone: 'JC', text: '합성 늦은' }, requirements: [{ type: 'open_at', value: '20:00' }] });
+  const { validate } = validationFixture({ original, extraPlaces: [
+    place('late', '합성 늦은 전시관', { attributes: { hours: closed } }),
+    place('late-route', '합성 늦은 산책로', { category: 'hike', attributes: { hours: closed, route } }),
+  ] });
+  for (const placeIds of [[], ['late-route'], ['late']]) {
+    const result = validate({ placeIds });
+    assert.equal(result.status, 'accepted');
+    assert.deepEqual(result.response, recommendation([], { action: 'impossible' }));
+  }
+});
+
+test('the strict path is unchanged for walking requests; recovery composes without withheld route places', () => {
+  const { validate, strict, body } = validationFixture({ original: walking(), extraPlaces: routes });
+  // A response the strict check accepts with up to five places is returned as it is.
+  const named = recommendation(['p2', 'olle']);
+  assert.deepEqual(validate(named), strict.validate(body(named)));
+  assert.deepEqual(validate(named).response.placeIds, ['p2', 'olle']);
+  // Recovery of a strict-blocked response uses only places the scope offers.
+  const recovered = validate(recommendation(['olle', 'p2'], { requirementClaims: null }));
+  assert.equal(recovered.status, 'accepted');
+  assert.deepEqual(recovered.response, recommendation(['p2']));
+  assert.equal(validate(recommendation(['olle'], { requirementClaims: null })).status, 'blocked');
+});
+
 test('deadline and process restart fail closed without carrying scopes into a fresh process', () => {
   let now = NOW;
   const input = catalog();

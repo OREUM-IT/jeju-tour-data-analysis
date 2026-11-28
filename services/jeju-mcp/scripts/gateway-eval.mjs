@@ -7,7 +7,7 @@
 //   requests --catalog <..> --dir <..> --label <name>
 //            one Gateway payload per planned case, bound to a fresh opaque runtime id (<dir>/<label>-requests.json)
 //   reference --catalog <..> --dir <..> --label <name>
-//            no-model reference: the rule-action server composes every answer from the first 3 candidates (offline)
+//            no-model reference: the rule-action server composes every answer from the first 3 places it offers (offline)
 //   score    --catalog <..> --dir <..> --label <name> --model <declared model> --flow <flow build> --reports <dir outside .local>
 //            results -> capture -> import -> score; the shareable aggregates go to --reports, everything else stays in .local
 //
@@ -16,7 +16,6 @@ import { randomUUID } from 'node:crypto';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { candidatePlaces } from '../src/agent-tools.mjs';
 import { canonicalSha256 } from '../src/evaluation-rng.mjs';
 import { createGatewayScopes } from '../src/gateway-scopes.mjs';
 import { buildBoundValidatedRequest, GATEWAY_ADAPTER_VERSION, prepareValidatedCollection } from '../src/validated-capture-binding.mjs';
@@ -105,8 +104,10 @@ function errorCode(result) {
 }
 
 /**
- * What the deployed rule-action server returns when the "model" simply takes the first `take` candidates of the
- * request's own filters: no model, no network. Action accuracy reached here is the server's, not a model's.
+ * What the deployed rule-action server returns when the "model" simply takes the first `take` places the scope
+ * offers (one scoped places.search without extra arguments): no model, no network. These are the first candidates
+ * of the request's own filters, minus what the scope withholds (route places for minimal walking). Action accuracy
+ * reached here is the server's, not a model's.
  */
 export function referenceResults(requests, catalog, { take = 3, now = () => Date.now() } = {}) {
   const scopes = createGatewayScopes({ catalog, now });
@@ -116,7 +117,8 @@ export function referenceResults(requests, catalog, { take = 3, now = () => Date
     const at = new Date(now()).toISOString();
     const prepared = scopes.register({ request, principal: '0'.repeat(64), deadlineMs: now() + 60_000 });
     try {
-      const placeIds = candidatePlaces(catalog, { ...request.filters, excludedIds: request.excludedIds }).slice(0, take).map((place) => place.id);
+      const offered = scopes.call({ requestId, name: 'places.search', arguments: { maxResults: take } });
+      const placeIds = offered.data.items.map((place) => place.id);
       const result = scopes.validate({ request, response: { placeIds }, expectedCatalogVersion: prepared.catalogVersion });
       const base = { caseId: entry.caseId, runtimeRequestId: entry.runtimeRequest.requestId, submittedAt: at, finishedAt: at };
       return result.status === 'accepted'
