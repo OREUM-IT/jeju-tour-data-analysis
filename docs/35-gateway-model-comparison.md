@@ -337,12 +337,14 @@ CI에는 `gateway-eval` 보고서를 보는 검사가 아직 없다. 작성자�
 
 이 변경을 병합한 뒤 MCP 이미지를 다시 빌드해야 한다. 흐름은 바꾸지 않으므로 흐름을 교체하는 `apply-agent-rule-action.sh`가 아니라 `apply-agent-queue.sh`를 쓴다. 이 helper는 `jeju-mcp`·`agent-gateway` 이미지를 빌드하고, MCP 범위와 Gateway의 대기·실행·불확실 작업이 0일 때만 두 서비스를 갱신한 뒤 오프라인 검사·공개 인증·큐 준비 검사를 한다. Langflow 흐름·자격증명·DB·cloudflared는 건드리지 않는다(스크립트 확인). Gateway 코드는 이 변경에서 바뀌지 않았다. 웹에서 새 추천이 들어오지 않는 때 실행한다.
 
+AWS SSH에서 **한 줄씩** 실행한다.
+
 ```bash
-cd ~/oreumit-agent &&
-git diff --quiet && git diff --cached --quiet &&
-git fetch origin refs/heads/main:refs/remotes/origin/main &&
-git merge --ff-only origin/main &&
-sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
+cd ~/oreumit-agent && git diff --quiet && git diff --cached --quiet && git fetch origin refs/heads/main:refs/remotes/origin/main && git merge --ff-only origin/main
+```
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
 ```
 
 끝 줄이 `agent-queue-applied`이면, 설치된 MCP가 이 규칙을 쓰는지 확인한다. 모델·네트워크를 쓰지 않고 실제 범위도 등록하지 않는다.
