@@ -101,6 +101,10 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-overtourism-agent.sh --disable
 ```
 
+2026-11-28(구현, AWS 미적용): 추천 규칙 동작 빌드의 OpenAI 클라이언트에 `stream_usage=True`를 더했다([32 문서](32-agent-gateway-tunnel.md#토큰-기록-수정stream_usage-2026-11-28)). 진단 흐름은 그 클라이언트 줄에서 호출당 제한만 80초로 바꿔 만든다. 바꿀 줄(`TIMEOUT_OLD`·`TIMEOUT_NEW`)을 새 줄에 맞췄으므로 진단 흐름도 호출마다 토큰을 기록하게 바뀐다. 진단 흐름은 고정 빌드 하나만 알고 이전 빌드를 따로 알아보지 않는다. 그래서 이 변경 전에 진단 흐름을 적용한 서버에서는 기본 적용과 `--verify-only`가 흐름 단계에서 `OVERTOURISM_EXISTING_FLOW_DIFFERS`로 멈춘다. PATCH는 하지 않으며 진단 경로는 이전 흐름과 기존 고정으로 계속 동작한다. 그런 서버는 `--replace-flow`로 바꾼다. AWS에서 진단 흐름을 적용한 출력은 받지 않았다. 작업 환경의 실제 Langflow 1.13.3에서 main@3ad3649 빌더로 만든 진단 흐름을 새 빌더의 replace로 바꾸고, 저장된 진단 클라이언트가 사용량을 요청하는 것을 확인했다(가짜 OpenAI, 네트워크 없음). 같은 줄은 2026-11-25 `reasoning_effort="none"` 수정(PR #41) 때도 바뀌었다. 그 전에 진단 흐름을 만든 서버도 `--replace-flow`가 필요하다.
+
+2026-11-28(구현, AWS 미적용): `--replace-flow`가 흐름을 바꾸기 전에도 유휴를 확인하게 했다. 순서는 Compose 설정 확인 → 유휴 확인 → 진단 흐름 교체·고정(`prepare-overtourism.py --replace`) → 다시 유휴 확인 → `agent-gateway`만 재생성 → 흐름 고정·진단 경로 준비·공개 인증·큐 준비 확인이다. 전에는 흐름을 바꾼 뒤에만 확인했다. 그래서 그 확인에서 멈추면(진행 중 요청이 있거나 상태를 확인하지 못했을 때) Langflow에는 새 흐름이, 실행 중인 Gateway에는 이전 SHA-256 고정이 남았다. 그 상태에서는 다시 실행할 때까지 진단 경로가 `OVERTOURISM_FLOW_CHANGED`(503)로 거절하고, 웹앱은 앱 안 에이전트 → 규칙 진단으로 넘어간다(추천은 그대로다). 두 번째 확인에서 멈추면 지금도 같은 상태가 된다. 그래서 `--replace-flow`도 웹에서 새 요청을 제출하지 않는 때 실행하고, 멈추면 `overtourism-flow-replaced`가 나올 때까지 같은 명령을 다시 실행한다. 다시 실행하면 흐름은 `already-current`로 지나가고 `agent-gateway`를 재생성한다. 순서와 멈추는 위치는 가짜 명령 단위 테스트(`deploy/tests/test_apply_overtourism_agent.py`)로만 확인했다.
+
 주의: 다른 apply helper(`apply-agent-rule-action.sh` 등)가 `agent-gateway`를 재생성해도 고정 파일은 그대로 읽히므로 진단 경로는 유지된다. 그 helper들이 새 Gateway 이미지를 빌드하지 않는 경우에도 이번 이미지는 유지된다.
 
 ## 6. 웹앱 연결

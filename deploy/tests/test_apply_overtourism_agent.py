@@ -39,7 +39,7 @@ print(json.dumps({'status': 'passed', 'scope': phase, 'modelExecuted': False}))
 APPLY = ['config', 'build', 'idle1', 'up', 'offline_check', 'provision', 'idle2', 'up', 'flow_check', 'route_check',
          'public', 'ready']
 VERIFY = ['config', 'flow_check', 'route_check', 'public', 'ready']
-REPLACE = ['config', 'replace', 'idle1', 'up', 'flow_check', 'route_check', 'public', 'ready']
+REPLACE = ['config', 'idle1', 'replace', 'idle2', 'up', 'flow_check', 'route_check', 'public', 'ready']
 DISABLE = ['config', 'idle1', 'disable', 'up', 'public', 'ready']
 
 
@@ -93,6 +93,13 @@ class ApplyOvertourismAgentTests(unittest.TestCase):
         result, commands = self.run_apply({'idle2': 75})
         self.assertEqual(result.returncode, 75)
         self.assertEqual(self.phases(commands), APPLY[:7])
+        # --replace-flow checks before the stored flow changes, not only before the Gateway.
+        result, commands = self.run_apply({'idle1': 75}, arguments=('--replace-flow',))
+        self.assertEqual(result.returncode, 75)
+        self.assertEqual(self.phases(commands), ['config', 'idle1'])
+        result, commands = self.run_apply({'idle2': 75}, arguments=('--replace-flow',))
+        self.assertEqual(result.returncode, 75)
+        self.assertEqual(self.phases(commands), REPLACE[:4])
 
     def test_failed_phase_reports_only_the_phase(self):
         for phase in ('offline_check', 'provision', 'route_check', 'public'):

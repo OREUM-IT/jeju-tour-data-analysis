@@ -5,6 +5,9 @@
 # image, because only the new MCP accepts {"placeIds": [...]} selections, then
 # switches the flow and recreates only the Gateway to pin it. No model invocation,
 # request submission or cancellation, API key rotation or Langflow restart.
+# A server that stores an earlier rule-action build (rule-action-low, or
+# rule-action-no-usage: the client without stream_usage, whose calls kept no
+# token counts) is switched to the current build the same way, or rolled back.
 #
 # Resumable like apply-agent-call-budget.sh: prepare-gateway.py writes
 # .local/.gateway-flow-change before Langflow can change and this helper clears it

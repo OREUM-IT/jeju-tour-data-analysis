@@ -34,7 +34,9 @@ SCOPES = {'update': 'gateway-flow-updated', 'rollback': 'gateway-flow-rolled-bac
           'check-message-store-off': 'gateway-message-store-off-checked',
           'check-message-store-on': 'gateway-message-store-on-checked'}
 # The reviewed build each mode must report. Build switches keep the stored
-# message-storage variant; the storage modes keep the build.
+# message-storage variant; the storage modes keep the build. Earlier rule-action
+# builds (rule-action-low, rule-action-no-usage) can only be the state a switch
+# starts from, so no mode reports or pins them.
 CURRENT_BUILDS = ('vertex-8-call', 'rule-action')
 FLOW_BUILDS = {'update': ('vertex-8-call',), 'rollback': ('legacy-4-call',), 'check': ('vertex-8-call',),
                'rule-action': ('rule-action',), 'rule-action-rollback': ('vertex-8-call',),
@@ -288,9 +290,11 @@ if __name__ == '__main__':
     modes.add_argument('--rollback-flow', action='store_true', help='Pin the previous 4-call flow; no key or flow creation.')
     modes.add_argument('--check-flow', action='store_true', help='Read-only: stored flow is the 8-call build and is pinned.')
     modes.add_argument('--rule-action-flow', action='store_true',
-                       help='Pin the rule-action OpenAI flow (from the exact 8-call flow); no key or flow creation.')
+                       help='Pin the current rule-action OpenAI flow (from the exact 8-call flow or an earlier '
+                            'rule-action build); no key or flow creation.')
     modes.add_argument('--rule-action-rollback-flow', action='store_true',
-                       help='Pin the 8-call Vertex flow again (from the exact rule-action flow); no key or flow creation.')
+                       help='Pin the 8-call Vertex flow again (from the exact current or an earlier rule-action flow); '
+                            'no key or flow creation.')
     modes.add_argument('--check-rule-action-flow', action='store_true',
                        help='Read-only: stored flow is the rule-action build and is pinned.')
     modes.add_argument('--message-store-off-flow', action='store_true',
