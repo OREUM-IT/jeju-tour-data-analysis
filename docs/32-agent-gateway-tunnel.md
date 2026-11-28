@@ -297,7 +297,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
 - 취소 API는 **아직 대기 중인 작업만** 취소한다. 이미 실행 중인 모델은 취소 API로 중단하거나 재실행하지 않는다. 적용 helper는 취소 API를 호출하지 않는다.
 - 실패로 끝난 작업의 결과는 HTTP 상태와 Gateway 오류 코드로 남는다. 그중 차단된 답은 422, 시간 초과는 504 `UPSTREAM_TIMEOUT_NO_RETRY`, 상류 실패(Langflow·Agent 오류, 형식이 맞지 않는 최종 출력, MCP 호출 실패)는 `GATEWAY_UNAVAILABLE`이다. 상류 실패의 상태는 처음에 502였고 2026-11-26 아래처럼 500으로 바꿨다.
 
-**2026-11-26 상류 실패를 500으로(구현, AWS 미적용).** `claude/gateway-edge-hidden-failure`([PR #46](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/46))는 Gateway가 502로 답하던 상류 실패를 500으로 답한다. 바뀐 곳은 `UpstreamError`의 기본 상태(대기열 작업 결과와 동기 `/v1/recommend`·`/v1/overtourism` 응답 모두), 상태 없는 오류에 쓰던 기본값(`jobs.mjs`의 `errorResult`, `server.mjs`의 오류 응답), 오버투어리즘 결과 불일치(`OVERTOURISM_RESULT_MISMATCH`)에 명시하던 502다.
+**2026-11-26 상류 실패를 500으로(구현. AWS 적용은 2026-11-27, [아래](#2026-11-27-gateway-변경-aws-적용사용자-제공-출력)).** `claude/gateway-edge-hidden-failure`([PR #46](https://github.com/OREUM-IT/jeju-tour-data-analysis/pull/46))는 Gateway가 502로 답하던 상류 실패를 500으로 답한다. 바뀐 곳은 `UpstreamError`의 기본 상태(대기열 작업 결과와 동기 `/v1/recommend`·`/v1/overtourism` 응답 모두), 상태 없는 오류에 쓰던 기본값(`jobs.mjs`의 `errorResult`, `server.mjs`의 오류 응답), 오버투어리즘 결과 불일치(`OVERTOURISM_RESULT_MISMATCH`)에 명시하던 502다.
 
 - 이유: Cloudflare는 원점이 502·504로 답하면 자기 502·504 오류로 바꿔 답한다([Cloudflare 문서](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-502-504/)). 원점 응답을 그대로 넘기는 영역 설정 `origin_error_page_pass_thru`는 Enterprise 전용이다. 그래서 502로는 Gateway 오류 코드가 클라이언트에 닿지 않는다. 2026-11-26 Gemini 비교 수집에서 결과 8건을 받지 못한 원인으로 본다(추정, [35 문서](35-gateway-model-comparison.md#결과를-받지-못한-8건)).
 - 시간 초과는 504로 둔다. 웹 앱이 504라는 상태만으로 다시 요청하지 않음(`AGENT_TIMEOUT_NO_RETRY`)을 정하기 때문이다. 그 본문은 계속 Cloudflare가 가린다.
@@ -316,6 +316,17 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-queue.sh
 ```
 
 AWS 적용 출력과 이후 실제 사용자 응답을 따로 확인한다. 오프라인 검사·공개 준비 검사 통과만으로 병렬 모델 성공·운영 품질 완료를 기록하지 않고 `productionReady:false`를 유지한다.
+
+#### 2026-11-27 Gateway 변경 AWS 적용(사용자 제공 출력)
+
+사용자가 `main@26029b2`(PR #46 병합)에서 위 `apply-agent-queue.sh`를 `--verify-only` 없이 실행하고 출력을 붙여 줬다. 작성자의 AWS 실행이 아니다. 35 문서 비교 뒤 [GPT 규칙 동작 빌드를 다시 적용한](#비교-뒤-다시-적용2026-11-27-사용자-제공-출력) 다음의 일이다.
+
+- 두 이미지를 빌드했다. `agent-gateway`는 `COPY --chown=node:node *.mjs ./` 층부터 다시 만들었고, `jeju-mcp`는 모든 층이 캐시였다.
+- 유휴 확인(`idle-before-queue-update`: 대기·실행·불확실 0, `maxConcurrent` 2) 뒤 `jeju-mcp`는 1.4초, `agent-gateway`는 16.4초에 Healthy가 됐다.
+- 설치된 MCP의 오프라인 검사(`candidate-recovery-offline-runtime`, 981곳, `unscopedStrictPreserved:true`)를 통과했다. 새 이미지의 모듈에 넣어 돌린 호스트 시험도 state 17/17, jobs 14/14로 통과했다. jobs 시험에는 "상류 실패는 500 `GATEWAY_UNAVAILABLE`로 저장하고 502로 저장하지 않으며, 시간 초과는 504로 둔다"는 시험이 들어 있다. 그래서 설치된 Gateway가 이 변경을 쓰고 있다고 본다.
+- 공개 인증(`tokenConfigured`·`runtimeChecked`)과 큐 준비(`queue-runtime-ready`)를 통과하고 `agent-queue-applied`(`services` `jeju-mcp`·`agent-gateway`, `modelExecuted:false`, `productionReady:false`)로 끝났다. 모델은 실행하지 않았다.
+- 이 helper는 Langflow 흐름을 바꾸지 않는다. 큐 준비 검사는 Gateway의 흐름 고정 확인(`flowVerified`)을 요구하므로, 저장된 흐름은 그대로 GPT 규칙 동작 빌드다. 그래서 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 경계는 옮겨지지 않는다.
+- 아직 확인하지 않은 것: Cloudflare가 500 본문을 그대로 넘기는지. 실제로 실패하는 작업이 생긴 뒤 위 기준으로 확인한다.
 
 ### 선택: AWS에서 실제 모델 요청 2건 확인
 
@@ -388,7 +399,7 @@ sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap python3 -I deploy/check-agent-qu
 
 - 8회 안에서도 최종 JSON이 형식이나 검증 규칙을 어기면 계속 차단된다.
 - 최종 검증 컴포넌트는 Agent 메시지 전체 텍스트를 읽는다. 도구를 부르는 응답에 모델이 설명 문장을 붙이면 그 문장이 최종 JSON 앞에 합쳐져 차단된다. 이 변경 전부터 있던 경로이며 호출이 늘면 기회도 늘어난다.
-- 5~8번째 호출의 공급자 오류·시간 초과는 재시도 없이 Agent 오류가 된다. Gateway는 이를 502(2026-11-26 [수정](#대기실패재시작의-의미)부터 500, AWS 미적용)와 120초 이상의 불확실 실행 보호로 처리한다. 원래 422로 바로 끝나던 실행이므로 성공을 잃지는 않지만 실행 슬롯과 같은 사용자의 재요청이 잠시 묶일 수 있다.
+- 5~8번째 호출의 공급자 오류·시간 초과는 재시도 없이 Agent 오류가 된다. Gateway는 이를 502(2026-11-26 [수정](#대기실패재시작의-의미)부터 500, 2026-11-27 AWS 적용)와 120초 이상의 불확실 실행 보호로 처리한다. 원래 422로 바로 끝나던 실행이므로 성공을 잃지는 않지만 실행 슬롯과 같은 사용자의 재요청이 잠시 묶일 수 있다.
 - 쓸 수 있는 장소 ID 없이 8번째 호출에 이르면 장소 없는 `ask_clarification`만 검증을 통과한다. 이는 웹에서 차단 문구 대신 추가 확인 안내로 보이지만 추천 성공은 아니다.
 
 ### AWS에 적용할 명령
@@ -658,6 +669,27 @@ MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 �
 
 수정: 규칙 동작 빌드의 OpenAI 클라이언트를 `reasoning_effort="none"`으로 바꿨다. 판단은 서버가 하고 모델은 장소 ID만 고르므로 추론 토큰을 요청하지 않는다. Responses API 전환(추론 유지)은 Langflow Agent의 응답 형식 영향이 확인되지 않아 하지 않았다. 문제가 된 이전 빌드는 `rule-action-low`로 알려진 그래프에 남겨, AWS에 저장된 그 흐름에서 새 빌드로 바로 바꾸거나 Gemini 8회 흐름으로 되돌릴 수 있다(메시지 저장 끔 유지). 오버투어리즘 진단 흐름도 같은 클라이언트를 쓰므로 같은 값으로 바뀐다. 실제 OpenAI 호출 성공은 다시 적용한 뒤 확인한다.
 
+### 비교 뒤 다시 적용(2026-11-27, 사용자 제공 출력)
+
+[35 문서](35-gateway-model-comparison.md) 비교의 채점과 실패 8건 판정을 마친 뒤, 사용자가 `main@26029b2`(PR #46 병합)에서 그 문서 3절 6단계대로 위 [적용 명령](#aws에-적용할-명령-2)(`apply-agent-rule-action.sh`)을 실행하고 출력을 붙여 줬다. 작성자의 AWS 실행이 아니다.
+
+| 단계 | 사용자 제공 출력 |
+|---|---|
+| 이전 변경 확인 | `flowChangePending:false` |
+| MCP 이미지 | 모든 층이 캐시. 유휴 확인(대기·실행·불확실 0, `maxConcurrent` 2) 뒤 `jeju-mcp` Healthy |
+| 설치된 MCP 오프라인 조립 검사 | `rule-action-offline-runtime`, 981곳, `composedFromSelection:true` |
+| 흐름 교체 | 두 번째 유휴 확인 뒤 `build:rule-action`, `messageStore:false`, `modelCallLimit:8`, `flowStatus:updated`, `settingsChanged:true`(`gateway-rule-action-applied`) |
+| Gateway | `agent-gateway`만 재생성, 16.5초에 Healthy |
+| 흐름 고정·공개 인증 | `gateway-rule-action-checked` 통과, 공개 검사 `tokenConfigured:true`·`runtimeChecked:true` |
+
+- 붙여 준 출력은 공개 검사 줄 가운데서 끊겨, 큐 준비 검사와 마지막 줄은 보이지 않았다.
+- 이어 사용자가 `--verify-only`를 실행했다. `flowChangePending:false`, `gateway-rule-action-checked`(`build:rule-action`·`messageStore:false`·`modelCallLimit:8`·`settingsChanged:false`), 공개 인증 통과, `queue-runtime-ready`(대기·실행·불확실 0, `maxConcurrent` 2)를 거쳐 `agent-rule-action-verified`(`model:gpt-5.4-mini`, `servicesRestarted:false`, `modelExecuted:false`, `productionReady:false`)로 끝났다.
+- 적용 helper는 큐 준비 검사까지 통과한 뒤에만 미완료 표시를 지운다(코드 확인). `--verify-only`의 `flowChangePending:false`로 보아 첫 적용도 마지막 단계까지 갔다고 본다(추정).
+- 두 명령 모두 모델을 실행하지 않았다.
+- 웹 추천은 지금 이 빌드(gpt-5.4-mini, 메시지 저장 끔)로 동작한다. 이 재적용을 운영 준비 완료로 보지 않는다.
+- 이 helper는 `jeju-mcp` 이미지만 빌드하고 `agent-gateway`는 기존 이미지로 다시 만든다. 그래서 이 적용만으로는 PR #46의 Gateway 변경(상류 실패 500)이 들어가지 않았다. 사용자가 이어서 `apply-agent-queue.sh`로 그 변경을 적용했다([기록](#2026-11-27-gateway-변경-aws-적용사용자-제공-출력)).
+- 흐름이 바뀌었으므로 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 경계가 이 재적용 시각으로 옮겨졌다. 로그인 웹 추천이 최종 검증까지 간 뒤 그 SQL을 다시 실행하면, 규칙 동작 빌드를 경계 뒤에서 직접 판정한다(`can_judge:t`·`passed:t`가 나와야 한다).
+- 아직 확인하지 않은 것: 재적용 뒤 웹 추천 결과, 실제 웹 실행 20건 이상의 `model`별 차단·Agent 오류 비율(아래 되돌리기 기준), 토큰 기록([제안](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)만 했다), 비용.
 
 ### 확인과 되돌리기
 
@@ -682,7 +714,7 @@ cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deplo
 
 ## 지연·토큰·부하 측정 도구
 
-2026-11-23 준비 기록이다. **도구를 만들고 이 저장소 작업 환경에서만 확인했다. 작성자는 AWS에서 아무것도 실행하지 않았다.** 운영 수치는 사용자가 아래 명령을 실행해 출력을 붙여 준 뒤에 생긴다. 2026-11-25 사용자가 AWS에서 집계 SQL을 실행해 붙여 준 출력 두 개를 받았다([결과](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)). 제한 부하 검사의 출력은 받지 않았다.
+2026-11-23 준비 기록이다. **도구를 만들고 이 저장소 작업 환경에서만 확인했다. 작성자는 AWS에서 아무것도 실행하지 않았다.** 운영 수치는 사용자가 아래 명령을 실행해 출력을 붙여 준 뒤에 생긴다. 2026-11-25 사용자가 AWS에서 집계 SQL을 실행해 붙여 준 출력 두 개를 받았고, 2026-11-27 세 번째 출력을 받았다([결과](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)). 제한 부하 검사의 출력은 받지 않았다.
 
 | 도구 | 하는 일 | 요금 | 실행 조건 |
 |---|---|---|---|
@@ -892,7 +924,7 @@ SQL
 
 ### 집계 SQL AWS 실행 결과(2026-11-25, 사용자 제공 출력)
 
-2026-11-25 사용자가 AWS SSH에서 위 [지연·토큰 집계 SQL](#지연토큰-집계-sql)을 실행하고 붙여 준 출력 가운데 이 작업이 받은 두 개다. 같은 날 다른 세션이 받은 사용자 SQL 출력([PR #41 기록](#openai-400-reasoning_effort-수정2026-11-25): GPT 실행 3건 실패)은 여기 넣지 않았다. 작성자의 AWS 실행이 아니다. 출력에는 집계 숫자·시각·모델 이름만 있었다. 첫 출력(가)은 07:05 UTC(16:05 KST)께 받았다. 두 번째 출력(나)은 마지막 실행 시작(11:11:05 UTC) 뒤에 받았고, 사용자는 바로 이어 [적용 뒤 확인 SQL](#aws-실행-결과2026-11-25-사용자-제공-출력)을 실행했다.
+2026-11-25 사용자가 AWS SSH에서 위 [지연·토큰 집계 SQL](#지연토큰-집계-sql)을 실행하고 붙여 준 출력 가운데 이 작업이 받은 두 개다. 2026-11-27 받은 세 번째 출력 (다)(11-26 행)는 이 절 끝에 있다. 같은 날 다른 세션이 받은 사용자 SQL 출력([PR #41 기록](#openai-400-reasoning_effort-수정2026-11-25): GPT 실행 3건 실패)은 여기 넣지 않았다. 작성자의 AWS 실행이 아니다. 출력에는 집계 숫자·시각·모델 이름만 있었다. 첫 출력(가)은 07:05 UTC(16:05 KST)께 받았다. 두 번째 출력(나)은 마지막 실행 시작(11:11:05 UTC) 뒤에 받았고, 사용자는 바로 이어 [적용 뒤 확인 SQL](#aws-실행-결과2026-11-25-사용자-제공-출력)을 실행했다.
 
 | [1] | (가) | (나) |
 |---|---|---|
@@ -931,10 +963,34 @@ SQL
   - 관측: `gpt-5.4-mini` 호출 235회 모두 토큰 기록이 없다(`calls_without_usage` 235, 입력·출력 토큰 0). 그래서 지금은 Langflow 추적으로 GPT 흐름의 토큰과 비용을 잴 수 없다. [35 문서](35-gateway-model-comparison.md) 비교의 GPT 쪽 토큰도 이 SQL로는 볼 수 없다. Gemini 호출은 실패한 1회(11-20)를 빼고 모두 기록됐다.
   - 원인(코드 확인, 실제 호출로는 확인하지 않음): langchain-openai 1.8.5의 `ChatOpenAI`는 `stream_usage`를 따로 주지 않으면, `base_url`(환경변수로 준 것 포함)·클라이언트·프록시가 모두 없을 때만 이 값을 켠다(`chat_models/base.py`의 초기화 검사와 `_should_stream_usage`). 규칙 동작 빌드의 클라이언트(`deploy/langflow/gateway-bootstrap.py`의 `OPENAI_GET_LLM`)는 `streaming=True`이면서 `base_url="https://api.openai.com/v1"`을 명시한다. 그래서 스트리밍 요청에 `stream_options.include_usage`가 붙지 않는다. 이 옵션이 없으면 OpenAI Chat Completions 스트림에 사용량 조각이 오지 않는다(langchain-openai의 `stream_usage` 설명과 OpenAI API 설명). Langflow 1.13.3의 추적(`native_callback`)은 응답에 사용량이 없으면 토큰 속성을 남기지 않는다.
   - 작업 환경 확인(네트워크 없음): lfx 1.13.3 venv의 langchain-openai 1.8.5로 같은 인자의 클라이언트를 만들었다. `_should_stream_usage()`는 `False`였고, `stream_usage=True`를 더하면 `True`였다(`base_url`을 빼도 `True`). 스트리밍 요청 본문으로 만들면 지금 인자에는 `stream_options`가 없고, `stream_usage=True`이면 `{"include_usage": true}`가 붙었다. AWS 이미지(`langflowai/langflow:1.13.3`, digest 고정)의 langchain-openai 버전은 저장소에 기록이 없어 확인하지 못했다. 작업 환경의 lfx-openai 0.2.0은 1.1.6 이상을 요구하고, 1.8.5의 `stream_usage` 설명으로는 0.3.35부터 기본 주소·기본 클라이언트일 때만 켜진다.
-  - 제안(구현하지 않음): 그 `ChatOpenAI(...)` 호출에 `stream_usage=True`를 더한다. 검토된 규칙 동작 빌드가 바뀌므로, 지금 빌드를 알려진 이전 그래프로 남기는 빌드 고정과 AWS 재적용이 필요하다. 오버투어리즘 진단 흐름은 같은 코드 줄을 글자 그대로 바꿔 만들므로(`deploy/langflow/overtourism-bootstrap.py`의 `TIMEOUT_OLD`) 함께 고친다. [35 문서](35-gateway-model-comparison.md)의 비교(다른 세션)가 끝난 뒤에 한다. 적용 뒤에는 이 SQL의 `gpt-5.4-mini` 행 `calls_without_usage`가 실패한 호출 수만큼만 남는지로 확인한다.
+  - 제안(구현하지 않음): 그 `ChatOpenAI(...)` 호출에 `stream_usage=True`를 더한다. 검토된 규칙 동작 빌드가 바뀌므로, 지금 빌드를 알려진 이전 그래프로 남기는 빌드 고정과 AWS 재적용이 필요하다. 오버투어리즘 진단 흐름은 같은 코드 줄을 글자 그대로 바꿔 만들므로(`deploy/langflow/overtourism-bootstrap.py`의 `TIMEOUT_OLD`) 함께 고친다. [35 문서](35-gateway-model-comparison.md)의 비교(다른 세션)가 끝난 뒤에 한다. 2026-11-27 그 비교는 끝났고, 이 수정은 아직 구현하지 않았다. 적용 뒤에는 이 SQL의 `gpt-5.4-mini` 행 `calls_without_usage`가 실패한 호출 수만큼만 남는지로 확인한다.
 - **예산 조정(8회) 질문의 첫 AWS 수치**(관측, 표본이 작아 판단하지 않음): 수락/실행은 11-19 2/10·11-20 0/6(4회 흐름), 11-21 9/20(이날 8회를 적용해 두 흐름이 섞일 수 있음), 11-22 6/9(8회 흐름)다. 차단/실행은 8/10·5/6·9/20·3/9, 실행당 평균 모델 호출은 4.00·3.50·6.55·7.67, 실행 p50은 12235·12460·29822·21765 ms다.
   - [되돌리기 기준](#적용-전후-확인-sql)(적용 뒤 20건 이상, 비율 비교)에 쓸 8회 흐름만의 실행은 11-22의 9건뿐이다. 날짜마다 요청이 다르고 합성 검사 요청이 섞여 있을 수 있어(위) 이 차이를 8회 적용의 효과로 읽지 않는다. 11-25 Gemini 2건은 비교 수집의 시험으로 보여(추정, [아래](#aws-실행-결과2026-11-25-사용자-제공-출력)) 여기에 넣지 않았다.
   - 추정: 11-21의 p95(90095 ms)로 계산하면 그날 가장 느린 두 실행이 약 90.1초다. Agent 실행 상한 90초(`GUARDED_AGENT_MAX_SECONDS`)에 닿아 끝난 실행으로 보이며, 그날 Agent 오류 2건과 수가 같다.
+
+**(다) 2026-11-27 세 번째 출력(사용자 제공 출력).** 사용자가 같은 SQL을 AWS에서 다시 실행해 [1]~[4]를 붙여 줬다. 작성자의 AWS 실행이 아니다. [2]·[3]의 11-19~11-25 여섯 행은 (나)와 같았다. 새로 생긴 것은 11-26 행과 [1]·[4]의 합이다.
+
+| [1] | (다) |
+|---|---|
+| `traces`·`sessions` | 241·241 |
+| `first_start_utc` | (가)·(나)와 같음 |
+| `last_start_utc` | `2026-11-26 04:11:18` |
+| `unfinished`·`without_spans`·`redacted`·`sessions_without_trace` | 0·0·0·0 |
+
+| 날짜 | `model` | 실행 | 수락·차단·Agent 오류 | 실행 p50·p95·최대(ms) | 모델 호출 합(평균·최대)·실패 | 평균 도구 호출 | 입력·출력 토큰(실행당) | 토큰 없는 호출 |
+|---|---|---:|---|---|---|---:|---|---:|
+| 11-26 | `gemini-3.8-flash` | 94 | 82·4·8 | 18719·69477·90145 | 391(4.16·8)·5 | 3.20 | 2742323·124177(29174·1321) | 6 |
+
+| [4] 호출 종류 | (다) 호출·실패·p50·p95·최대(ms) |
+|---|---|
+| `model gemini-3.8-flash` | 660·6·3128·18875·60312 |
+| `model gpt-5.4-mini` | 235·3·907·1609·5006((나)와 같음) |
+| `tool` | 686·0·13·22·56 |
+
+- **표끼리 맞는다**(계산): [1]의 241은 (나)의 147에 11-26 실행 94를 더한 수다. [4]의 Gemini 호출 660·실패 6은 (나)의 269·1에 11-26의 391·5를 더한 수다. 도구 호출 686은 (나)의 385에 94×3.20(평균을 반올림한 값이라 약 301)을 더한 수와 맞는다. 11-26 행의 `no_final`은 0이고 `error_traces`는 8로 `agent_error`와 같다.
+- **쓰임**: 11-26 행으로 [35 문서](35-gateway-model-comparison.md#결과를-받지-못한-8건)에서 결과를 받지 못한 Gemini 비교 8건을 판정했다. 실행 94가 비교 본 실행의 제출 수와 같고 Agent 오류 8·`no_final` 0이어서, 모델·Agent 쪽 실패로 보고 다시 보내지 않았다. 이 행과 11-25 GPT 행의 지연·호출 수는 [35 문서 5절](35-gateway-model-comparison.md#5-두-안-비교2026-11-27-사용자-제공-출력)의 두 안 비교에 쓴다.
+- 관측: 11-26 행의 토큰 기록 없는 호출(6)이 실패한 호출(5)보다 1회 많다. 그 1회가 무엇인지는 이 출력으로 알 수 없다.
+- 추정: 실패한 모델 호출 5회와 가장 긴 실행 90145 ms로 보아, Agent 오류 8건은 모델 호출 오류와 Agent 실행 상한 90초(`GUARDED_AGENT_MAX_SECONDS`)가 섞인 것으로 본다. 이 SQL은 실행별로 나누지 못한다.
 
 ### 차단 사유 집계 SQL
 
@@ -1411,7 +1467,7 @@ Langflow 1.13.3의 Chat Input·Chat Output은 기본값이 `should_store_message
   - AWS에서 저장 끔 상태로 최종 검증·Chat Output까지 간 실행(빌드와 관계없이). 작업 환경에서 수락·차단 실행의 메시지 0행은 규칙 동작 빌드(가짜 OpenAI 서버)로만 확인했다. 8회 Vertex 빌드의 실행은 작업 환경과 CI 모두 가짜 자격증명이라 Agent 오류로 끝났다. Chat Output 노드가 두 빌드에서 같다는 것은 단위 테스트로만 안다. [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 `can_judge:t`·`passed:t`가 경계 뒤에 저장된 빌드의 첫 실행 확인이 된다. → **확인했다**(위 2건). 어느 빌드였는지는 출력에 없다. Gemini 8회 빌드로 추정하며, 그렇다면 이 빌드의 Chat Output 경로를 처음 확인한 것이다. 규칙 동작 빌드는 GPT 97건이 최종 검증까지 가고도 메시지를 남기지 않았다는 수로 본 추정만 있다.
   - AWS의 PostgreSQL 17에서 적용 뒤 확인 SQL과 정리 도구를 실행한 결과. 둘 다 받지 않았다. 지연·토큰 SQL은 [PR #37 기록](#도구-이름-수정과-되돌림2026-11-25)에 AWS 결과 요약("11-22 이후 실행 없음")만 있고 표는 없다. 저장 끔 적용 helper는 이 SQL들과 정리 도구를 실행하지 않는다(흐름은 Langflow API로 읽고 PATCH했다). 일회용 PostgreSQL 17에서는 위 CI가 지연·토큰 SQL과 정리 도구를 실행했다. → 적용 뒤 확인 SQL과 지연·토큰 SQL은 AWS에서 오류 없이 실행됐다([지연·토큰 결과](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력), 출력 (가)의 마지막 실행도 11-22였다). 정리 도구의 결과는 아직 받지 않았다.
 - **아직 확인하지 않은 것**:
-  - 규칙 동작 빌드가 경계 뒤에 저장된 상태의 직접 판정. 비교를 마치고 GPT를 다시 적용하는 등 흐름을 바꾼 뒤, 그 뒤 실행이 최종 검증까지 가면 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)을 다시 실행한다.
+  - 규칙 동작 빌드가 경계 뒤에 저장된 상태의 직접 판정. 2026-11-27 사용자가 비교를 마치고 GPT를 [다시 적용해](#비교-뒤-다시-적용2026-11-27-사용자-제공-출력) 경계가 그 시각으로 옮겨졌다(사용자 제공 출력). 그 뒤 실행이 최종 검증까지 가면 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)을 다시 실행한다.
   - AWS에서 정리 도구를 실행한 결과.
 
 ### AWS에 적용할 명령
@@ -1678,7 +1734,7 @@ SQL
 - 실행 수도 맞는다. [2]의 `t`+`f` 147 = 이전 45 + 이날 102 = 지연·토큰 SQL 두 번째 출력의 `traces` 147이다. 경계 뒤 2건이 Gemini라면 `f`의 수락 99 = 17 + 82, 차단 40 = 25 + 15, Agent 오류 6 = 3 + 3이다. GPT 2건이어도 합은 같다.
 - 전제: 이전 실행마다 저장 메시지가 남았다. 세션 ID는 실행마다 다르다(`traces`와 `sessions`가 같다). 추적 없이 메시지만 남은 세션이 없다(`sessions_without_trace` 0). 메시지를 지운 일이 없다(`redacted` 0. 화면에서 지운 경우는 알아챌 수 없다, 위). 실행별로 대조한 것은 아니다.
 
-다음은 흐름을 다시 바꾼 뒤(예: 35 문서 비교를 마치고 GPT를 다시 적용한 뒤), 그 뒤 실행이 최종 검증까지 가면 이 SQL을 다시 실행하는 것이다. 그때 경계 뒤에 저장된 빌드(규칙 동작이면 gpt-5.4-mini)를 직접 판정한다.
+다음은 흐름을 다시 바꾼 뒤(예: 35 문서 비교를 마치고 GPT를 다시 적용한 뒤), 그 뒤 실행이 최종 검증까지 가면 이 SQL을 다시 실행하는 것이다. 그때 경계 뒤에 저장된 빌드(규칙 동작이면 gpt-5.4-mini)를 직접 판정한다. 2026-11-27 사용자가 GPT 규칙 동작 빌드를 [다시 적용해](#비교-뒤-다시-적용2026-11-27-사용자-제공-출력) 경계가 그 시각으로 옮겨졌다(사용자 제공 출력). 같은 날의 Gateway 이미지 적용(`apply-agent-queue.sh`)은 흐름을 바꾸지 않아 경계를 옮기지 않는다. 이제 로그인 웹 추천이 최종 검증까지 간 뒤 이 SQL을 다시 실행하면 규칙 동작 빌드를 직접 판정한다.
 
 #### 적용 뒤 확인 SQL을 확인한 범위
 
@@ -1797,7 +1853,7 @@ AWS(PostgreSQL 17)에서는 실행하지 않았다. PR #35의 CI가 같은 Postg
 
 ### 붙여 줄 것
 
-- 적용 뒤: 로그인 웹 추천이 1건 이상 들어온 뒤 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 [0]~[4] 표 전체. 오류가 나면 `ERROR:`로 시작하는 줄만. 2026-11-25 첫 결과는 [받았다](#aws-실행-결과2026-11-25-사용자-제공-출력). 흐름을 다시 바꾼 뒤(예: 35 문서 비교를 마치고 GPT를 다시 적용한 뒤)에는 그 뒤 실행이 최종 검증까지 간 다음 다시 실행해 같은 표를 붙여 준다.
+- 적용 뒤: 로그인 웹 추천이 1건 이상 들어온 뒤 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 [0]~[4] 표 전체. 오류가 나면 `ERROR:`로 시작하는 줄만. 2026-11-25 첫 결과는 [받았다](#aws-실행-결과2026-11-25-사용자-제공-출력). 흐름을 다시 바꾼 뒤(예: 35 문서 비교를 마치고 GPT를 다시 적용한 뒤)에는 그 뒤 실행이 최종 검증까지 간 다음 다시 실행해 같은 표를 붙여 준다. 2026-11-27 GPT 재적용으로 경계가 옮겨졌으므로, 그 뒤 로그인 웹 추천이 최종 검증까지 간 다음 다시 실행한다.
 - 이전 기록(선택): [적용 전후 확인 SQL](#적용-전후-확인-sql)의 [1]~[4] 표. 2026-11-25 적용 전 표는 받지 못했다. 지금 실행하면 저장 끔 이전의 실행이 모두 `before_flow_change`로 나온다. 정리 도구 `--execute`를 실행하면 N일 지난 실행이 이 표에서 빠진다. [3]의 `after_flow_change` 행은 저장 끔 뒤의 오류 실행만 세어 `agent_error_pct`가 100%로 나오므로 이전 기록으로 쓰지 않는다.
 - 적용 helper를 다시 실행하거나 되돌렸다면: 진행 줄(`build`·`messageStore`·`flowStatus`)과 마지막 JSON 한 줄. 실패하면 `AGENT_MESSAGE_STORE_APPLY_FAILED: phase=…` 줄과 그 위의 JSON 한 줄. 2026-11-25 적용 출력은 [받았다](#저장-끔-aws-적용-결과2026-11-25-사용자-제공-출력).
 - 정리 도구: 건수 보기의 JSON 한 줄. 실행했다면 실행 **직전**의 지연·토큰 SQL [0]~[4] 표, 실행의 JSON 한 줄, 실행 **직후**의 지연·토큰 SQL [0]~[4] 표.

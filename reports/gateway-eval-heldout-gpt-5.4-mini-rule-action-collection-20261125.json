@@ -1,0 +1,34 @@
+{
+  "kind": "jeju-gateway-eval-collection",
+  "model": "gpt-5.4-mini",
+  "flow": "rule-action",
+  "planSha256": "22817d445e7df5d0bb91b0271b2c2fe33694ca72a6f4e35d9d8288c2a5ea7f7a",
+  "cases": 96,
+  "outcomes": {
+    "accepted": 81,
+    "failed:RECOMMENDATION_BLOCKED": 15
+  },
+  "timingSeconds": {
+    "totalSeconds": {
+      "count": 96,
+      "p50": 4.32,
+      "p95": 6.41,
+      "max": 8.48
+    },
+    "runSeconds": {
+      "count": 96,
+      "p50": 4.24,
+      "p95": 6.33,
+      "max": 8.41
+    },
+    "queueWaitSeconds": {
+      "count": 96,
+      "p50": 0.08,
+      "p95": 0.11,
+      "max": 0.7
+    }
+  },
+  "startedAt": "2026-11-25T08:21:30.696Z",
+  "completedAt": "2026-11-25T11:08:21.263Z",
+  "productionReady": false
+}
