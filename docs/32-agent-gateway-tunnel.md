@@ -749,7 +749,7 @@ cd ~/oreumit-agent && git diff --quiet && git diff --cached --quiet && git fetch
 cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-rule-action.sh
 ```
 
-- helper 순서는 위 [적용 명령](#aws에-적용할-명령-2)과 같다. 이 변경은 MCP를 바꾸지 않는다(MCP 이미지 빌드와 오프라인 조립 검사는 helper 순서대로 지나간다).
+- helper 순서는 위 [적용 명령](#aws에-적용할-명령-2)과 같다. 이 변경은 MCP를 바꾸지 않는다(MCP 이미지 빌드와 오프라인 조립 검사는 helper 순서대로 지나간다). 다만 [걷기 최소화 경로 규칙](35-gateway-model-comparison.md#6-걷기-최소화-경로-규칙2026-11-28)(PR #51)이 병합된 checkout에서는 이 MCP 빌드에 그 규칙이 들어간다. 그때는 적용 뒤 35 문서 6.6절의 확인 명령(`check-walk-route.mjs`)도 실행한다.
 - 흐름 교체 줄은 `build:rule-action`·`messageStore:false`·`flowStatus:updated`·`settingsChanged:true`여야 한다. 흐름 ID·Gateway API 키는 그대로이고 `gateway.env`의 고정 SHA만 바뀐다. 성공 출력은 이전과 같은 `agent-rule-action-applied`다.
 - 흐름이 바뀌므로 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 경계가 이 적용 시각으로 다시 옮겨진다. 로그인 웹 추천이 최종 검증까지 간 뒤 그 SQL을 다시 실행해 이 빌드의 `can_judge:t`·`passed:t`를 본다.
 - 되돌리기는 아래 [확인과 되돌리기](#확인과-되돌리기-1)의 `--rollback`(Gemini 8회)이다. 토큰을 남기지 않던 이전 GPT 빌드로 돌아가는 명령은 두지 않았다.

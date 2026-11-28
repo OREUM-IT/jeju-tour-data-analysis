@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { AGENT_TOOL_DEFINITIONS, candidatePlaces, executeAgentTool } from './agent-tools.mjs';
 import { parseYmd, runtimeRequirementEvidence, TIME } from './constraint-evidence.mjs';
+import { asksMinimalWalk, isRoutePlace } from './minimal-walk.mjs';
 import { createRuntimeValidator, RecommendationValidationError } from './recommendation-validation.mjs';
 
 export const GATEWAY_TOOL_CALL_LIMIT = 8;
@@ -17,6 +18,7 @@ const aggregate = (entries) => entries.some(entry => entry.status === 'fail') ? 
 const definitions = new Map(AGENT_TOOL_DEFINITIONS.map(definition => [definition.name, definition]));
 const confirmationTopics = Object.freeze({ indoor_required: 'indoor_unverified', open_at: 'hours_unverified',
   wheelchair: 'wheelchair_unverified', budget_cap: 'cost_unknown' });
+const WITHHELD_ROUTES_WARNING = 'Route places (trails, Olle courses, bike routes) are left out: the original request asks for minimal walking.';
 const checkArguments = z.object({
   ids: definitions.get('places.get').inputSchema.shape.ids,
   requirements: z.object({
@@ -83,9 +85,14 @@ export function createGatewayScopes({ catalog, now, maxConcurrent = 2 } = {}) {
       throw error;
     }
     const request = prepared.request;
-    const candidates = candidatePlaces(catalog, { ...request.filters, excludedIds: request.excludedIds });
+    const registered = candidatePlaces(catalog, { ...request.filters, excludedIds: request.excludedIds });
+    // Minimal walking (minimal-walk.mjs): like an original exclusion, a route place is not offered by any
+    // scoped tool and never enters a response the server composes. The prepared request, its hashes and
+    // candidate count, and the strict check stay those of the registered request.
+    const candidates = asksMinimalWalk(request.query) ? registered.filter(place => !isRoutePlace(place)) : registered;
     active.set(request.requestId, { prepared: copy(prepared), principal: body.principal,
-      deadlineMs: body.deadlineMs, calls: 0, candidates, ids: new Set(candidates.map(place => place.id)) });
+      deadlineMs: body.deadlineMs, calls: 0, registered, candidates,
+      withheldRoutes: registered.length - candidates.length, ids: new Set(candidates.map(place => place.id)) });
     seen.set(request.requestId, body.deadlineMs);
     return copy(prepared);
   }
@@ -106,7 +113,7 @@ export function createGatewayScopes({ catalog, now, maxConcurrent = 2 } = {}) {
       if (seen.has(placeId)) continue;
       seen.add(placeId);
       const place = candidates.get(placeId);
-      if (!place) continue; // Includes original exclusions, filters and unknown catalog IDs.
+      if (!place) continue; // Includes original exclusions, filters, withheld route places and unknown catalog IDs.
       const claims = evidence(place);
       if (claims.some(claim => claim.verdict === 'fail')) continue;
       placeIds.push(placeId);
@@ -122,11 +129,15 @@ export function createGatewayScopes({ catalog, now, maxConcurrent = 2 } = {}) {
   // Rule-action selection: the model returns only {"placeIds": [...]}. The server
   // decides impossible when no registered candidate survives verified failures;
   // otherwise the selection must keep at least one eligible ID or stay blocked.
+  // Impossibility is judged on the registered candidates, as the unchanged strict
+  // check judges it: when only withheld route places could still be recommended,
+  // impossible cannot be established, so the selection is composed and, with no
+  // offered ID left, stays blocked.
   function selection(scope, raw, input, at) {
     if (!Array.isArray(raw.placeIds) || raw.placeIds.length > 50
       || !raw.placeIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 160 && id === id.trim())) return null;
     const request = scope.prepared.request;
-    const viable = scope.candidates.some(place => request.requirements.every(entry => {
+    const viable = scope.registered.some(place => request.requirements.every(entry => {
       const date = entry.date ?? request.visitDate;
       return runtimeRequirementEvidence(place, { ...entry, ...(date === undefined ? {} : { date }) }, at).verdict !== 'fail';
     }));
@@ -236,6 +247,7 @@ export function createGatewayScopes({ catalog, now, maxConcurrent = 2 } = {}) {
       // an intersection even when the two literal queries are different.
       const value = executeAgentTool(body.name, args, { ...catalog, places: scope.candidates }, { requestId: request.requestId, now: at });
       value.data.excludedIds = [...new Set([...request.excludedIds, ...(args.excludedIds ?? [])])];
+      if (scope.withheldRoutes > 0) value.warnings.push(WITHHELD_ROUTES_WARNING);
       return value;
     }
     require(args.ids.every(id => scope.ids.has(id)), 403, 'GATEWAY_PLACE_OUTSIDE_SCOPE');

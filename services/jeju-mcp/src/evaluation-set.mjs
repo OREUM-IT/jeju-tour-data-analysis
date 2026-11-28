@@ -259,7 +259,8 @@ export function themeAffinity(vector, placeThemes) {
 const EVIDENCE_TIERS = Object.freeze(['verified_pass', 'reported_support', 'not_contradicted']);
 const evidenceTier = (evidence) => evidence.verdict === 'pass' ? 0 : evidence.signal === 'supports' && evidence.tier === 'reported' ? 1 : 2;
 
-const hasRoute = (place) => place.attributes.route !== undefined;
+/** Gold rule's route test (route_for_minimal_walk). Exported so a test can hold the product predicate to it. */
+export const hasRoute = (place) => place.attributes.route !== undefined;
 const popularityOf = (place) => finite(place.attributes.popularity?.value) ? place.attributes.popularity.value : -1;
 
 function matchesSelector(place, selector, threshold) {

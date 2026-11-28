@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { candidatePlaces } from '../src/agent-tools.mjs';
 import { createBaselinePlan, scoreBaselineRun } from '../src/baseline-evaluation.mjs';
 import { adaptGatewayResponse } from '../src/baseline-adapters.mjs';
+import { asksMinimalWalk, isRoutePlace } from '../src/minimal-walk.mjs';
 import { importCapture } from '../scripts/evaluate-baselines.mjs';
 import { buildCapture, buildRequests, gatewayPayload, parseArguments, parseResults, referenceResults } from '../scripts/gateway-eval.mjs';
 import { baselineInputs } from './helpers/baseline-fixture.mjs';
@@ -106,4 +108,27 @@ test('no-model reference: the rule-action server composes every answer offline a
   const run = importCapture(plan, capture, { catalog: inputs.catalog });
   assert.ok(run.records.filter((record) => record.response).every((record) => record.response.action !== 'ask_clarification'));
   assert.equal(scoreBaselineRun({ ...inputs, plan, run }).summary.system, 'gateway');
+});
+
+test('no-model reference answers from the first places the scope offers: never a route place for minimal walking', () => {
+  const lines = referenceResults(requests, inputs.catalog);
+  const places = new Map(inputs.catalog.places.map((place) => [place.id, place]));
+  let withheld = 0;
+  for (const [index, line] of lines.entries()) {
+    const { payload } = requests[index];
+    const walking = asksMinimalWalk(payload.query);
+    const first = candidatePlaces(inputs.catalog, { ...payload.filters, excludedIds: payload.excludedIds });
+    const offered = (walking ? first.filter((place) => !isRoutePlace(place)) : first).slice(0, 3).map((place) => place.id);
+    if (walking && first.slice(0, 3).some(isRoutePlace)) withheld += 1;
+    if (line.final !== 'accepted') continue;
+    // The server may drop verified failures from the three it offered, never add or reorder.
+    const kept = line.response.placeIds;
+    assert.deepEqual(offered.filter((id) => kept.includes(id)), kept, line.caseId);
+    if (walking) assert.ok(kept.every((id) => !isRoutePlace(places.get(id))), line.caseId);
+  }
+  assert.ok(withheld > 0, 'the fixture must hold a walking case whose first candidates include a route place');
+  const { capture } = buildCapture({ plan, catalog: inputs.catalog, requests, results: new Map(lines.map((line) => [line.caseId, line])),
+    model: 'no-model-first-3', flow: 'rule-action', startedAt: '2026-11-28T00:00:00.000Z', completedAt: '2026-11-28T00:00:00.000Z' });
+  const { summary } = scoreBaselineRun({ ...inputs, plan, run: importCapture(plan, capture, { catalog: inputs.catalog }) });
+  assert.equal(summary.groups[0].metrics.disallowedIds.byReason.routeForMinimalWalk, 0);
 });

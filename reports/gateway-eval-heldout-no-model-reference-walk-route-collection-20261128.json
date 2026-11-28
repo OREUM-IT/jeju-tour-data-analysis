@@ -1,0 +1,25 @@
+{
+  "kind": "jeju-gateway-eval-collection",
+  "model": "no-model-first-3",
+  "flow": "rule-action",
+  "planSha256": "7e37fc8e7c3bd39d48656fa1e495bbafbe8c08093e169bcaba4298d3b8d1c9b1",
+  "cases": 96,
+  "outcomes": {
+    "accepted": 95,
+    "failed:RECOMMENDATION_BLOCKED": 1
+  },
+  "timingSeconds": {
+    "totalSeconds": {
+      "count": 0
+    },
+    "runSeconds": {
+      "count": 0
+    },
+    "queueWaitSeconds": {
+      "count": 0
+    }
+  },
+  "startedAt": "2026-11-28T03:54:26.570Z",
+  "completedAt": "2026-11-28T03:54:26.684Z",
+  "productionReady": false
+}
