@@ -199,6 +199,32 @@ jobs:
           # Every CI run is minutes old: nothing is older than one day, so the execute commits no change.
           python3 deploy/redact-agent-history.py --older-than-days 1
           python3 deploy/redact-agent-history.py --older-than-days 1 --execute | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["status"] == "redacted" and v["changed"] is False and v["gatewayTraces"]["keptNewer"] >= 3, v'
+      - name: Run the read-only block-reasons SQL on the disposable Langflow DB
+        run: |
+          compose="docker compose -f deploy/compose.yaml -f deploy/compose.catalog.yaml -f deploy/compose.langflow.yaml"
+          $compose exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -P pager=off -v ON_ERROR_STOP=1' < deploy/agent-block-reasons.sql
+          # The CI runs end in Langflow's error message before final validation (placeholder Vertex credential), so
+          # [2] to [4] may have no rows, and run counts are not asserted (lfx flushes an error run's trace in a
+          # background task). This checks that every section runs on PostgreSQL 17 and that each row has its columns.
+          $compose exec -T langflow-db sh -eu -c 'PGPASSWORD="$LANGFLOW_DB_PASSWORD" psql -h 127.0.0.1 -U langflow_app -d langflow -q -A -t -v ON_ERROR_STOP=1' < deploy/agent-block-reasons.sql > "$RUNNER_TEMP/block-reasons.txt"
+          python3 - "$RUNNER_TEMP/block-reasons.txt" <<'PY'
+          import sys
+          sections, current = {}, None
+          for line in open(sys.argv[1], encoding='utf-8').read().splitlines():
+              if line.startswith('[') and '] ' in line:
+                  current = line.split(']', 1)[0] + ']'
+                  sections[current] = []
+              elif line:
+                  sections[current].append(line.split('|'))
+          assert list(sections) == ['[0]', '[1]', '[2]', '[3]', '[4]'] and sections['[0]'] == [['UTC']], sections
+          widths = {'[1]': 11, '[2]': 14, '[3]': 5, '[4]': 11}
+          assert all(len(row) == widths[name] for name in widths for row in sections[name]), sections
+          # [1] rows: kst_day | model | runs | accepted | blocked | four block codes | agent_error | no_final
+          for row in sections['[1]']:
+              runs, accepted, blocked, *codes, agent_error, no_final = map(int, row[2:])
+              assert runs == accepted + blocked + agent_error + no_final and blocked == sum(codes), row
+          print({name: len(rows) for name, rows in sections.items()})
+          PY
       - name: Record verification boundary
         if: always()
         run: echo 'Fictional catalog, no Google inference, no Cloudflare account or tunnel changes. AWS and external Access/Tunnel acceptance require separate execution.' >> "$GITHUB_STEP_SUMMARY"
