@@ -460,9 +460,10 @@ class GatewayBootstrapTests(unittest.TestCase):
             def _get_max_tokens_value(self): return 4096
         with patch.dict(sys.modules, {'langchain_openai': types.SimpleNamespace(ChatOpenAI=ChatOpenAI)}):
             namespace['_get_llm'](Agent())
+            # stream_usage=True: with an explicit base_url langchain-openai would leave it off.
             self.assertEqual(seen, [{'model': 'gpt-5.4-mini', 'api_key': 'sk-' + 'x' * 40, 'base_url': 'https://api.openai.com/v1',
-                                     'streaming': True, 'max_retries': 1, 'timeout': 60, 'reasoning_effort': 'none',
-                                     'max_completion_tokens': 4096}])
+                                     'streaming': True, 'stream_usage': True, 'max_retries': 1, 'timeout': 60,
+                                     'reasoning_effort': 'none', 'max_completion_tokens': 4096}])
             for key in (None, '', 'x' * 40, 'sk-short', 'sk-' + 'x' * 30 + ' y', 'sk-' + 'ㄱ' * 30):
                 agent = Agent()
                 agent.api_key = Secret(key)
@@ -589,6 +590,104 @@ class GatewayBootstrapTests(unittest.TestCase):
                     want = expected if store else gateway.without_message_store(expected)
                     self.assertEqual((result['flowStatus'], result['build'], result['messageStore']), ('updated', target, store))
                     self.assertEqual(client.state['flows'][flow_id]['data'], want['data'])
+
+    @staticmethod
+    def client_kwargs(get_llm):
+        """The ChatOpenAI keyword arguments one reviewed _get_llm text passes (fake class, no network)."""
+        method = next(node for node in ast.walk(ast.parse(get_llm)) if isinstance(node, ast.FunctionDef))
+        namespace, seen = {}, []
+        exec(compile(ast.Module(body=[method], type_ignores=[]), 'reviewed-get-llm', 'exec'), namespace)
+        class ChatOpenAI:
+            def __init__(self, **kwargs): seen.append(kwargs)
+        agent = types.SimpleNamespace(model=copy.deepcopy(gateway.RULE_MODEL_VALUE), api_key='sk-' + 'x' * 40,
+                                      _get_max_tokens_value=lambda: 4096)
+        with patch.dict(sys.modules, {'langchain_openai': types.SimpleNamespace(ChatOpenAI=ChatOpenAI)}):
+            namespace['_get_llm'](agent)
+        return seen[0]
+
+    def test_deployed_no_usage_build_switches_to_the_usage_build_and_rolls_back(self):
+        """AWS stores the rule-action build of main@5328235..26029b2, whose streamed calls carried no usage."""
+        legacy = gateway.build_flow(Langflow(), TEMPLATE, SOURCE, SETUP)
+        budget = gateway.budget_flow(legacy)
+        rule = gateway.rule_action_flow(budget)
+        no_usage = gateway.rule_action_flow(budget, get_llm=gateway.OPENAI_GET_LLM_NO_USAGE)
+        # The deployed method text, docstring included, is pinned to what those commits stored.
+        self.assertEqual(hashlib.sha256(gateway.OPENAI_GET_LLM_NO_USAGE.encode()).hexdigest(),
+                         gateway.OPENAI_GET_LLM_NO_USAGE_SHA256)
+        self.assertEqual(gateway.OPENAI_GET_LLM_NO_USAGE_SHA256, '449d40ea94a801c696ac14c9362f52c28f1465516a5853131b5ed9bbc6e41271')
+        # The new client differs only by stream_usage=True (and its reason in the docstring).
+        current, deployed = self.client_kwargs(gateway.OPENAI_GET_LLM), self.client_kwargs(gateway.OPENAI_GET_LLM_NO_USAGE)
+        self.assertIs(current['stream_usage'], True)
+        self.assertEqual(current, {**deployed, 'stream_usage': True})
+        self.assertNotIn('stream_usage', self.client_kwargs(gateway.OPENAI_GET_LLM_LOW))
+        self.assertIn('stream_usage stays explicit', gateway.OPENAI_GET_LLM)
+        code = lambda flow: agent_fields(flow)['code']['value']
+        self.assertEqual(code(rule).count('stream_usage=True'), 1)
+        self.assertNotIn('stream_usage', code(no_usage))
+        def without_client(flow):
+            flow = copy.deepcopy(flow)
+            agent_fields(flow).pop('code')
+            return flow
+        self.assertEqual(without_client(rule), without_client(no_usage))
+        self.assertNotEqual(gateway.flow_sha256(rule['data']), gateway.flow_sha256(no_usage['data']))
+        for store in (True, False):
+            variant = (lambda flow: flow) if store else gateway.without_message_store
+            for mode, target, expected in (('rule-action', 'rule-action', rule),
+                                           ('rule-action-rollback', 'vertex-8-call', budget)):
+                with self.subTest(store=store, mode=mode):
+                    client = Langflow()
+                    client.state['variables'].append({'name': 'JEJU_OPENAI_API_KEY', 'type': 'Credential', 'has_value': True})
+                    flow_id = run(client)['flowId']
+                    keys = copy.deepcopy(client.state['keys'])
+                    self.stored_as(client, flow_id, variant(no_usage))
+                    before = copy.deepcopy(client.state['flows'][flow_id])
+                    # Checks and the other switches accept only current builds: refused before any PATCH.
+                    for refused_mode in ('check-rule-action', 'message-store-off', 'message-store-on',
+                                         'check-message-store-off', 'check-message-store-on', 'update', 'rollback'):
+                        refused = Langflow(client.state)
+                        with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+                            migrate(refused, refused_mode)
+                        self.assertEqual(mutations(refused), [])
+                    with self.assertRaisesRegex(gateway.GatewayBootstrapError, '^GATEWAY_EXISTING_FLOW_DIFFERS$'):
+                        run(Langflow(client.state), provision=False)
+                    self.assertEqual(client.state['flows'][flow_id], before)
+                    switcher = Langflow(client.state)
+                    result = migrate(switcher, mode)
+                    stored = client.state['flows'][flow_id]
+                    want = variant(expected)
+                    self.assertEqual(result, {'status': 'passed', 'flowStatus': 'updated', 'flowId': flow_id,
+                                              'flowSha256': gateway.flow_sha256(want['data']), 'modelCallLimit': 8,
+                                              'build': target, 'messageStore': store,
+                                              'modelExecuted': False, 'productionReady': False})
+                    self.assertEqual((stored['data'], stored['description']), (want['data'], want['description']))
+                    patches = [kwargs for method, _, kwargs in switcher.calls if method == 'PATCH']
+                    self.assertEqual([patch['headers'] for patch in patches], [{'If-Match': before['version_token']}])
+                    self.assertEqual(migrate(Langflow(client.state), mode)['flowStatus'], 'already-current')
+                    if mode == 'rule-action':
+                        checked = migrate(Langflow(client.state), 'check-rule-action')
+                        self.assertEqual((checked['build'], checked['messageStore'], checked['flowSha256']),
+                                         ('rule-action', store, result['flowSha256']))
+                    self.assertEqual(client.state['keys'], keys)
+                    self.assertEqual(len(client.state['flows']), 1)
+
+    def test_earlier_rule_action_builds_are_only_previous_states_of_the_two_switches(self):
+        previous = {name for name, _ in gateway.PREVIOUS_RULE_ACTION}
+        self.assertEqual(previous, {'rule-action-low', 'rule-action-no-usage'})
+        for mode, pairs in gateway.SWITCHES.items():
+            sources = {before for (before, _), _ in pairs}
+            targets = {target for _, (target, _) in pairs}
+            with self.subTest(mode=mode):
+                self.assertFalse(targets & previous)
+                self.assertLessEqual(targets, set(gateway.CALL_LIMITS))
+                self.assertEqual(bool(sources & previous), mode in ('rule-action', 'rule-action-rollback'))
+                if not mode.startswith('message-store'):
+                    # A build switch keeps the stored message-storage variant.
+                    self.assertTrue(all(before[1] == after[1] for before, after in pairs))
+        self.assertEqual({before for (before, _), _ in gateway.SWITCHES['rule-action']}, {'vertex-8-call', *previous})
+        self.assertEqual({before for (before, _), _ in gateway.SWITCHES['rule-action-rollback']}, {'rule-action', *previous})
+        for mode, candidates in gateway.CHECKS.items():
+            with self.subTest(check=mode):
+                self.assertFalse({build for build, _ in candidates} & previous)
 
     def test_store_on_aws_states_switch_to_store_off_and_back_keeping_build_id_and_key(self):
         client = Langflow()

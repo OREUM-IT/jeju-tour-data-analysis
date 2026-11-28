@@ -344,6 +344,17 @@ class GatewaySettingsTest(unittest.TestCase):
         wrong = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(self.migration(modelCallLimit=4)).encode(), b''))
         with self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
             self.quiet_flow('rule-action', wrong)
+        # Earlier rule-action builds are only states a switch starts from: no mode may report or pin one.
+        before = self.snapshot(self.root)
+        for earlier in ('rule-action-low', 'rule-action-no-usage'):
+            for mode, value in (('rule-action', self.migration(flowSha256='a' * 64, build=earlier)),
+                                ('rule-action-rollback', self.migration(flowSha256='a' * 64, build=earlier)),
+                                ('message-store-off', self.migration(flowSha256='a' * 64, build=earlier)),
+                                ('check-rule-action', self.checked(flowSha256='c' * 64, build=earlier)),
+                                ('check-message-store-off', self.checked(flowSha256='c' * 64, build=earlier))):
+                with self.subTest(build=earlier, mode=mode), self.assertRaisesRegex(ValueError, '^GATEWAY_FLOW_RESULT_INVALID$'):
+                    self.quiet_flow(mode, Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b'')))
+                self.assertEqual(before, self.snapshot(self.root))
 
     def test_message_store_modes_keep_the_build_validate_storage_and_pin_only_the_new_hash(self):
         self.ready_root()

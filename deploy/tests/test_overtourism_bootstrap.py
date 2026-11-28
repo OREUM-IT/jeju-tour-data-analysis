@@ -6,7 +6,10 @@ import io
 import json
 from pathlib import Path
 import contextlib
+import sys
+import types
 import unittest
+from unittest.mock import patch
 import uuid
 
 
@@ -163,6 +166,63 @@ class OvertourismBootstrapTest(unittest.TestCase):
         self.assertEqual(set(patch[0]['json']), {'data', 'description'})
         self.assertIn('If-Match', patch[0]['headers'])
         self.assertEqual(run(client, 'check')['flowStatus'], 'checked')
+
+    @staticmethod
+    def agent_code(flow):
+        return next(node for node in flow['data']['nodes'] if node['data']['type'] == 'Agent')['data']['node'][
+            'template']['code']['value']
+
+    @staticmethod
+    def client_kwargs(code):
+        """The ChatOpenAI keyword arguments of the stored Agent's _get_llm (fake class, no network)."""
+        method = next(node for node in ast.walk(ast.parse(code)) if isinstance(node, ast.FunctionDef) and node.name == '_get_llm')
+        namespace, seen = {}, []
+        exec(compile(ast.Module(body=[method], type_ignores=[]), 'diagnosis-get-llm', 'exec'), namespace)
+        class ChatOpenAI:
+            def __init__(self, **kwargs): seen.append(kwargs)
+        agent = types.SimpleNamespace(model=copy.deepcopy(gateway.RULE_MODEL_VALUE), api_key='sk-' + 'x' * 40,
+                                      _get_max_tokens_value=lambda: 8192)
+        with patch.dict(sys.modules, {'langchain_openai': types.SimpleNamespace(ChatOpenAI=ChatOpenAI)}):
+            namespace['_get_llm'](agent)
+        return seen[0]
+
+    def test_the_diagnosis_client_keeps_stream_usage_and_replaces_exactly_one_client_line(self):
+        budget = gateway.budget_flow(gateway.build_flow(Langflow(), base_tests.TEMPLATE, RULE_SOURCE, SETUP))
+        rule = self.agent_code(gateway.rule_action_flow(budget))
+        self.assertEqual(rule.count(overtourism.TIMEOUT_OLD), 1)
+        self.assertEqual(overtourism.TIMEOUT_NEW, overtourism.TIMEOUT_OLD.replace('timeout=60', 'timeout=80'))
+        client = Langflow()
+        run(client)
+        code = self.agent_code(stored(client))
+        self.assertEqual((code.count(overtourism.TIMEOUT_NEW), code.count('stream_usage=True')), (1, 1))
+        self.assertEqual(self.client_kwargs(code), {**self.client_kwargs(rule), 'timeout': 80, 'max_completion_tokens': 8192})
+        self.assertIs(self.client_kwargs(code)['stream_usage'], True)
+        # Built from the deployed client without stream_usage, the derivation would not apply: it fails closed.
+        with patch.object(gateway, 'OPENAI_GET_LLM', gateway.OPENAI_GET_LLM_NO_USAGE), \
+             self.assertRaisesRegex(overtourism.OvertourismBootstrapError, '^OVERTOURISM_AGENT_GUARD_MISSING$'):
+            run(Langflow())
+
+    def test_a_diagnosis_flow_stored_before_stream_usage_is_replaced_only_on_request(self):
+        """A server that provisioned the diagnosis flow before this change keeps it until --replace."""
+        client = Langflow()
+        old_line = 'streaming=True, max_retries=1, timeout=60, reasoning_effort="none",'
+        with patch.object(gateway, 'OPENAI_GET_LLM', gateway.OPENAI_GET_LLM_NO_USAGE), \
+             patch.object(overtourism, 'TIMEOUT_OLD', old_line), \
+             patch.object(overtourism, 'TIMEOUT_NEW', old_line.replace('timeout=60', 'timeout=80')):
+            first = run(client)
+        self.assertEqual(first['flowStatus'], 'created')
+        self.assertNotIn('stream_usage', self.agent_code(stored(client)))
+        for mode in ('provision', 'check'):
+            with self.subTest(mode=mode), \
+                 self.assertRaisesRegex(overtourism.OvertourismBootstrapError, '^OVERTOURISM_EXISTING_FLOW_DIFFERS$'):
+                run(client, mode)
+        self.assertFalse(any(method == 'PATCH' for method, _ in mutations(client)))
+        replaced = run(client, 'replace')
+        self.assertEqual((replaced['flowStatus'], replaced['flowId']), ('updated', first['flowId']))
+        self.assertNotEqual(replaced['flowSha256'], first['flowSha256'])
+        self.assertIs(self.client_kwargs(self.agent_code(stored(client)))['stream_usage'], True)
+        self.assertEqual(run(client, 'check')['flowSha256'], replaced['flowSha256'])
+        self.assertEqual(len([flow for flow in client.state['flows'].values() if flow['name'] == overtourism.FLOW_NAME]), 1)
 
     def test_missing_prerequisites_stop_before_any_flow_change(self):
         for client, mcp, code in [

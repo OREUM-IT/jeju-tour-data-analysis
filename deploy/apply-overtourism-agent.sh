@@ -71,6 +71,9 @@ case "$mode" in
     recreate_gateway
     ;;
   replace)
+    # Gate before the stored flow changes too: from then until agent-gateway is recreated,
+    # the running pin no longer matches and the diagnosis route answers OVERTOURISM_FLOW_CHANGED.
+    idle_gate idle_check
     phase=flow
     python3 prepare-overtourism.py --replace
     idle_gate idle_before_gateway

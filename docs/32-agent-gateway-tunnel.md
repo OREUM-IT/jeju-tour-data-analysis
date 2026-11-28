@@ -615,7 +615,7 @@ helper는 다음 순서로 진행한다.
 8. 공개 인증 준비 검사와 큐 준비 검사를 한다.
 9. 미완료 표시를 해제한다.
 
-MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 때문이다. 유휴·중단·재개의 의미는 [모델 호출 예산 조정](#중단됐을-때)과 같다. 종료 코드 75는 진행 중 요청이 있다는 뜻이며 모두 끝난 뒤 다시 실행한다. 저장 흐름이 검토된 8회 Vertex 빌드와 다르면 `GATEWAY_EXISTING_FLOW_DIFFERS`로 거부한다. OpenAI 키가 없으면 `GATEWAY_CREDENTIAL_UNAVAILABLE`로 PATCH 전에 멈춘다.
+MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 때문이다. 유휴·중단·재개의 의미는 [모델 호출 예산 조정](#중단됐을-때)과 같다. 종료 코드 75는 진행 중 요청이 있다는 뜻이며 모두 끝난 뒤 다시 실행한다. 저장 흐름이 검토된 8회 Vertex 빌드나 알려진 이전 규칙 동작 빌드([`reasoning_effort` 수정](#openai-400-reasoning_effort-수정2026-11-25) 전의 `rule-action-low`, [토큰 기록 수정](#토큰-기록-수정stream_usage-2026-11-28) 전의 `rule-action-no-usage`)가 아니면 `GATEWAY_EXISTING_FLOW_DIFFERS`로 거부한다. 이미 지금 규칙 동작 빌드면 흐름을 바꾸지 않는다(`already-current`). OpenAI 키가 없으면 `GATEWAY_CREDENTIAL_UNAVAILABLE`로 PATCH 전에 멈춘다.
 
 성공 출력:
 
@@ -689,7 +689,77 @@ MCP를 먼저 바꾸는 이유는 새 MCP만 `placeIds` 응답을 조립하기 �
 - 웹 추천은 지금 이 빌드(gpt-5.4-mini, 메시지 저장 끔)로 동작한다. 이 재적용을 운영 준비 완료로 보지 않는다.
 - 이 helper는 `jeju-mcp` 이미지만 빌드하고 `agent-gateway`는 기존 이미지로 다시 만든다. 그래서 이 적용만으로는 PR #46의 Gateway 변경(상류 실패 500)이 들어가지 않았다. 사용자가 이어서 `apply-agent-queue.sh`로 그 변경을 적용했다([기록](#2026-11-27-gateway-변경-aws-적용사용자-제공-출력)).
 - 흐름이 바뀌었으므로 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 경계가 이 재적용 시각으로 옮겨졌다. 로그인 웹 추천이 최종 검증까지 간 뒤 그 SQL을 다시 실행하면, 규칙 동작 빌드를 경계 뒤에서 직접 판정한다(`can_judge:t`·`passed:t`가 나와야 한다).
-- 아직 확인하지 않은 것: 재적용 뒤 웹 추천 결과, 실제 웹 실행 20건 이상의 `model`별 차단·Agent 오류 비율(아래 되돌리기 기준), 토큰 기록([제안](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)만 했다), 비용.
+- 아직 확인하지 않은 것: 재적용 뒤 웹 추천 결과, 실제 웹 실행 20건 이상의 `model`별 차단·Agent 오류 비율(아래 되돌리기 기준), 토큰 기록([제안](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)만 했다. 2026-11-28 [수정을 구현](#토큰-기록-수정stream_usage-2026-11-28)했고 AWS에는 적용하지 않았다), 비용.
+
+### 토큰 기록 수정(`stream_usage`, 2026-11-28)
+
+2026-11-28 구현과 작업 환경 확인의 기록이다. **작성자는 AWS에서 아무것도 실행하지 않았고 실제 OpenAI도 호출하지 않았다.** 적용은 사용자가 아래 명령으로 한다. `productionReady:false`를 유지한다.
+
+**왜 바꾸는가.**
+- 관측(사용자 제공 출력): 2026-11-25 [지연·토큰 SQL](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)에서 `gpt-5.4-mini` 모델 호출 235회 모두 토큰 기록이 없었다. 그래서 [35 문서](35-gateway-model-comparison.md#5-두-안-비교2026-11-27-사용자-제공-출력)의 비교도 비용을 견주지 못했다.
+- 원인(코드 확인과 아래 작업 환경 재현, AWS의 실제 호출로는 확인하지 않음): 규칙 동작 클라이언트는 `base_url`을 명시한다. langchain-openai는 `base_url`이 없을 때만 `stream_usage`를 기본으로 켠다. 그래서 스트리밍 요청에 `stream_options.include_usage`가 없다. OpenAI는 그 옵션이 없으면 사용량 조각을 보내지 않고, Langflow 추적은 사용량이 없는 호출에 토큰 속성을 남기지 않는다.
+
+**변경(구현).**
+- `deploy/langflow/gateway-bootstrap.py`의 `OPENAI_GET_LLM`: `ChatOpenAI(...)`에 `stream_usage=True`를 더하고 문서 문자열에 이유를 적었다. 주소·모델·`reasoning_effort="none"`·재시도 1회·60초·출력 4096토큰과 빌드 이름 `rule-action`은 그대로다.
+- 지금 AWS에 저장된 빌드(main@5328235부터 main@26029b2까지가 만든 클라이언트)는 `rule-action-no-usage`라는 알려진 이전 그래프로 남겼다. 그 메서드 원문의 SHA-256(`449d40ea…1271`)을 테스트로 고정했다. `rule-action-low`처럼 두 전환의 출발 상태로만 받는다.
+
+  | 모드 | 저장된 흐름이 `rule-action-no-usage`일 때 |
+  |---|---|
+  | `--rule-action`(적용) | 새 `rule-action`으로 바꾼다. 메시지 저장 켬·끔은 그대로다 |
+  | `--rule-action-rollback`(되돌리기) | Gemini 8회(`vertex-8-call`)로 바꾼다 |
+  | `--check-rule-action`·`--check`, 메시지 저장 켬·끔 전환과 확인 | 받지 않는다. PATCH 전에 `GATEWAY_EXISTING_FLOW_DIFFERS`로 멈추고 흐름·서비스를 바꾸지 않는다 |
+
+  그래서 이 변경이 main에 들어간 뒤 다시 적용하기 전에는 `apply-agent-rule-action.sh --verify-only`와 `apply-agent-message-store-off.sh`의 모든 모드가 이 오류로 멈춘다. 운영 추천은 이전 빌드와 기존 고정으로 그대로 동작한다. 이전 빌드 이름은 어떤 모드의 결과에도 나오지 않는다(`prepare-gateway.py`가 그런 결과를 고정하지 않는다). helper의 동작과 출력 JSON은 바뀌지 않았다(설명 주석과 도움말만 고쳤다).
+- 오버투어리즘 진단 흐름은 같은 클라이언트 줄에서 호출당 제한만 80초로 바꿔 만든다. 바꿀 줄(`deploy/langflow/overtourism-bootstrap.py`의 `TIMEOUT_OLD`·`TIMEOUT_NEW`)을 새 줄에 맞춰, 진단 흐름도 `stream_usage=True`가 된다. 이 흐름은 고정 빌드 하나만 알고 `--replace-flow`로 바꾼다([34 문서](34-overtourism-diagnosis-agent.md#확인--갱신--끄기)).
+- CI 검사(`deploy/tests/check-openai-client.py`, 공식 Langflow 1.13.3 컨테이너):
+  - 저장된 흐름의 클라이언트로 도구를 묶은 동기·비동기 호출을 한 번씩 보낸다. 호출은 프로세스 안의 가짜 OpenAI로 가며 소켓을 열지 않는다. 가짜는 OpenAI처럼 요청의 `stream_options.include_usage`가 참일 때만 마지막 사용량 조각을 보낸다.
+  - 요청 본문의 그 옵션, 응답의 `usage_metadata`, Langflow 자체 추적 처리기가 남긴 `gen_ai.usage.*` 속성(지연·토큰 SQL이 읽는 값)을 확인한다.
+  - 마운트된 빌더의 이전 빌드 문자열로도 같은 호출을 보내, 사용량을 요청하지 않고 토큰이 남지 않는 것을 확인한다.
+  - 컨테이너의 langchain-openai 버전을 출력한다. AWS와 같은 digest 이미지라 그 버전을 이 출력으로 처음 보게 된다.
+
+**작업 환경에서 확인한 것**(관측, 모델 공급자·AWS 호출 없음).
+- 단위 테스트를 더했다. 대상은 다음과 같다.
+  - 새 클라이언트와 이전 클라이언트의 차이가 `stream_usage=True`뿐인 것과 이전 빌드 원문의 고정.
+  - 저장 켬·끔 두 변형에서 이전 빌드 → 새 빌드, 이전 빌드 → 8회 전환(PATCH 1회·If-Match·키와 흐름 ID 유지, 재실행 `already-current`). 확인과 저장 전환 모드는 PATCH 없이 거부한다.
+  - 이전 빌드 이름이 두 전환의 출발 상태에만 있고, `prepare-gateway.py`가 그 이름의 결과를 고정하지 않는 것.
+  - 진단 흐름의 줄 교체가 정확히 한 번 적용되고, 이전 클라이언트에서는 실패로 멈추는 것. 이 변경 전에 만든 진단 흐름은 `--replace`일 때만 바뀌는 것.
+
+  deploy 262개 중 261개가 통과했다. 남은 1개(`test_export_catalog`)는 main에서도 이 작업 환경의 git 제한으로 실패한다. 빌더를 일부러 네 가지로 틀어 본 사본(`stream_usage` 제거, 이전 빌드 목록에서 빼기, 저장 전환이나 규칙 확인이 이전 빌드를 받게 하기)은 모두 새 테스트가 잡았다.
+- 실제 라이브러리(작업 환경 venv의 lfx·Langflow 1.13.3, langchain-openai 1.8.5, 네트워크 없음): 새 클라이언트는 `_should_stream_usage()`가 `True`이고 요청 본문에 `{"include_usage": true}`가 붙었다. 사용량 조각을 받아 `usage_metadata`와 Langflow 추적 속성이 남았다. 이전 클라이언트는 `False`·옵션 없음·토큰 없음이었다.
+- 실제 흐름 실행: 실제 Langflow 1.13.3(venv)을 PostgreSQL 16.15에 연결했다. 이 브랜치의 MCP(CI용 허구 981곳)와 가짜 OpenAI 서버(TLS, `api.openai.com` 이름)를 loopback만 있는 별도 네트워크 이름공간에서 띄웠다. 가짜 서버는 OpenAI처럼 요청에 `include_usage`가 있을 때만 사용량 조각을 보낸다. 2026-11-24 [메시지 저장 끄기 확인](#확인한-것과-하지-않은-것) 때의 가짜 서버는 요청과 관계없이 사용량을 보내 이 문제를 가렸다. 추천 요청은 Gateway 상류 코드(`createUpstream`)로 보냈다.
+  1. main@3ad3649의 빌더로 AWS와 같은 상태(규칙 동작·저장 끔)를 만들고 4건(수락 3·차단 1)을 보냈다. 모델 호출 8회 모두 `stream_options`가 없었다. 지연·토큰 SQL [3]은 `gpt-5.4-mini` 모델 호출 8·입력·출력 토큰 0·`calls_without_usage` 8로 AWS 출력과 같은 모양이었다.
+  2. 새 빌더로 `--rule-action`과 같은 전환을 했다. 그 전에 실행한 네 모드(`--check-rule-action`·`--check-message-store-off`·`--message-store-on`·`--check`)는 `GATEWAY_EXISTING_FLOW_DIFFERS`·`flowPatchAttempted:false`였다. 전환은 `flowStatus:updated`·`build:rule-action`·`messageStore:false`였고 재실행은 `already-current`였다.
+  3. 같은 4건(수락 3·차단 1)을 보냈다. 8회 모두 `include_usage:true`였다. [3]은 모델 호출 16·입력 4400·출력 167·`calls_without_usage` 8(앞의 8회 그대로)이었다. 마지막 흐름 변경 시각으로 나눈 작업용 조회에서는 변경 뒤 8회가 모두 토큰을 남겼다(없는 호출 0).
+  4. 새 빌드와 이전 빌드 모두에서 8회로 되돌리면 `updated`였고 처음 SHA로 정확히 돌아왔다. 저장 켬인 이전 빌드에서 전환하면 저장 켬이 유지됐다.
+  5. CI 검사 스크립트를 이 Langflow에 그대로 실행했다. 이전 빌드 문자열을 읽는 경로만 작업 사본으로 바꿨다. 새 빌드가 저장된 동안은 `passed`(`streamOptions:{"include_usage":true}`, `tracedTokens` 입력 321·출력 12, `networkCalls:0`)였고, 이전 빌드가 저장된 동안은 `OPENAI_CLIENT_CHECK_FAILED`였다.
+  6. 진단 흐름: main@3ad3649 빌더로 만든 진단 흐름이 있을 때 새 빌더의 provision·check는 `OVERTOURISM_EXISTING_FLOW_DIFFERS`(PATCH 없음)였다. replace는 `updated`였고 그 뒤 check·provision이 통과했다. 저장된 진단 클라이언트는 사용량을 요청하고 토큰을 남겼다(호출당 80초·출력 8192토큰 유지).
+
+  작업 환경만의 차이: Langflow 로그인 한도를 분당 60회로 높였다(운영 기본 5회). 흐름 실행과는 관계없다.
+- **CI의 지연·토큰 SQL로는 토큰을 대조하지 못한다.** CI의 Langflow 실행은 가짜 Vertex 자격증명의 8회 빌드뿐이라 Agent 오류로 끝난다. 공식 컨테이너가 `api.openai.com` 대신 가짜 서버를 부르게 하려면 CI 전용 DNS 별칭, 신뢰할 테스트 CA, Langflow 재생성이 필요하다. 이 작업 환경에는 Docker 데몬이 없어 그 단계를 만들어 돌려 보지 못했고, 위 작업 환경 실행으로 대신했다. 이 브랜치의 CI 결과는 PR에서 확인한다.
+
+**하지 않은 것.** AWS 적용, 실제 OpenAI 호출(실제 OpenAI가 이 요청에 사용량 조각을 보내는지는 OpenAI API 설명과 langchain-openai 설명으로만 안다), AWS 이미지의 langchain-openai 버전 확인(CI 출력으로 처음 본다), 비용 계산(저장소에 단가가 없다).
+
+**AWS에 적용할 명령.** PR이 main에 병합된 뒤, 웹에서 새 추천을 제출하지 않는 때 AWS SSH에서 **한 줄씩** 실행한다. OpenAI 키는 이미 등록돼 있으므로 `set-openai-key.sh`는 다시 실행하지 않는다. 적용 전에 [지연·토큰 집계 SQL](#지연토큰-집계-sql)을 한 번 실행해 표를 받아 둔다(아래 비교용).
+
+```bash
+cd ~/oreumit-agent && git diff --quiet && git diff --cached --quiet && git fetch origin refs/heads/main:refs/remotes/origin/main && git merge --ff-only origin/main
+```
+
+```bash
+cd ~/oreumit-agent && sudo env COMPOSE_PROJECT_NAME=oreumit-bootstrap bash deploy/apply-agent-rule-action.sh
+```
+
+- helper 순서는 위 [적용 명령](#aws에-적용할-명령-2)과 같다. 이 변경은 MCP를 바꾸지 않는다(MCP 이미지 빌드와 오프라인 조립 검사는 helper 순서대로 지나간다).
+- 흐름 교체 줄은 `build:rule-action`·`messageStore:false`·`flowStatus:updated`·`settingsChanged:true`여야 한다. 흐름 ID·Gateway API 키는 그대로이고 `gateway.env`의 고정 SHA만 바뀐다. 성공 출력은 이전과 같은 `agent-rule-action-applied`다.
+- 흐름이 바뀌므로 [적용 뒤 확인 SQL](#적용-뒤-확인-sql)의 경계가 이 적용 시각으로 다시 옮겨진다. 로그인 웹 추천이 최종 검증까지 간 뒤 그 SQL을 다시 실행해 이 빌드의 `can_judge:t`·`passed:t`를 본다.
+- 되돌리기는 아래 [확인과 되돌리기](#확인과-되돌리기-1)의 `--rollback`(Gemini 8회)이다. 토큰을 남기지 않던 이전 GPT 빌드로 돌아가는 명령은 두지 않았다.
+- 진단 흐름의 AWS 적용 출력은 받지 않았다. 적용한 서버라면 이어서 `apply-overtourism-agent.sh --replace-flow`를 실행한다([34 문서](34-overtourism-diagnosis-agent.md#확인--갱신--끄기)). 멈추면 `overtourism-flow-replaced`가 나올 때까지 같은 명령을 다시 실행한다(흐름을 바꾼 뒤 멈추면 그동안 진단 경로가 `OVERTOURISM_FLOW_CHANGED`로 거절된다).
+
+**적용 뒤 확인.** 웹 추천이 몇 건 쌓인 뒤 [지연·토큰 집계 SQL](#지연토큰-집계-sql)을 다시 실행한다.
+- 적용한 날(KST)의 `gpt-5.4-mini` 행에는 적용 전 호출이 섞인다. 받아 둔 표와 견줘, `model_calls`가 늘어난 만큼 `calls_without_usage`가 늘지 않았는지와 `input_tokens`·`output_tokens`가 0보다 커졌는지 본다.
+- 다음 날부터의 행은 `calls_without_usage`가 `failed_model_calls` 수준이어야 한다. 실패하거나 끊긴 호출은 토큰을 남기지 않는다.
+- 토큰이 계속 0이면 AWS 이미지의 라이브러리나 실제 OpenAI 응답이 작업 환경과 다른 것으로 본다(추정). helper 출력과 표를 붙여 준다. 토큰 기록은 추천 결과와 관계없으므로 그것만으로 되돌리지 않는다(제안).
+- 붙여 줄 것: helper 출력 전체, 적용 전후의 지연·토큰 SQL [2]·[3]·[4].
 
 ### 확인과 되돌리기
 
@@ -873,7 +943,7 @@ SQL
 - `model_calls`·`avg_model_calls`·`max_model_calls`: 모델 호출 수의 합, 실행당 평균, 최대다. 8회 흐름의 상한은 8이다.
 - `failed_model_calls`: 오류로 끝난 모델 호출 수다.
 - `input_tokens`·`output_tokens`: 모델 호출에 기록된 토큰의 합이다. `avg_input_per_run`·`avg_output_per_run`은 실행당 평균이다.
-- `calls_without_usage`: 입력이나 출력 토큰 기록이 없는 모델 호출 수다. 실패한 호출도 여기에 들어간다. 이 수만큼 토큰 합은 실제보다 작다. 2026-11-25 AWS 출력에서는 `gpt-5.4-mini` 호출이 모두 여기에 들었다([원인과 제안](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력)).
+- `calls_without_usage`: 입력이나 출력 토큰 기록이 없는 모델 호출 수다. 실패한 호출도 여기에 들어간다. 이 수만큼 토큰 합은 실제보다 작다. 2026-11-25 AWS 출력에서는 `gpt-5.4-mini` 호출이 모두 여기에 들었다([원인과 제안](#집계-sql-aws-실행-결과2026-11-25-사용자-제공-출력), 2026-11-28 [수정 구현](#토큰-기록-수정stream_usage-2026-11-28)·AWS 미적용).
 
 이 SQL에 들어 있지 않은 것이다.
 
@@ -963,7 +1033,7 @@ SQL
   - 관측: `gpt-5.4-mini` 호출 235회 모두 토큰 기록이 없다(`calls_without_usage` 235, 입력·출력 토큰 0). 그래서 지금은 Langflow 추적으로 GPT 흐름의 토큰과 비용을 잴 수 없다. [35 문서](35-gateway-model-comparison.md) 비교의 GPT 쪽 토큰도 이 SQL로는 볼 수 없다. Gemini 호출은 실패한 1회(11-20)를 빼고 모두 기록됐다.
   - 원인(코드 확인, 실제 호출로는 확인하지 않음): langchain-openai 1.8.5의 `ChatOpenAI`는 `stream_usage`를 따로 주지 않으면, `base_url`(환경변수로 준 것 포함)·클라이언트·프록시가 모두 없을 때만 이 값을 켠다(`chat_models/base.py`의 초기화 검사와 `_should_stream_usage`). 규칙 동작 빌드의 클라이언트(`deploy/langflow/gateway-bootstrap.py`의 `OPENAI_GET_LLM`)는 `streaming=True`이면서 `base_url="https://api.openai.com/v1"`을 명시한다. 그래서 스트리밍 요청에 `stream_options.include_usage`가 붙지 않는다. 이 옵션이 없으면 OpenAI Chat Completions 스트림에 사용량 조각이 오지 않는다(langchain-openai의 `stream_usage` 설명과 OpenAI API 설명). Langflow 1.13.3의 추적(`native_callback`)은 응답에 사용량이 없으면 토큰 속성을 남기지 않는다.
   - 작업 환경 확인(네트워크 없음): lfx 1.13.3 venv의 langchain-openai 1.8.5로 같은 인자의 클라이언트를 만들었다. `_should_stream_usage()`는 `False`였고, `stream_usage=True`를 더하면 `True`였다(`base_url`을 빼도 `True`). 스트리밍 요청 본문으로 만들면 지금 인자에는 `stream_options`가 없고, `stream_usage=True`이면 `{"include_usage": true}`가 붙었다. AWS 이미지(`langflowai/langflow:1.13.3`, digest 고정)의 langchain-openai 버전은 저장소에 기록이 없어 확인하지 못했다. 작업 환경의 lfx-openai 0.2.0은 1.1.6 이상을 요구하고, 1.8.5의 `stream_usage` 설명으로는 0.3.35부터 기본 주소·기본 클라이언트일 때만 켜진다.
-  - 제안(구현하지 않음): 그 `ChatOpenAI(...)` 호출에 `stream_usage=True`를 더한다. 검토된 규칙 동작 빌드가 바뀌므로, 지금 빌드를 알려진 이전 그래프로 남기는 빌드 고정과 AWS 재적용이 필요하다. 오버투어리즘 진단 흐름은 같은 코드 줄을 글자 그대로 바꿔 만들므로(`deploy/langflow/overtourism-bootstrap.py`의 `TIMEOUT_OLD`) 함께 고친다. [35 문서](35-gateway-model-comparison.md)의 비교(다른 세션)가 끝난 뒤에 한다. 2026-11-27 그 비교는 끝났고, 이 수정은 아직 구현하지 않았다. 적용 뒤에는 이 SQL의 `gpt-5.4-mini` 행 `calls_without_usage`가 실패한 호출 수만큼만 남는지로 확인한다.
+  - 제안(구현하지 않음): 그 `ChatOpenAI(...)` 호출에 `stream_usage=True`를 더한다. 검토된 규칙 동작 빌드가 바뀌므로, 지금 빌드를 알려진 이전 그래프로 남기는 빌드 고정과 AWS 재적용이 필요하다. 오버투어리즘 진단 흐름은 같은 코드 줄을 글자 그대로 바꿔 만들므로(`deploy/langflow/overtourism-bootstrap.py`의 `TIMEOUT_OLD`) 함께 고친다. [35 문서](35-gateway-model-comparison.md)의 비교(다른 세션)가 끝난 뒤에 한다. 2026-11-27 그 비교는 끝났고, 이 수정은 아직 구현하지 않았다. 적용 뒤에는 이 SQL의 `gpt-5.4-mini` 행 `calls_without_usage`가 실패한 호출 수만큼만 남는지로 확인한다. → 2026-11-28 구현했다(AWS 미적용, [토큰 기록 수정](#토큰-기록-수정stream_usage-2026-11-28)).
 - **예산 조정(8회) 질문의 첫 AWS 수치**(관측, 표본이 작아 판단하지 않음): 수락/실행은 11-19 2/10·11-20 0/6(4회 흐름), 11-21 9/20(이날 8회를 적용해 두 흐름이 섞일 수 있음), 11-22 6/9(8회 흐름)다. 차단/실행은 8/10·5/6·9/20·3/9, 실행당 평균 모델 호출은 4.00·3.50·6.55·7.67, 실행 p50은 12235·12460·29822·21765 ms다.
   - [되돌리기 기준](#적용-전후-확인-sql)(적용 뒤 20건 이상, 비율 비교)에 쓸 8회 흐름만의 실행은 11-22의 9건뿐이다. 날짜마다 요청이 다르고 합성 검사 요청이 섞여 있을 수 있어(위) 이 차이를 8회 적용의 효과로 읽지 않는다. 11-25 Gemini 2건은 비교 수집의 시험으로 보여(추정, [아래](#aws-실행-결과2026-11-25-사용자-제공-출력)) 여기에 넣지 않았다.
   - 추정: 11-21의 p95(90095 ms)로 계산하면 그날 가장 느린 두 실행이 약 90.1초다. Agent 실행 상한 90초(`GUARDED_AGENT_MAX_SECONDS`)에 닿아 끝난 실행으로 보이며, 그날 Agent 오류 2건과 수가 같다.

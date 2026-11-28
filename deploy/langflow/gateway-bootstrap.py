@@ -18,7 +18,10 @@ build whose last allowed call has no tool use. They never create a flow or key.
 Vertex build and the rule-action build: the same tools and call budget, but an
 OpenAI gpt-5.4-mini Agent that outputs only {"placeIds": [...]}. The MCP then
 composes action, verdicts and notices from catalog evidence. --check-rule-action
-checks the stored rule-action build. None of these runs a model.
+checks the stored rule-action build. None of these runs a model. Earlier
+rule-action builds that a server may still store (rule-action-low,
+rule-action-no-usage) are known previous graphs of both switches only: the
+switch moves them to the current rule-action build, the rollback to 8 calls.
 
 Every build exists in two variants. The historical builds keep Langflow's
 default should_store_message=true on Chat Input and Chat Output, so each run's
@@ -96,6 +99,10 @@ OPENAI_GET_LLM = '''def _get_llm(self):
     tools on Chat Completions unless reasoning_effort is "none" (HTTP 400, param
     reasoning_effort, seen on AWS 2026-11-25); the server makes every decision and
     the model only picks place IDs, so no reasoning tokens are requested.
+    stream_usage stays explicit: langchain-openai turns it on by default only when
+    no base_url is given, so with this fixed base_url a stream asked for no usage
+    chunk and Langflow traces kept no token counts (every call on AWS, 2026-11-25).
+    The counts are needed to measure and compare cost.
     """
     from langchain_openai import ChatOpenAI
     selected = self.model
@@ -112,14 +119,25 @@ OPENAI_GET_LLM = '''def _get_llm(self):
     maximum = self._get_max_tokens_value()
     return ChatOpenAI(
         model="gpt-5.4-mini", api_key=key, base_url="https://api.openai.com/v1",
-        streaming=True, max_retries=1, timeout=60, reasoning_effort="none",
+        streaming=True, stream_usage=True, max_retries=1, timeout=60, reasoning_effort="none",
         **({"max_completion_tokens": maximum} if maximum is not None else {}),
     )
 '''
+# The rule-action build stored on AWS from main@5328235 (PR #41) up to this change: the
+# same client without stream_usage, so its calls recorded no tokens. It stays a known
+# stored graph so the switch and the rollback can move a server that has it.
+OPENAI_GET_LLM_NO_USAGE = OPENAI_GET_LLM.replace(
+    """    stream_usage stays explicit: langchain-openai turns it on by default only when
+    no base_url is given, so with this fixed base_url a stream asked for no usage
+    chunk and Langflow traces kept no token counts (every call on AWS, 2026-11-25).
+    The counts are needed to measure and compare cost.
+""", '').replace('streaming=True, stream_usage=True, max_retries=1', 'streaming=True, max_retries=1')
+# Exactly the text stored on AWS by main@5328235 to main@26029b2; a test pins it.
+OPENAI_GET_LLM_NO_USAGE_SHA256 = '449d40ea94a801c696ac14c9362f52c28f1465516a5853131b5ed9bbc6e41271'
 # The first rule-action build (main@fbd0a31) asked for reasoning_effort="low" and every
 # OpenAI call was refused. It stays a known stored graph so the switch and the rollback
 # can still move a server that has it to the fixed build or back to the 8-call build.
-OPENAI_GET_LLM_LOW = OPENAI_GET_LLM.replace(
+OPENAI_GET_LLM_LOW = OPENAI_GET_LLM_NO_USAGE.replace(
     """    Streaming stays on for the Agent event contract. gpt-5.4 models reject function
     tools on Chat Completions unless reasoning_effort is "none" (HTTP 400, param
     reasoning_effort, seen on AWS 2026-11-25); the server makes every decision and
@@ -129,6 +147,10 @@ OPENAI_GET_LLM_LOW = OPENAI_GET_LLM.replace(
 """).replace('reasoning_effort="none"', 'reasoning_effort="low"')
 # Exactly the text stored on AWS by main@fbd0a31; a test pins it.
 OPENAI_GET_LLM_LOW_SHA256 = '4c438e372c81a86e16354eb1b50ae49efce435f363ff00149068632f503926b8'
+# Earlier rule-action builds a server may still store, by build name. They are only ever
+# the previous graph of the rule-action switch and of its rollback, never a target or a
+# check: --check-rule-action and the message-store modes accept the current build only.
+PREVIOUS_RULE_ACTION = (('rule-action-low', OPENAI_GET_LLM_LOW), ('rule-action-no-usage', OPENAI_GET_LLM_NO_USAGE))
 LIMIT_LINE = '            middleware.append(ModelCallLimitMiddleware(run_limit=run_limit))\n'
 GUARDED_LIMIT_LINES = ('            middleware.append(_GatewayFinalAnswerMiddleware(run_limit=run_limit))\n'
                        + LIMIT_LINE)
@@ -404,11 +426,12 @@ def without_message_store(build):
     return flow
 
 
-def graphs(legacy, budget, rule, rule_low=None):
-    """Every reviewed stored graph: (build name, message storage, flow)."""
-    builds = {'legacy-4-call': legacy, 'vertex-8-call': budget, 'rule-action': rule}
-    if rule_low is not None:
-        builds['rule-action-low'] = rule_low
+def graphs(legacy, budget, rule, previous=None):
+    """Every reviewed stored graph: (build name, message storage, flow).
+
+    `previous` maps the names in PREVIOUS_RULE_ACTION to their rule_action_flow() builds.
+    """
+    builds = {'legacy-4-call': legacy, 'vertex-8-call': budget, 'rule-action': rule, **(previous or {})}
     return {(name, store): flow if store else without_message_store(flow)
             for name, flow in builds.items() for store in (True, False)}
 
@@ -461,8 +484,12 @@ def both_variants(previous, target):
 SWITCHES = {
     'update': both_variants('legacy-4-call', 'vertex-8-call'),
     'rollback': both_variants('vertex-8-call', 'legacy-4-call'),
-    'rule-action': both_variants('vertex-8-call', 'rule-action') + both_variants('rule-action-low', 'rule-action'),
-    'rule-action-rollback': both_variants('rule-action', 'vertex-8-call') + both_variants('rule-action-low', 'vertex-8-call'),
+    # From the 8-call build or an earlier rule-action build to the current one ...
+    'rule-action': both_variants('vertex-8-call', 'rule-action') + tuple(
+        pair for name, _ in PREVIOUS_RULE_ACTION for pair in both_variants(name, 'rule-action')),
+    # ... and from any of the rule-action builds back to 8 calls.
+    'rule-action-rollback': both_variants('rule-action', 'vertex-8-call') + tuple(
+        pair for name, _ in PREVIOUS_RULE_ACTION for pair in both_variants(name, 'vertex-8-call')),
     'message-store-off': tuple(((name, True), (name, False)) for name in ('vertex-8-call', 'rule-action')),
     'message-store-on': tuple(((name, False), (name, True)) for name in ('vertex-8-call', 'rule-action')),
 }
@@ -546,7 +573,8 @@ def configure(client, mcp, environment, template, source, setup, *, provision=Fa
                 and entries[0].get('has_value') is True, 'GATEWAY_CREDENTIAL_UNAVAILABLE')
     legacy = build_flow(client, template, source, setup)
     budget = budget_flow(legacy)
-    known = graphs(legacy, budget, rule_action_flow(budget), rule_action_flow(budget, get_llm=OPENAI_GET_LLM_LOW))
+    known = graphs(legacy, budget, rule_action_flow(budget),
+                   {name: rule_action_flow(budget, get_llm=text) for name, text in PREVIOUS_RULE_ACTION})
     for built in known.values():
         setup.without_secrets(built, [token, password, access_token])
     if migrate in SWITCHES:
@@ -592,9 +620,10 @@ def main(argv=None):
     mode.add_argument('--update', action='store_true', help='Switch the existing exact 4-call flow to the 8-call flow; no key.')
     mode.add_argument('--rollback', action='store_true', help='Switch the existing exact 8-call flow back to the 4-call flow; no key.')
     mode.add_argument('--rule-action', action='store_true',
-                      help='Switch the exact 8-call Vertex flow to the rule-action OpenAI flow; no key.')
+                      help='Switch the exact 8-call Vertex flow or an earlier rule-action build to the '
+                           'current rule-action OpenAI flow; no key.')
     mode.add_argument('--rule-action-rollback', action='store_true',
-                      help='Switch the exact rule-action flow back to the 8-call Vertex flow; no key.')
+                      help='Switch the exact current or an earlier rule-action flow back to the 8-call Vertex flow; no key.')
     mode.add_argument('--check-rule-action', action='store_true',
                       help='Check the stored rule-action flow without creating a flow or API key.')
     mode.add_argument('--message-store-off', action='store_true',
